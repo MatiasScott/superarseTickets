@@ -1,5 +1,3 @@
-<?php $this->render('layouts/header', ['styles' => $styles ?? []]); ?>
-
 <div class="main-content">
 	<div class="container-fluid">
 		<div class="row justify-content-center">
@@ -86,5 +84,3 @@
 		</div>
 	</div>
 </div>
-
-<?php $this->render('layouts/footer', ['scripts' => $scripts ?? []]); ?>
