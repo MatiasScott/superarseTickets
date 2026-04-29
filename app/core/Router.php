@@ -84,11 +84,28 @@ class Router
 
 	private function stripBasePath(string $path): string
 	{
-		$base = parse_url((string) app_config('url', ''), PHP_URL_PATH) ?: '';
-		$base = rtrim($base, '/');
+		$path = preg_replace('#/index\.php$#', '', $path) ?? $path;
 
-		if ($base !== '' && str_starts_with($path, $base)) {
-			$path = substr($path, strlen($base));
+		$configBase = parse_url((string) app_config('url', ''), PHP_URL_PATH) ?: '';
+		$configBase = rtrim($configBase, '/');
+
+		$scriptName = $_SERVER['SCRIPT_NAME'] ?? '';
+		$scriptDir = rtrim(str_replace('\\', '/', dirname($scriptName)), '/.');
+
+		$bases = array_values(array_filter(array_unique([$configBase, $scriptDir]), static fn($v) => $v !== ''));
+
+		usort($bases, static fn($a, $b) => strlen($b) <=> strlen($a));
+
+		foreach ($bases as $base) {
+			if (str_starts_with($path, $base . '/index.php')) {
+				$path = substr($path, strlen($base . '/index.php'));
+				break;
+			}
+
+			if (str_starts_with($path, $base)) {
+				$path = substr($path, strlen($base));
+				break;
+			}
 		}
 
 		$path = '/' . ltrim($path, '/');
