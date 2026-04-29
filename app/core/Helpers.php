@@ -88,3 +88,70 @@ function verify_csrf(?string $token): bool
 
 	return hash_equals($_SESSION['_csrf_token'], $token);
 }
+
+function validate_password_strength(string $password): array
+{
+	$errors = [];
+	$password_len = mb_strlen($password);
+
+	if ($password_len < 8) {
+		$errors[] = 'La contraseña debe tener al menos 8 caracteres.';
+	}
+
+	if (!preg_match('/[A-Z]/', $password)) {
+		$errors[] = 'La contraseña debe incluir al menos una mayúscula.';
+	}
+
+	if (!preg_match('/[a-z]/', $password)) {
+		$errors[] = 'La contraseña debe incluir al menos una minúscula.';
+	}
+
+	if (!preg_match('/[0-9]/', $password)) {
+		$errors[] = 'La contraseña debe incluir al menos un número.';
+	}
+
+	if (!preg_match('/[!@#$%^&*()_+\-=\[\]{};:"\\|,.<>\/?]/', $password)) {
+		$errors[] = 'La contraseña debe incluir al menos un carácter especial (!@#$%^&*...).';
+	}
+
+	return [
+		'valid' => count($errors) === 0,
+		'errors' => $errors,
+	];
+}
+
+function env(string $key, mixed $default = null): mixed
+{
+	static $env = null;
+
+	if ($env === null) {
+		$env = [];
+
+		// Intentar cargar archivo .env si existe
+		$envFile = dirname(APP_PATH) . '/.env';
+		if (file_exists($envFile)) {
+			$lines = file($envFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+			foreach ($lines as $line) {
+				if (str_starts_with($line, '#')) {
+					continue;
+				}
+
+				[$name, $value] = explode('=', $line, 2) + [null, ''];
+				$env[trim($name)] = trim($value);
+			}
+		}
+
+		// Agregar variables de entorno del sistema
+		foreach ($_ENV as $key => $value) {
+			$env[$key] = $value;
+		}
+
+		foreach ($_SERVER as $key => $value) {
+			if (str_starts_with($key, 'APP_') || str_starts_with($key, 'DB_') || str_starts_with($key, 'MAIL_')) {
+				$env[$key] = $value;
+			}
+		}
+	}
+
+	return $env[$key] ?? $default;
+}

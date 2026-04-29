@@ -44,12 +44,57 @@ body {
     border-right: 1px solid var(--line);
     background: #0d1b2a;
     padding: 20px;
+    overflow-y: auto;
 }
 
 .sidebar-nav {
     display: flex;
     flex-direction: column;
+    gap: 16px;
+}
+
+.sidebar-section {
+    display: flex;
+    flex-direction: column;
     gap: 8px;
+}
+
+.sidebar-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #8096a8;
+    margin: 8px 0 8px 0;
+    padding: 0 12px;
+}
+
+.sidebar-link {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #d8e1ea;
+    text-decoration: none;
+    padding: 10px 12px;
+    border-radius: 8px;
+    transition: .2s ease;
+    font-size: 0.95rem;
+}
+
+.sidebar-link .icon {
+    font-size: 1.1rem;
+    width: 20px;
+    text-align: center;
+}
+
+.sidebar-link:hover {
+    background: #1b263b;
+    color: #fff;
+    transform: translateX(4px);
+}
+
+.sidebar-link:active {
+    background: #2d5a7b;
 }
 
 .sidebar-nav a {

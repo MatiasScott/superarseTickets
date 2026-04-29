@@ -67,4 +67,46 @@ class Auth
 
 		return true;
 	}
+
+	public static function verifyCurrentPassword(string $password): bool
+	{
+		if (!self::check()) {
+			return false;
+		}
+
+		$user_id = self::id();
+		$db = Database::getInstance()->connection();
+		$stmt = $db->prepare("SELECT password FROM usuarios WHERE id = :id LIMIT 1");
+		$stmt->execute(['id' => $user_id]);
+		$user = $stmt->fetch();
+
+		if ($user === false) {
+			return false;
+		}
+
+		$storedPassword = (string) ($user['password'] ?? '');
+		return password_verify($password, $storedPassword);
+	}
+
+	public static function updatePassword(int $user_id, string $new_password): bool
+	{
+		$db = Database::getInstance()->connection();
+		$hashed = password_hash($new_password, PASSWORD_BCRYPT, ['cost' => 10]);
+
+		try {
+			$stmt = $db->prepare("UPDATE usuarios SET password = :password, updated_at = NOW() WHERE id = :id");
+			$result = $stmt->execute([
+				'password' => $hashed,
+				'id' => $user_id,
+			]);
+
+			if ($result && isset($_SESSION['auth_user'])) {
+				$_SESSION['auth_user']['password_updated'] = date('Y-m-d H:i:s');
+			}
+
+			return $result;
+		} catch (Exception $e) {
+			return false;
+		}
+	}
 }

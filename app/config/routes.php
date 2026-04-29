@@ -6,8 +6,18 @@ return static function (Router $router): void {
 	$router->get('/login', 'AuthController@showLogin');
 	$router->post('/login', 'AuthController@login');
 	$router->post('/logout', 'AuthController@logout');
+	$router->get('/change-password', 'AuthController@showChangePassword');
+	$router->post('/change-password', 'AuthController@changePassword');
 
 	$router->get('/dashboard', 'DashboardController@index');
+
+	$router->get('/usuarios', 'UsuarioController@index');
+	$router->get('/usuarios/create', 'UsuarioController@create');
+	$router->post('/usuarios', 'UsuarioController@store');
+	$router->get('/usuarios/{id}', 'UsuarioController@show');
+	$router->get('/usuarios/{id}/edit', 'UsuarioController@edit');
+	$router->post('/usuarios/{id}', 'UsuarioController@update');
+	$router->post('/usuarios/{id}/delete', 'UsuarioController@delete');
 
 	$router->get('/contactos', 'ContactoController@index');
 

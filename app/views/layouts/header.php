@@ -19,11 +19,21 @@
 			<a class="brand-link" href="<?= e(base_url('dashboard')) ?>">ISTS Ticket</a>
 			<div class="d-flex align-items-center gap-3">
 				<?php if (Auth::check()): ?>
-					<span class="small text-white-50"><?= e(Auth::user()['nombre'] ?? 'Usuario') ?></span>
-					<form method="post" action="<?= e(base_url('logout')) ?>" class="m-0">
-						<?= csrf_field() ?>
-						<button class="btn btn-sm btn-outline-light" type="submit">Salir</button>
-					</form>
+					<div class="dropdown">
+						<button class="btn btn-sm btn-light dropdown-toggle" type="button" id="userMenuBtn" data-bs-toggle="dropdown">
+							<?= e(Auth::user()['nombre'] ?? 'Usuario') ?>
+						</button>
+						<ul class="dropdown-menu dropdown-menu-end" aria-labelledby="userMenuBtn">
+							<li><a class="dropdown-item" href="<?= e(base_url('change-password')) ?>">Cambiar Contraseña</a></li>
+							<li><hr class="dropdown-divider"></li>
+							<li>
+								<form method="post" action="<?= e(base_url('logout')) ?>" class="m-0">
+									<?= csrf_field() ?>
+									<button class="dropdown-item" type="submit">Salir</button>
+								</form>
+							</li>
+						</ul>
+					</div>
 				<?php endif; ?>
 			</div>
 		</div>

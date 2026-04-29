@@ -1,3 +1,45 @@
 .auth-page .card {
-    border-radius: 16px;
+	border-radius: 16px;
+}
+
+.card {
+	border: none;
+	border-radius: 8px;
+}
+
+.card-header {
+	border-radius: 8px 8px 0 0;
+	font-weight: 600;
+}
+
+.form-control:focus {
+	border-color: #0d6efd;
+	box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+}
+
+.password-strength {
+	height: 4px;
+	border-radius: 2px;
+	margin-top: 0.5rem;
+	transition: all 0.3s ease;
+}
+
+.password-strength.weak {
+	background-color: #dc3545;
+}
+
+.password-strength.fair {
+	background-color: #ffc107;
+}
+
+.password-strength.good {
+	background-color: #17a2b8;
+}
+
+.password-strength.strong {
+	background-color: #28a745;
+}
+
+.alert {
+	border-radius: 6px;
 }

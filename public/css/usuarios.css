@@ -1,0 +1,90 @@
+.usuarios-page table tbody tr {
+	transition: background-color 0.2s ease;
+}
+
+.usuarios-page table tbody tr:hover {
+	background-color: #f8f9fa;
+}
+
+.usuarios-page .btn-group-sm .btn {
+	padding: 4px 8px;
+	font-size: 0.85rem;
+}
+
+.usuarios-page .badge {
+	font-size: 0.75rem;
+	padding: 4px 8px;
+}
+
+.usuarios-page .fw-500 {
+	font-weight: 500;
+}
+
+/* Estilos para formularios */
+.usuarios-page .form-label {
+	font-weight: 600;
+	color: var(--ink);
+	margin-bottom: 0.5rem;
+}
+
+.usuarios-page .form-control:focus,
+.usuarios-page .form-select:focus {
+	border-color: var(--brand);
+	box-shadow: 0 0 0 0.2rem rgba(15, 76, 129, 0.25);
+}
+
+.usuarios-page .alert {
+	border-radius: 6px;
+	border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+/* Avatar en vista de detalles */
+.usuarios-page .avatar-circle {
+	background: linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%);
+	color: white;
+	font-weight: 700;
+	letter-spacing: 1px;
+}
+
+/* Estilos para tarjetas */
+.usuarios-page .card {
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+	transition: box-shadow 0.2s ease;
+}
+
+.usuarios-page .card:hover {
+	box-shadow: 0 4px 8px rgba(0, 0, 0, 0.12);
+}
+
+.usuarios-page .card-header {
+	background-color: var(--panel);
+	border-bottom: 1px solid var(--line);
+	border-radius: 8px 8px 0 0;
+}
+
+/* Estilo de navegación breadcrumb */
+.usuarios-page a.btn-link {
+	color: var(--brand);
+}
+
+.usuarios-page a.btn-link:hover {
+	color: var(--brand-2);
+}
+
+/* Tabla responsiva */
+@media (max-width: 768px) {
+	.usuarios-page .table-responsive {
+		font-size: 0.85rem;
+	}
+
+	.usuarios-page .btn-group-sm {
+		flex-direction: column;
+	}
+
+	.usuarios-page .btn-group-sm .btn {
+		width: 100%;
+		margin-bottom: 4px;
+	}
+}

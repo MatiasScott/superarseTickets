@@ -48,4 +48,57 @@ class AuthController extends Controller
 		set_flash('success', 'Sesion cerrada correctamente.');
 		redirect('login');
 	}
+
+	public function showChangePassword(): void
+	{
+		Auth::requireAuth();
+
+		$this->view('auth/change-password', [], [
+			'title' => 'Cambiar Contraseña',
+			'showSidebar' => true,
+		]);
+	}
+
+	public function changePassword(): void
+	{
+		Auth::requireAuth();
+
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			set_flash('error', 'Token CSRF invalido.');
+			redirect('change-password');
+		}
+
+		$current_password = (string) ($_POST['current_password'] ?? '');
+		$new_password = (string) ($_POST['new_password'] ?? '');
+		$confirm_password = (string) ($_POST['confirm_password'] ?? '');
+
+		if (empty($current_password) || empty($new_password) || empty($confirm_password)) {
+			set_flash('error', 'Todos los campos son obligatorios.');
+			redirect('change-password');
+		}
+
+		if ($new_password !== $confirm_password) {
+			set_flash('error', 'Las contraseñas nuevas no coinciden.');
+			redirect('change-password');
+		}
+
+		$validation = validate_password_strength($new_password);
+		if (!$validation['valid']) {
+			set_flash('error', implode(' ', $validation['errors']));
+			redirect('change-password');
+		}
+
+		if (!Auth::verifyCurrentPassword($current_password)) {
+			set_flash('error', 'La contraseña actual es incorrecta.');
+			redirect('change-password');
+		}
+
+		if (Auth::updatePassword(Auth::id(), $new_password)) {
+			set_flash('success', 'Contraseña actualizada correctamente.');
+			redirect('dashboard');
+		}
+
+		set_flash('error', 'Error al actualizar la contraseña.');
+		redirect('change-password');
+	}
 }
