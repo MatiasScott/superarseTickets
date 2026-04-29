@@ -8,7 +8,8 @@
 					<tr>
 						<th>ID</th>
 						<th>Nombre</th>
-						<th>Canal</th>
+						<th>Cedula</th>
+						<th>Tipo</th>
 						<th>Estado</th>
 					</tr>
 				</thead>
@@ -16,8 +17,9 @@
 					<?php foreach ($contactos as $contacto): ?>
 						<tr>
 							<td><?= e($contacto['id'] ?? '-') ?></td>
-							<td><?= e($contacto['nombre'] ?? $contacto['nombres'] ?? '-') ?></td>
-							<td><?= e($contacto['canal'] ?? '-') ?></td>
+							<td><?= e(trim((($contacto['nombre'] ?? '') . ' ' . ($contacto['apellido'] ?? '')))) ?></td>
+							<td><?= e($contacto['cedula'] ?? '-') ?></td>
+							<td><?= e($contacto['tipo'] ?? '-') ?></td>
 							<td><?= e($contacto['estado'] ?? '-') ?></td>
 						</tr>
 					<?php endforeach; ?>

@@ -24,12 +24,12 @@
                     <?php else: ?>
                         <?php foreach ($logs as $log): ?>
                             <tr>
-                                <td><?= e($log['created_at'] ?? '-') ?></td>
-                                <td><?= e($log['table_name'] ?? '-') ?></td>
-                                <td><?= e($log['action'] ?? '-') ?></td>
-                                <td><?= e($log['user_id'] ?? '-') ?></td>
-                                <td><?= e($log['ip_address'] ?? '-') ?></td>
-                                <td>#<?= e($log['record_id'] ?? '-') ?></td>
+                                <td><?= e($log['fecha'] ?? '-') ?></td>
+                                <td><?= e($log['tabla'] ?? '-') ?></td>
+                                <td><?= e($log['accion'] ?? '-') ?></td>
+                                <td><?= e($log['usuario_id'] ?? '-') ?></td>
+                                <td><?= e($log['ip'] ?? '-') ?></td>
+                                <td>#<?= e($log['registro_id'] ?? '-') ?></td>
                             </tr>
                         <?php endforeach; ?>
                     <?php endif; ?>

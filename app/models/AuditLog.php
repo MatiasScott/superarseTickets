@@ -2,11 +2,11 @@
 
 class AuditLog extends Model
 {
-    protected string $table = 'audit_logs';
+    protected string $table = 'auditoria';
 
     public function latest(int $limit = 100): array
     {
-        $sql = "SELECT * FROM {$this->table} ORDER BY created_at DESC LIMIT :limit";
+        $sql = "SELECT * FROM {$this->table} ORDER BY fecha DESC LIMIT :limit";
         $stmt = $this->db->prepare($sql);
         $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
         $stmt->execute();

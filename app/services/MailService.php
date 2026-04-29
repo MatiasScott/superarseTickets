@@ -4,19 +4,23 @@ class MailService
 {
 	private $config;
 	private $from;
+	private array $accounts = [];
+	private static int $roundRobinCursor = 0;
 
 	public function __construct()
 	{
 		$this->config = require APP_PATH . '/config/mail.php';
 		$this->from = $this->config['from'];
+		$this->accounts = is_array($this->config['accounts'] ?? null) ? $this->config['accounts'] : [];
 	}
 
 	/**
 	 * Enviar un correo simple
 	 */
-	public function send(string $to, string $subject, string $body, array $cc = [], array $bcc = []): bool
+	public function send(string $to, string $subject, string $body, array $cc = [], array $bcc = [], ?string $accountAlias = null): bool
 	{
 		try {
+			$this->from = $this->resolveFromAccount($accountAlias);
 			$headers = $this->getHeaders($cc, $bcc);
 
 			if ($this->config['driver'] === 'smtp') {
@@ -35,7 +39,7 @@ class MailService
 	/**
 	 * Enviar correo desde una plantilla
 	 */
-	public function sendTemplate(string $to, string $template, array $data = [], string $subject = ''): bool
+	public function sendTemplate(string $to, string $template, array $data = [], string $subject = '', ?string $accountAlias = null): bool
 	{
 		$templatePath = $this->config['templates']['path'] . '/' . $template . '.php';
 
@@ -49,7 +53,44 @@ class MailService
 		include $templatePath;
 		$body = ob_get_clean();
 
-		return $this->send($to, $subject, $body);
+		return $this->send($to, $subject, $body, [], [], $accountAlias);
+	}
+
+	private function resolveFromAccount(?string $accountAlias = null): array
+	{
+		if (empty($this->accounts)) {
+			return $this->from;
+		}
+
+		if (!empty($accountAlias)) {
+			foreach ($this->accounts as $account) {
+				if (($account['alias'] ?? '') === $accountAlias && !empty($account['enabled'])) {
+					return [
+						'name' => $account['name'] ?? ($this->from['name'] ?? 'Mailer'),
+						'email' => $account['email'] ?? ($this->from['email'] ?? ''),
+					];
+				}
+			}
+		}
+
+		$strategy = (string) ($this->config['account_strategy'] ?? 'round_robin');
+		$enabled = array_values(array_filter($this->accounts, static fn($a) => !empty($a['enabled'])));
+		if (empty($enabled)) {
+			return $this->from;
+		}
+
+		if ($strategy === 'first') {
+			$account = $enabled[0];
+		} else {
+			$index = self::$roundRobinCursor % count($enabled);
+			$account = $enabled[$index];
+			self::$roundRobinCursor++;
+		}
+
+		return [
+			'name' => $account['name'] ?? ($this->from['name'] ?? 'Mailer'),
+			'email' => $account['email'] ?? ($this->from['email'] ?? ''),
+		];
 	}
 
 	/**

@@ -14,19 +14,19 @@ class BotController extends Controller
 		];
 
 		try {
-			$resumen['preguntas_resueltas'] = (int) $db->query('SELECT COUNT(*) FROM bot_conversaciones')->fetchColumn();
+			$resumen['preguntas_resueltas'] = (int) $db->query('SELECT COUNT(*) FROM bot_mensajes WHERE es_bot = 1')->fetchColumn();
 		} catch (Throwable $e) {
 			$resumen['preguntas_resueltas'] = 0;
 		}
 
 		try {
-			$resumen['derivadas_asesor'] = (int) $db->query('SELECT COUNT(*) FROM bot_conversaciones WHERE derivado_asesor = 1')->fetchColumn();
+			$resumen['derivadas_asesor'] = (int) $db->query('SELECT COUNT(*) FROM bot_conversaciones WHERE asignado_a IS NOT NULL')->fetchColumn();
 		} catch (Throwable $e) {
 			$resumen['derivadas_asesor'] = 0;
 		}
 
 		try {
-			$resumen['tickets_generados'] = (int) $db->query('SELECT COUNT(*) FROM tickets WHERE origen = "bot"')->fetchColumn();
+			$resumen['tickets_generados'] = (int) $db->query('SELECT COUNT(*) FROM tickets WHERE contacto_id IS NOT NULL')->fetchColumn();
 		} catch (Throwable $e) {
 			$resumen['tickets_generados'] = 0;
 		}

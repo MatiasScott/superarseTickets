@@ -8,17 +8,21 @@
 					<tr>
 						<th>ID</th>
 						<th>Nombre</th>
-						<th>Embudo</th>
-						<th>Asesor</th>
+						<th>Pipeline</th>
+						<th>Origen</th>
+						<th>Convertido</th>
+						<th>Estado</th>
 					</tr>
 				</thead>
 				<tbody>
 					<?php foreach ($interesados as $item): ?>
 						<tr>
 							<td><?= e($item['id'] ?? '-') ?></td>
-							<td><?= e($item['nombre'] ?? '-') ?></td>
-							<td><?= e($item['embudo'] ?? $item['estado'] ?? '-') ?></td>
-							<td><?= e($item['asesor'] ?? '-') ?></td>
+							<td><?= e(trim((($item['nombre'] ?? '') . ' ' . ($item['apellido'] ?? '')))) ?></td>
+							<td><?= e($item['pipeline_estado'] ?? '-') ?></td>
+							<td><?= e($item['origen'] ?? '-') ?></td>
+							<td><?= !empty($item['convertido']) ? 'Si' : 'No' ?></td>
+							<td><?= e($item['estado'] ?? '-') ?></td>
 						</tr>
 					<?php endforeach; ?>
 				</tbody>

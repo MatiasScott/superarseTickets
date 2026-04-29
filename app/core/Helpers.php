@@ -155,3 +155,87 @@ function env(string $key, mixed $default = null): mixed
 
 	return $env[$key] ?? $default;
 }
+
+function env_file_path(): string
+{
+	return dirname(APP_PATH) . '/.env';
+}
+
+function env_write_many(array $updates): array
+{
+	$envPath = env_file_path();
+
+	if (!file_exists($envPath)) {
+		$examplePath = dirname(APP_PATH) . '/.env.example';
+		if (file_exists($examplePath)) {
+			$seed = (string) file_get_contents($examplePath);
+			if (@file_put_contents($envPath, $seed) === false) {
+				$err = error_get_last();
+				return ['ok' => false, 'error' => 'No se pudo crear .env desde .env.example: ' . (($err['message'] ?? 'error desconocido'))];
+			}
+		} else {
+			if (@file_put_contents($envPath, '') === false) {
+				$err = error_get_last();
+				return ['ok' => false, 'error' => 'No se pudo crear .env: ' . (($err['message'] ?? 'error desconocido'))];
+			}
+		}
+	}
+
+	$content = (string) @file_get_contents($envPath);
+	if ($content === false) {
+		$err = error_get_last();
+		return ['ok' => false, 'error' => 'No se pudo leer .env: ' . (($err['message'] ?? 'error desconocido'))];
+	}
+
+	$lines = $content === '' ? [] : preg_split("/\r\n|\n|\r/", $content);
+	if (!is_array($lines)) {
+		$lines = [];
+	}
+
+	$indexed = [];
+	foreach ($lines as $idx => $line) {
+		if (trim($line) === '' || str_starts_with(trim($line), '#')) {
+			continue;
+		}
+
+		$parts = explode('=', $line, 2);
+		$key = trim($parts[0] ?? '');
+		if ($key !== '') {
+			$indexed[$key] = $idx;
+		}
+	}
+
+	foreach ($updates as $key => $value) {
+		$safeKey = trim((string) $key);
+		$safeValue = (string) $value;
+
+		if ($safeKey === '') {
+			continue;
+		}
+
+		$lineValue = str_replace(["\r", "\n"], '', $safeValue);
+		if (preg_match('/\s/', $lineValue)) {
+			$lineValue = '"' . addcslashes($lineValue, '"') . '"';
+		}
+
+		$newLine = $safeKey . '=' . $lineValue;
+		if (array_key_exists($safeKey, $indexed)) {
+			$lines[$indexed[$safeKey]] = $newLine;
+		} else {
+			$lines[] = $newLine;
+		}
+	}
+
+	$newContent = implode(PHP_EOL, $lines);
+	if ($newContent !== '' && !str_ends_with($newContent, PHP_EOL)) {
+		$newContent .= PHP_EOL;
+	}
+
+	$result = @file_put_contents($envPath, $newContent, LOCK_EX);
+	if ($result === false) {
+		$err = error_get_last();
+		return ['ok' => false, 'error' => 'No se pudo escribir .env: ' . (($err['message'] ?? 'error desconocido'))];
+	}
+
+	return ['ok' => true, 'error' => null];
+}

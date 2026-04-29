@@ -17,10 +17,15 @@
 			<table class="table table-striped align-middle">
 				<thead>
 					<tr>
-						<th>ID</th>
+						<th>Codigo</th>
+						<th>Contacto</th>
 						<th>Asunto</th>
 						<th>Prioridad</th>
-						<th>Estado</th>
+						<th>Estado Ticket</th>
+						<th>Tipo</th>
+						<th>Grupo</th>
+						<th>Asignado</th>
+						<th>Estado Registro</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -28,11 +33,16 @@
 						<tr>
 							<td>
 								<a href="<?= e(base_url('tickets/' . ($ticket['id'] ?? 0))) ?>">
-									#<?= e($ticket['id'] ?? '-') ?>
+									<?= e($ticket['codigo'] ?? ('#' . ($ticket['id'] ?? '-'))) ?>
 								</a>
 							</td>
+							<td><?= e($ticket['contacto_nombre'] ?? '-') ?></td>
 							<td><?= e($ticket['asunto'] ?? '-') ?></td>
-							<td><?= e($ticket['prioridad'] ?? '-') ?></td>
+							<td><?= e($ticket['prioridad_ticket'] ?? '-') ?></td>
+							<td><?= e($ticket['estado_ticket'] ?? '-') ?></td>
+							<td><?= e($ticket['tipo_ticket'] ?? '-') ?></td>
+							<td><?= e($ticket['grupo_ticket'] ?? '-') ?></td>
+							<td><?= e($ticket['asignado_nombre'] ?? '-') ?></td>
 							<td><?= e($ticket['estado'] ?? '-') ?></td>
 						</tr>
 					<?php endforeach; ?>

@@ -31,7 +31,7 @@
 				<div class="card metric-card">
 					<div class="card-body">
 						<h2><?= e($metrics['campanas_activas'] ?? 0) ?></h2>
-						<p>Campanas activas</p>
+						<p>Conversaciones activas</p>
 					</div>
 				</div>
 			</div>

@@ -47,11 +47,6 @@
 										<?php endforeach; ?>
 									</select>
 								</div>
-
-								<div class="col-md-6 mb-3">
-									<label for="telefono" class="form-label">Teléfono</label>
-									<input type="tel" class="form-control" id="telefono" name="telefono" value="<?= e($usuario['telefono'] ?? '') ?>" placeholder="+34 600 00 00 00">
-								</div>
 							</div>
 
 							<div class="mb-3">
@@ -59,7 +54,6 @@
 								<select class="form-select" id="estado" name="estado">
 									<option value="activo" <?= (($usuario['estado'] ?? 'activo') === 'activo') ? 'selected' : '' ?>>Activo</option>
 									<option value="inactivo" <?= (($usuario['estado'] ?? '') === 'inactivo') ? 'selected' : '' ?>>Inactivo</option>
-									<option value="pendiente" <?= (($usuario['estado'] ?? '') === 'pendiente') ? 'selected' : '' ?>>Pendiente</option>
 								</select>
 							</div>
 

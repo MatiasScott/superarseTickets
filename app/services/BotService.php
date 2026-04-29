@@ -5,6 +5,7 @@ class BotService
 	private $config;
 	private $mailService;
 	private $phoneService;
+	private static int $whatsAppCursor = 0;
 
 	public function __construct()
 	{
@@ -152,9 +153,31 @@ class BotService
 			return false;
 		}
 
+		$fromNumber = $this->resolveWhatsAppSender($bot);
+		if ($fromNumber === '') {
+			return false;
+		}
+
 		// Aquí iría la integración real con API de WhatsApp/Twilio
-		$this->logBotMessage('whatsapp', $to, $message);
+		$this->logBotMessage('whatsapp', $to, $message, $fromNumber);
 		return true;
+	}
+
+	private function resolveWhatsAppSender(array $bot): string
+	{
+		$numbers = is_array($bot['phone_numbers'] ?? null) ? $bot['phone_numbers'] : [];
+		if (!empty($numbers)) {
+			$strategy = (string) ($bot['number_strategy'] ?? 'round_robin');
+			if ($strategy === 'first') {
+				return (string) ($numbers[0] ?? '');
+			}
+
+			$index = self::$whatsAppCursor % count($numbers);
+			self::$whatsAppCursor++;
+			return (string) ($numbers[$index] ?? '');
+		}
+
+		return (string) ($bot['phone_number'] ?? '');
 	}
 
 	/**
@@ -176,11 +199,12 @@ class BotService
 	/**
 	 * Log de mensajes de bot
 	 */
-	private function logBotMessage(string $provider, string $to, string $message): void
+	private function logBotMessage(string $provider, string $to, string $message, string $from = ''): void
 	{
 		$log = [
 			'timestamp' => date('Y-m-d H:i:s'),
 			'provider' => $provider,
+			'from' => $from,
 			'to' => $to,
 			'message' => $message,
 		];

@@ -7,8 +7,10 @@ return [
 			'enabled' => env('BOT_WHATSAPP_ENABLED', false),
 			'provider' => 'twilio', // twilio, waba, baileys
 			'phone_number' => env('BOT_WHATSAPP_PHONE', ''),
+			'phone_numbers' => array_values(array_filter(array_map('trim', explode(',', (string) env('BOT_WHATSAPP_NUMBERS', ''))))),
 			'api_key' => env('BOT_WHATSAPP_API_KEY', ''),
 			'webhook_url' => env('BOT_WHATSAPP_WEBHOOK', ''),
+			'number_strategy' => env('BOT_WHATSAPP_NUMBER_STRATEGY', 'round_robin'), // round_robin, first
 			'greeting_message' => 'Hola, ¿en qué podemos ayudarte?',
 		],
 

@@ -50,8 +50,10 @@ class UsuarioController extends Controller
 		$password = (string) ($_POST['password'] ?? '');
 		$confirm_password = (string) ($_POST['confirm_password'] ?? '');
 		$rol_id = (int) ($_POST['rol_id'] ?? 0);
-		$telefono = trim((string) ($_POST['telefono'] ?? ''));
 		$estado = $_POST['estado'] ?? 'activo';
+		if (!in_array($estado, ['activo', 'inactivo'], true)) {
+			$estado = 'activo';
+		}
 
 		if (empty($nombre) || empty($email) || empty($password)) {
 			set_flash('error', 'Todos los campos son obligatorios.');
@@ -91,7 +93,6 @@ class UsuarioController extends Controller
 				'email' => $email,
 				'password' => $hashed_password,
 				'rol_id' => $rol_id > 0 ? $rol_id : null,
-				'telefono' => !empty($telefono) ? $telefono : null,
 				'estado' => $estado,
 			]);
 
@@ -167,8 +168,10 @@ class UsuarioController extends Controller
 		$nombre = trim((string) ($_POST['nombre'] ?? ''));
 		$email = trim((string) ($_POST['email'] ?? ''));
 		$rol_id = (int) ($_POST['rol_id'] ?? 0);
-		$telefono = trim((string) ($_POST['telefono'] ?? ''));
 		$estado = $_POST['estado'] ?? 'activo';
+		if (!in_array($estado, ['activo', 'inactivo'], true)) {
+			$estado = 'activo';
+		}
 
 		if (empty($nombre) || empty($email)) {
 			set_flash('error', 'Todos los campos son obligatorios.');
@@ -194,7 +197,6 @@ class UsuarioController extends Controller
 				'nombre' => $nombre,
 				'email' => $email,
 				'rol_id' => $rol_id > 0 ? $rol_id : null,
-				'telefono' => !empty($telefono) ? $telefono : null,
 				'estado' => $estado,
 			]);
 

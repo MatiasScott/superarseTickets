@@ -33,7 +33,6 @@
 						<tr>
 							<th>Nombre</th>
 							<th>Correo</th>
-							<th>Teléfono</th>
 							<th>Rol</th>
 							<th>Estado</th>
 							<th>Fecha de Registro</th>
@@ -43,7 +42,7 @@
 					<tbody>
 						<?php if (empty($usuarios)): ?>
 							<tr>
-								<td colspan="7" class="text-center py-4 text-muted">
+								<td colspan="6" class="text-center py-4 text-muted">
 									No hay cuentas registradas. <a href="<?= base_url('usuarios/create') ?>">Crear una</a>
 								</td>
 							</tr>
@@ -52,7 +51,6 @@
 								<tr>
 									<td class="fw-500"><?= e($usuario['nombre'] ?? 'N/A') ?></td>
 									<td><?= e($usuario['email'] ?? 'N/A') ?></td>
-									<td><?= e($usuario['telefono'] ?? 'No registrado') ?></td>
 									<td>
 										<?php if (!empty($usuario['rol_nombre'])): ?>
 											<span class="badge bg-info"><?= e($usuario['rol_nombre']) ?></span>
@@ -65,7 +63,6 @@
 										$estado_class = match($usuario['estado'] ?? 'activo') {
 											'activo' => 'success',
 											'inactivo' => 'danger',
-											'pendiente' => 'warning',
 											default => 'secondary'
 										};
 										?>

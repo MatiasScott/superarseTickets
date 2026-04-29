@@ -7,6 +7,7 @@
 				<thead>
 					<tr>
 						<th>ID</th>
+						<th>Codigo</th>
 						<th>Nombre</th>
 						<th>Carrera</th>
 						<th>Estado</th>
@@ -16,7 +17,8 @@
 					<?php foreach ($estudiantes as $item): ?>
 						<tr>
 							<td><?= e($item['id'] ?? '-') ?></td>
-							<td><?= e($item['nombre'] ?? '-') ?></td>
+							<td><?= e($item['codigo_estudiante'] ?? '-') ?></td>
+							<td><?= e(trim((($item['nombre'] ?? '') . ' ' . ($item['apellido'] ?? '')))) ?></td>
 							<td><?= e($item['carrera'] ?? '-') ?></td>
 							<td><?= e($item['estado'] ?? '-') ?></td>
 						</tr>

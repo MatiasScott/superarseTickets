@@ -10,6 +10,17 @@ return static function (Router $router): void {
 	$router->post('/change-password', 'AuthController@changePassword');
 
 	$router->get('/dashboard', 'DashboardController@index');
+	$router->get('/configuracion', 'ConfiguracionController@index');
+	$router->post('/configuracion/mail', 'ConfiguracionController@saveMail');
+	$router->post('/configuracion/whatsapp', 'ConfiguracionController@saveWhatsApp');
+
+	$router->get('/catalogos', 'CatalogoController@index');
+	$router->get('/catalogos/{module}', 'CatalogoController@list');
+	$router->get('/catalogos/{module}/create', 'CatalogoController@create');
+	$router->post('/catalogos/{module}', 'CatalogoController@store');
+	$router->get('/catalogos/{module}/{id}/edit', 'CatalogoController@edit');
+	$router->post('/catalogos/{module}/{id}', 'CatalogoController@update');
+	$router->post('/catalogos/{module}/{id}/delete', 'CatalogoController@delete');
 
 	$router->get('/usuarios', 'UsuarioController@index');
 	$router->get('/usuarios/create', 'UsuarioController@create');

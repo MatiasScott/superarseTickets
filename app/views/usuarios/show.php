@@ -29,10 +29,6 @@
 											<label class="form-label text-muted">Correo Electrónico</label>
 											<p class="fw-500"><?= e($usuario['email'] ?? 'N/A') ?></p>
 										</div>
-										<div class="mb-3">
-											<label class="form-label text-muted">Teléfono</label>
-											<p class="fw-500"><?= e($usuario['telefono'] ?? 'No registrado') ?></p>
-										</div>
 									</div>
 
 									<div class="col-md-6">
@@ -53,7 +49,6 @@
 												$estado_class = match($usuario['estado'] ?? 'activo') {
 													'activo' => 'success',
 													'inactivo' => 'danger',
-													'pendiente' => 'warning',
 													default => 'secondary'
 												};
 												?>

@@ -33,7 +33,7 @@ class DashboardController extends Controller
 		}
 
 		try {
-			$metrics['campanas_activas'] = (int) $db->query("SELECT COUNT(*) FROM campanas WHERE estado IN ('activa', 'programada')")->fetchColumn();
+			$metrics['campanas_activas'] = (int) $db->query("SELECT COUNT(*) FROM bot_conversaciones WHERE estado = 'activo'")->fetchColumn();
 		} catch (Throwable $e) {
 			$metrics['campanas_activas'] = 0;
 		}

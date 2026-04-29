@@ -1,22 +1,24 @@
 <section class="module-page">
-    <?php $convenios = $convenios ?? []; ?>
+    <?php $relaciones = $relaciones ?? []; ?>
     <div class="container-fluid py-4">
-        <h1 class="h3 mb-3">Relaciones interinstitucionales</h1>
+        <h1 class="h3 mb-3">Relaciones Usuario - Grupo</h1>
         <div class="table-responsive">
             <table class="table table-striped align-middle">
                 <thead>
                     <tr>
-                        <th>Empresa/Institucion</th>
-                        <th>Tipo</th>
+                        <th>ID</th>
+                        <th>Usuario</th>
+                        <th>Grupo</th>
                         <th>Estado</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php foreach ($convenios as $item): ?>
+                    <?php foreach ($relaciones as $item): ?>
                         <tr>
-                            <td><?= e($item['empresa'] ?? $item['institucion'] ?? $item['nombre_empresa'] ?? '-') ?></td>
-                            <td><?= e($item['tipo'] ?? $item['tipo_convenio'] ?? '-') ?></td>
-                            <td><?= e($item['estado'] ?? $item['estatus'] ?? '-') ?></td>
+                            <td><?= e($item['id'] ?? '-') ?></td>
+                            <td><?= e($item['usuario_nombre'] ?? '-') ?></td>
+                            <td><?= e($item['grupo_nombre'] ?? '-') ?></td>
+                            <td><?= e($item['estado'] ?? '-') ?></td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>
