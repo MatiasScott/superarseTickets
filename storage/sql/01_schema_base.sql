@@ -67,8 +67,3 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     INDEX idx_audit_user_date (user_id, created_at)
 );
 
-INSERT INTO usuarios (nombre, username, password, rol)
-SELECT 'Administrador', 'admin', 'admin', 'admin'
-WHERE NOT EXISTS (
-    SELECT 1 FROM usuarios WHERE username = 'admin'
-);

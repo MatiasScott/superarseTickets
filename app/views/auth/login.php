@@ -16,8 +16,8 @@
 						<form method="post" action="<?= e(base_url('login')) ?>">
 							<?= csrf_field() ?>
 							<div class="mb-3">
-								<label class="form-label" for="username">Usuario</label>
-								<input class="form-control" id="username" name="username" required>
+								<label class="form-label" for="credential">Correo o nombre</label>
+								<input class="form-control" id="credential" name="credential" required>
 							</div>
 							<div class="mb-3">
 								<label class="form-label" for="password">Clave</label>
@@ -26,7 +26,6 @@
 							<button class="btn btn-primary w-100" type="submit">Entrar</button>
 						</form>
 
-						<p class="small text-muted mt-3 mb-0">Demo local: admin / admin</p>
 					</div>
 				</div>
 			</div>

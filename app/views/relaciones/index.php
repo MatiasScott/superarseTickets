@@ -14,9 +14,9 @@
                 <tbody>
                     <?php foreach ($convenios as $item): ?>
                         <tr>
-                            <td><?= e($item['empresa'] ?? '-') ?></td>
-                            <td><?= e($item['tipo'] ?? '-') ?></td>
-                            <td><?= e($item['estado'] ?? '-') ?></td>
+                            <td><?= e($item['empresa'] ?? $item['institucion'] ?? $item['nombre_empresa'] ?? '-') ?></td>
+                            <td><?= e($item['tipo'] ?? $item['tipo_convenio'] ?? '-') ?></td>
+                            <td><?= e($item['estado'] ?? $item['estatus'] ?? '-') ?></td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>

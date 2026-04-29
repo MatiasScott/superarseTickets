@@ -14,9 +14,9 @@
                 <tbody>
                     <?php foreach ($alertas as $item): ?>
                         <tr>
-                            <td><?= e($item['estudiante'] ?? '-') ?></td>
-                            <td><?= e($item['riesgo'] ?? '-') ?></td>
-                            <td><?= e($item['motivo'] ?? '-') ?></td>
+                            <td><?= e($item['estudiante'] ?? $item['nombre_estudiante'] ?? '-') ?></td>
+                            <td><?= e($item['riesgo'] ?? $item['nivel_riesgo'] ?? '-') ?></td>
+                            <td><?= e($item['motivo'] ?? $item['descripcion'] ?? '-') ?></td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>

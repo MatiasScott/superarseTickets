@@ -21,15 +21,15 @@ class AuthController extends Controller
 			redirect('login');
 		}
 
-		$username = trim((string) ($_POST['username'] ?? ''));
+		$credential = trim((string) ($_POST['credential'] ?? ''));
 		$password = (string) ($_POST['password'] ?? '');
 
-		if ($username === '' || $password === '') {
-			set_flash('error', 'Debes ingresar usuario y clave.');
+		if ($credential === '' || $password === '') {
+			set_flash('error', 'Debes ingresar correo o nombre y clave.');
 			redirect('login');
 		}
 
-		if (!Auth::attempt($username, $password)) {
+		if (!Auth::attempt($credential, $password)) {
 			set_flash('error', 'Credenciales invalidas.');
 			redirect('login');
 		}

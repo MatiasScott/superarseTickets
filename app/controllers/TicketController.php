@@ -5,14 +5,12 @@ class TicketController extends Controller
 	public function index(): void
 	{
 		Auth::requireAuth();
+		$tickets = [];
 
 		try {
 			$tickets = (new Ticket())->all(100);
 		} catch (Throwable $e) {
-			$tickets = [
-				['id' => 101, 'asunto' => 'No puedo matricularme', 'prioridad' => 'alta', 'estado' => 'abierto'],
-				['id' => 102, 'asunto' => 'Problema con pago', 'prioridad' => 'media', 'estado' => 'en proceso'],
-			];
+			$tickets = [];
 		}
 
 		$this->view('tickets/index', compact('tickets'), [
@@ -74,13 +72,9 @@ class TicketController extends Controller
 		}
 
 		if ($ticket === null) {
-			$ticket = [
-				'id' => (int) $id,
-				'asunto' => 'Ticket de ejemplo',
-				'descripcion' => 'La tabla tickets aun no esta sincronizada.',
-				'prioridad' => 'media',
-				'estado' => 'abierto',
-			];
+			http_response_code(404);
+			set_flash('error', 'El ticket solicitado no existe.');
+			redirect('tickets');
 		}
 
 		$this->view('tickets/show', compact('ticket'), [
