@@ -8,7 +8,7 @@ class UsuarioController extends Controller
 		$usuarios = [];
 
 		try {
-			$usuarios = (new Usuario())->all(100);
+			$usuarios = (new Usuario())->getAllWithRoles(100);
 		} catch (Throwable $e) {
 			$usuarios = [];
 		}
@@ -113,7 +113,7 @@ class UsuarioController extends Controller
 		Auth::requireAuth();
 
 		try {
-			$usuario = (new Usuario())->find($id);
+			$usuario = (new Usuario())->findWithRole($id);
 			if (!$usuario) {
 				set_flash('error', 'Usuario no encontrado.');
 				redirect('usuarios');
@@ -136,7 +136,7 @@ class UsuarioController extends Controller
 		$roles = [];
 
 		try {
-			$usuario = (new Usuario())->find($id);
+			$usuario = (new Usuario())->findWithRole($id);
 			if (!$usuario) {
 				set_flash('error', 'Usuario no encontrado.');
 				redirect('usuarios');
