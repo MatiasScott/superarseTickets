@@ -11,7 +11,7 @@ class Database
 		$port = db_config('port', '3306');
 		$database = db_config('database', 'istsTicket');
 		$username = db_config('username', 'root');
-		$password = db_config('password', '');
+		$password = db_config('password', 'Superarse.2025');
 		$charset = db_config('charset', 'utf8mb4');
 
 		$dsn = "mysql:host={$host};port={$port};dbname={$database};charset={$charset}";

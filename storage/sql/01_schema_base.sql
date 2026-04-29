@@ -1,0 +1,74 @@
+CREATE DATABASE IF NOT EXISTS istsTicket CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE istsTicket;
+
+CREATE TABLE IF NOT EXISTS usuarios (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(120) NOT NULL,
+    username VARCHAR(80) NOT NULL UNIQUE,
+    password VARCHAR(255) NOT NULL,
+    rol VARCHAR(40) NOT NULL DEFAULT 'asesor',
+    estado VARCHAR(20) NOT NULL DEFAULT 'activo',
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS contactos (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(120) NOT NULL,
+    canal VARCHAR(50) DEFAULT NULL,
+    estado VARCHAR(50) DEFAULT 'interesado',
+    asesor VARCHAR(120) DEFAULT NULL,
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS estudiantes (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(120) NOT NULL,
+    carrera VARCHAR(120) DEFAULT NULL,
+    estado VARCHAR(50) DEFAULT 'activo',
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS tickets (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    asunto VARCHAR(190) NOT NULL,
+    descripcion TEXT NOT NULL,
+    prioridad ENUM('baja', 'media', 'alta') NOT NULL DEFAULT 'media',
+    estado ENUM('abierto', 'en proceso', 'resuelto', 'cerrado') NOT NULL DEFAULT 'abierto',
+    usuario_id INT UNSIGNED NULL,
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_tickets_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS campanas (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(190) NOT NULL,
+    canal ENUM('Email', 'WhatsApp') NOT NULL DEFAULT 'Email',
+    estado VARCHAR(50) NOT NULL DEFAULT 'programada',
+    payload JSON NULL,
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    table_name VARCHAR(128) NOT NULL,
+    action ENUM('INSERT', 'UPDATE', 'DELETE') NOT NULL,
+    record_id BIGINT NULL,
+    before_data JSON NULL,
+    after_data JSON NULL,
+    user_id BIGINT NULL,
+    ip_address VARCHAR(64) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_audit_table_date (table_name, created_at),
+    INDEX idx_audit_user_date (user_id, created_at)
+);
+
+INSERT INTO usuarios (nombre, username, password, rol)
+SELECT 'Administrador', 'admin', 'admin', 'admin'
+WHERE NOT EXISTS (
+    SELECT 1 FROM usuarios WHERE username = 'admin'
+);

@@ -1,0 +1,4 @@
+.module-page table td,
+.module-page table th {
+    white-space: nowrap;
+}

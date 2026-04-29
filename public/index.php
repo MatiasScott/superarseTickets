@@ -36,6 +36,17 @@ if (is_callable($registerRoutes)) {
 	$registerRoutes($router);
 }
 
+try {
+	$db = Database::getInstance()->connection();
+	$stmt = $db->prepare('SET @audit_user_id = :uid, @audit_ip = :ip');
+	$stmt->execute([
+		'uid' => $_SESSION['auth_user']['id'] ?? null,
+		'ip' => $_SERVER['REMOTE_ADDR'] ?? null,
+	]);
+} catch (Throwable $e) {
+	// No se interrumpe el flujo si la BD no esta disponible.
+}
+
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $uri = $_SERVER['REQUEST_URI'] ?? '/';
 
