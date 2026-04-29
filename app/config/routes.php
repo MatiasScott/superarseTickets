@@ -10,17 +10,27 @@ return static function (Router $router): void {
 	$router->post('/change-password', 'AuthController@changePassword');
 
 	$router->get('/dashboard', 'DashboardController@index');
+	$router->get('/tickets/dashboard', 'DashboardController@index');
 	$router->get('/configuracion', 'ConfiguracionController@index');
 	$router->post('/configuracion/mail', 'ConfiguracionController@saveMail');
 	$router->post('/configuracion/whatsapp', 'ConfiguracionController@saveWhatsApp');
 
+	$router->get('/chat/dashboard', 'CorreoController@dashboard');
+	$router->get('/correo', 'CorreoController@index');
+	$router->get('/correo/compose', 'CorreoController@compose');
+	$router->post('/correo/send', 'CorreoController@send');
+	$router->get('/correo/verify', 'CorreoController@verify');
+	$router->post('/correo/sync-tickets', 'CorreoController@syncTickets');
+	$router->get('/correo/{uid}', 'CorreoController@show');
+	$router->post('/correo/{uid}/reply', 'CorreoController@reply');
+
 	$router->get('/catalogos', 'CatalogoController@index');
-	$router->get('/catalogos/{module}', 'CatalogoController@list');
 	$router->get('/catalogos/{module}/create', 'CatalogoController@create');
-	$router->post('/catalogos/{module}', 'CatalogoController@store');
 	$router->get('/catalogos/{module}/{id}/edit', 'CatalogoController@edit');
 	$router->post('/catalogos/{module}/{id}', 'CatalogoController@update');
 	$router->post('/catalogos/{module}/{id}/delete', 'CatalogoController@delete');
+	$router->get('/catalogos/{module}', 'CatalogoController@list');
+	$router->post('/catalogos/{module}', 'CatalogoController@store');
 
 	$router->get('/usuarios', 'UsuarioController@index');
 	$router->get('/usuarios/create', 'UsuarioController@create');
@@ -32,6 +42,7 @@ return static function (Router $router): void {
 
 	$router->get('/contactos', 'ContactoController@index');
 
+	$router->get('/crm/dashboard', 'CRMController@dashboard');
 	$router->get('/crm/interesados', 'CRMController@interesados');
 	$router->get('/crm/estudiantes', 'CRMController@estudiantes');
 

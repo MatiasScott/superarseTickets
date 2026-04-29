@@ -22,7 +22,10 @@ for ($i = 1; $i <= $accountsTotal; $i++) {
 		'host' => trim((string) env($prefix . 'HOST', env('MAIL_HOST', 'smtp.mailtrap.io'))),
 		'port' => (int) env($prefix . 'PORT', env('MAIL_PORT', 465)),
 		'encryption' => trim((string) env($prefix . 'ENCRYPTION', env('MAIL_ENCRYPTION', 'tls'))),
-		'enabled' => env($prefix . 'ENABLED', true),
+		'imap_host' => trim((string) env($prefix . 'IMAP_HOST', env('MAIL_IMAP_HOST', 'outlook.office365.com'))),
+		'imap_port' => (int) env($prefix . 'IMAP_PORT', env('MAIL_IMAP_PORT', 993)),
+		'imap_encryption' => trim((string) env($prefix . 'IMAP_ENCRYPTION', env('MAIL_IMAP_ENCRYPTION', 'ssl'))),
+		'enabled' => strtolower(trim((string) env($prefix . 'ENABLED', 'true'))) === 'true',
 	];
 }
 
@@ -36,6 +39,9 @@ if (empty($mailAccounts)) {
 		'host' => trim((string) env('MAIL_HOST', 'smtp.mailtrap.io')),
 		'port' => (int) env('MAIL_PORT', 465),
 		'encryption' => trim((string) env('MAIL_ENCRYPTION', 'tls')),
+		'imap_host' => trim((string) env('MAIL_IMAP_HOST', 'outlook.office365.com')),
+		'imap_port' => (int) env('MAIL_IMAP_PORT', 993),
+		'imap_encryption' => trim((string) env('MAIL_IMAP_ENCRYPTION', 'ssl')),
 		'enabled' => true,
 	];
 }
@@ -51,7 +57,7 @@ return [
 	// Multi-cuenta de correo
 	'accounts' => $mailAccounts,
 	'account_strategy' => env('MAIL_ACCOUNT_STRATEGY', 'round_robin'), // round_robin, first
-	'default_account_alias' => env('MAIL_DEFAULT_ACCOUNT_ALIAS', 'default'),
+	'default_account_alias' => env('MAIL_DEFAULT_ACCOUNT_ALIAS', 'acc1'),
 
 	// SMTP Configuration
 	'smtp' => [
@@ -60,6 +66,13 @@ return [
 		'username' => env('MAIL_USERNAME', ''),
 		'password' => env('MAIL_PASSWORD', ''),
 		'encryption' => env('MAIL_ENCRYPTION', 'tls'), // tls, ssl
+	],
+
+	// IMAP global por defecto (lectura)
+	'imap' => [
+		'host' => env('MAIL_IMAP_HOST', 'outlook.office365.com'),
+		'port' => env('MAIL_IMAP_PORT', 993),
+		'encryption' => env('MAIL_IMAP_ENCRYPTION', 'ssl'),
 	],
 
 	// Sendmail Configuration

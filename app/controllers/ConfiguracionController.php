@@ -77,6 +77,9 @@ class ConfiguracionController extends Controller
 				'host' => $host === '' ? 'smtp.office365.com' : $host,
 				'port' => trim((string) ($account['port'] ?? '587')),
 				'encryption' => trim((string) ($account['encryption'] ?? 'tls')),
+				'imap_host' => trim((string) ($account['imap_host'] ?? 'outlook.office365.com')),
+				'imap_port' => trim((string) ($account['imap_port'] ?? '993')),
+				'imap_encryption' => trim((string) ($account['imap_encryption'] ?? 'ssl')),
 				'enabled' => !empty($account['enabled']),
 			];
 			$cursor++;
@@ -92,6 +95,9 @@ class ConfiguracionController extends Controller
 				'host' => 'smtp.office365.com',
 				'port' => '587',
 				'encryption' => 'tls',
+				'imap_host' => 'outlook.office365.com',
+				'imap_port' => '993',
+				'imap_encryption' => 'ssl',
 				'enabled' => true,
 			];
 		}
@@ -109,6 +115,9 @@ class ConfiguracionController extends Controller
 			$updates[$prefix . 'HOST'] = $account['host'];
 			$updates[$prefix . 'PORT'] = $account['port'];
 			$updates[$prefix . 'ENCRYPTION'] = $account['encryption'];
+			$updates[$prefix . 'IMAP_HOST'] = $account['imap_host'];
+			$updates[$prefix . 'IMAP_PORT'] = $account['imap_port'];
+			$updates[$prefix . 'IMAP_ENCRYPTION'] = $account['imap_encryption'];
 			$updates[$prefix . 'ENABLED'] = $account['enabled'] ? 'true' : 'false';
 		}
 
@@ -184,6 +193,9 @@ class ConfiguracionController extends Controller
 				'host' => (string) env($prefix . 'HOST', 'smtp.office365.com'),
 				'port' => (string) env($prefix . 'PORT', '587'),
 				'encryption' => (string) env($prefix . 'ENCRYPTION', 'tls'),
+				'imap_host' => (string) env($prefix . 'IMAP_HOST', 'outlook.office365.com'),
+				'imap_port' => (string) env($prefix . 'IMAP_PORT', '993'),
+				'imap_encryption' => (string) env($prefix . 'IMAP_ENCRYPTION', 'ssl'),
 				'enabled' => (string) env($prefix . 'ENABLED', 'true') === 'true',
 			];
 		}
@@ -199,6 +211,9 @@ class ConfiguracionController extends Controller
 				'host' => 'smtp.office365.com',
 				'port' => '587',
 				'encryption' => 'tls',
+				'imap_host' => 'outlook.office365.com',
+				'imap_port' => '993',
+				'imap_encryption' => 'ssl',
 				'enabled' => true,
 			];
 		}

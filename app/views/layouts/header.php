@@ -13,15 +13,29 @@
 		<link rel="stylesheet" href="<?= e(asset('css/' . $style)) ?>">
 	<?php endforeach; ?>
 </head>
-<body data-module="<?= e($module ?? 'dashboard') ?>">
+<body data-module="<?= e($layoutModule ?? 'dashboard') ?>">
 	<header class="topbar shadow-sm">
-		<div class="container-fluid d-flex align-items-center justify-content-between py-2">
-			<a class="brand-link" href="<?= e(base_url('dashboard')) ?>">ISTS Ticket</a>
-			<div class="d-flex align-items-center gap-3">
+		<div class="container-fluid topbar-inner">
+			<div class="topbar-left">
+				<a class="brand-link" href="<?= e(base_url('dashboard')) ?>">
+					<span class="brand-badge">FD</span>
+					<span>ISTS Helpdesk</span>
+				</a>
+			</div>
+			<div class="topbar-right">
+				<div class="search-wrap d-none d-md-flex">
+					<span class="search-icon">⌕</span>
+					<input type="search" class="search-input" placeholder="Buscar">
+				</div>
+
+				<button type="button" class="topbar-icon-btn" title="Aplicaciones" aria-label="Aplicaciones">⌗</button>
+				<button type="button" class="topbar-icon-btn" title="Notificaciones" aria-label="Notificaciones">◉</button>
+
 				<?php if (Auth::check()): ?>
 					<div class="dropdown">
-						<button class="btn btn-sm btn-light dropdown-toggle" type="button" id="userMenuBtn" data-bs-toggle="dropdown">
-							<?= e(Auth::user()['nombre'] ?? 'Usuario') ?>
+						<button class="profile-chip" type="button" id="userMenuBtn" data-bs-toggle="dropdown" aria-expanded="false">
+							<span class="avatar-dot"><?= e(strtoupper(substr((string) (Auth::user()['nombre'] ?? 'U'), 0, 1))) ?></span>
+							<span class="d-none d-lg-inline"><?= e(Auth::user()['nombre'] ?? 'Usuario') ?></span>
 						</button>
 						<ul class="dropdown-menu dropdown-menu-end" aria-labelledby="userMenuBtn">
 							<li><a class="dropdown-item" href="<?= e(base_url('change-password')) ?>">Cambiar Contraseña</a></li>

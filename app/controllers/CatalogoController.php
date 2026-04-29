@@ -86,8 +86,47 @@ class CatalogoController extends Controller
 
 	private function getModuleConfig(string $module): ?array
 	{
+		[, $config] = $this->resolveModule($module);
+		return $config;
+	}
+
+	private function resolveModule(string $module): array
+	{
 		$modules = $this->modules();
-		return $modules[$module] ?? null;
+		$normalizedInput = $this->normalizeModuleKey($module);
+
+		if (isset($modules[$normalizedInput])) {
+			return [$normalizedInput, $modules[$normalizedInput]];
+		}
+
+		foreach ($modules as $key => $meta) {
+			if ($normalizedInput === $this->normalizeModuleKey((string) $key)) {
+				return [(string) $key, $meta];
+			}
+
+			$title = (string) ($meta['title'] ?? '');
+			if ($title !== '' && $normalizedInput === $this->normalizeModuleKey($title)) {
+				return [(string) $key, $meta];
+			}
+		}
+
+		return [$normalizedInput, null];
+	}
+
+	private function normalizeModuleKey(string $module): string
+	{
+		$value = strtolower(trim(rawurldecode($module)));
+		$value = strtr($value, [
+			'á' => 'a',
+			'é' => 'e',
+			'í' => 'i',
+			'ó' => 'o',
+			'ú' => 'u',
+			'ñ' => 'n',
+		]);
+		$value = preg_replace('/[^a-z0-9]+/', '-', $value) ?? $value;
+		$value = trim($value, '-');
+		return $value;
 	}
 
 	public function index(): void
@@ -102,14 +141,15 @@ class CatalogoController extends Controller
 	public function list(string $module): void
 	{
 		Auth::requireAuth();
-		$config = $this->getModuleConfig($module);
+		[$module, $config] = $this->resolveModule($module);
 
 		if ($config === null) {
-			set_flash('error', 'Modulo de catalogo no encontrado.');
+			set_flash('error', 'Modulo de catalogo no encontrado: ' . $module);
 			redirect('catalogos');
 		}
 
 		$items = [];
+		$modules = $this->modules();
 		try {
 			$db = Database::getInstance()->connection();
 			$sql = "SELECT * FROM {$config['table']} ORDER BY id DESC LIMIT 300";
@@ -119,7 +159,7 @@ class CatalogoController extends Controller
 			set_flash('error', 'No se pudo cargar el catalogo.');
 		}
 
-		$this->view('catalogos/list', compact('module', 'config', 'items'), [
+		$this->view('catalogos/list', compact('module', 'config', 'items', 'modules'), [
 			'title' => $config['title'],
 		]);
 	}
@@ -127,15 +167,16 @@ class CatalogoController extends Controller
 	public function create(string $module): void
 	{
 		Auth::requireAuth();
-		$config = $this->getModuleConfig($module);
+		[$module, $config] = $this->resolveModule($module);
 
 		if ($config === null) {
-			set_flash('error', 'Modulo de catalogo no encontrado.');
+			set_flash('error', 'Modulo de catalogo no encontrado: ' . $module);
 			redirect('catalogos');
 		}
 
 		$item = null;
-		$this->view('catalogos/form', compact('module', 'config', 'item'), [
+		$modules = $this->modules();
+		$this->view('catalogos/form', compact('module', 'config', 'item', 'modules'), [
 			'title' => 'Crear - ' . $config['title'],
 		]);
 	}
@@ -143,10 +184,10 @@ class CatalogoController extends Controller
 	public function store(string $module): void
 	{
 		Auth::requireAuth();
-		$config = $this->getModuleConfig($module);
+		[$module, $config] = $this->resolveModule($module);
 
 		if ($config === null) {
-			set_flash('error', 'Modulo de catalogo no encontrado.');
+			set_flash('error', 'Modulo de catalogo no encontrado: ' . $module);
 			redirect('catalogos');
 		}
 
@@ -181,10 +222,10 @@ class CatalogoController extends Controller
 	public function edit(string $module, int $id): void
 	{
 		Auth::requireAuth();
-		$config = $this->getModuleConfig($module);
+		[$module, $config] = $this->resolveModule($module);
 
 		if ($config === null) {
-			set_flash('error', 'Modulo de catalogo no encontrado.');
+			set_flash('error', 'Modulo de catalogo no encontrado: ' . $module);
 			redirect('catalogos');
 		}
 
@@ -204,7 +245,8 @@ class CatalogoController extends Controller
 			redirect('catalogos/' . $module);
 		}
 
-		$this->view('catalogos/form', compact('module', 'config', 'item'), [
+		$modules = $this->modules();
+		$this->view('catalogos/form', compact('module', 'config', 'item', 'modules'), [
 			'title' => 'Editar - ' . $config['title'],
 		]);
 	}
@@ -212,10 +254,10 @@ class CatalogoController extends Controller
 	public function update(string $module, int $id): void
 	{
 		Auth::requireAuth();
-		$config = $this->getModuleConfig($module);
+		[$module, $config] = $this->resolveModule($module);
 
 		if ($config === null) {
-			set_flash('error', 'Modulo de catalogo no encontrado.');
+			set_flash('error', 'Modulo de catalogo no encontrado: ' . $module);
 			redirect('catalogos');
 		}
 
@@ -253,10 +295,10 @@ class CatalogoController extends Controller
 	public function delete(string $module, int $id): void
 	{
 		Auth::requireAuth();
-		$config = $this->getModuleConfig($module);
+		[$module, $config] = $this->resolveModule($module);
 
 		if ($config === null) {
-			set_flash('error', 'Modulo de catalogo no encontrado.');
+			set_flash('error', 'Modulo de catalogo no encontrado: ' . $module);
 			redirect('catalogos');
 		}
 

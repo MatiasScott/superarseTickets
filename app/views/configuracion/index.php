@@ -66,6 +66,9 @@
 										<th>Host</th>
 										<th>Puerto</th>
 										<th>Cifrado</th>
+										<th>IMAP Host</th>
+										<th>IMAP Puerto</th>
+										<th>IMAP Cifrado</th>
 										<th></th>
 									</tr>
 								</thead>
@@ -85,6 +88,15 @@
 												<select class="form-select form-select-sm" name="mail_accounts[<?= e($rowIndex) ?>][encryption]">
 													<option value="tls" <?= ($acc['encryption'] === 'tls') ? 'selected' : '' ?>>tls</option>
 													<option value="ssl" <?= ($acc['encryption'] === 'ssl') ? 'selected' : '' ?>>ssl</option>
+												</select>
+											</td>
+											<td><input class="form-control form-control-sm" name="mail_accounts[<?= e($rowIndex) ?>][imap_host]" value="<?= e($acc['imap_host'] ?? 'outlook.office365.com') ?>"></td>
+											<td><input class="form-control form-control-sm" name="mail_accounts[<?= e($rowIndex) ?>][imap_port]" value="<?= e($acc['imap_port'] ?? '993') ?>"></td>
+											<td>
+												<select class="form-select form-select-sm" name="mail_accounts[<?= e($rowIndex) ?>][imap_encryption]">
+													<option value="ssl" <?= (($acc['imap_encryption'] ?? 'ssl') === 'ssl') ? 'selected' : '' ?>>ssl</option>
+													<option value="tls" <?= (($acc['imap_encryption'] ?? '') === 'tls') ? 'selected' : '' ?>>tls</option>
+													<option value="none" <?= (($acc['imap_encryption'] ?? '') === 'none') ? 'selected' : '' ?>>none</option>
 												</select>
 											</td>
 											<td><button class="btn btn-sm btn-outline-danger js-remove-mail-account" type="button">Quitar</button></td>
@@ -191,6 +203,15 @@
 				<select class="form-select form-select-sm" name="mail_accounts[${index}][encryption]">
 					<option value="tls" selected>tls</option>
 					<option value="ssl">ssl</option>
+				</select>
+			</td>
+			<td><input class="form-control form-control-sm" name="mail_accounts[${index}][imap_host]" value="outlook.office365.com"></td>
+			<td><input class="form-control form-control-sm" name="mail_accounts[${index}][imap_port]" value="993"></td>
+			<td>
+				<select class="form-select form-select-sm" name="mail_accounts[${index}][imap_encryption]">
+					<option value="ssl" selected>ssl</option>
+					<option value="tls">tls</option>
+					<option value="none">none</option>
 				</select>
 			</td>
 			<td><button class="btn btn-sm btn-outline-danger js-remove-mail-account" type="button">Quitar</button></td>

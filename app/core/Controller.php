@@ -12,16 +12,16 @@ abstract class Controller
 			return;
 		}
 
-		$module = explode('/', $view)[0] ?: 'dashboard';
+		$layoutModule = explode('/', $view)[0] ?: 'dashboard';
 		$pageTitle = $meta['title'] ?? 'ISTS Ticket';
 		$useLayout = $meta['layout'] ?? true;
-		$showSidebar = $meta['showSidebar'] ?? ($module !== 'auth');
+		$showSidebar = $meta['showSidebar'] ?? ($layoutModule !== 'auth');
 
 		$styles = ['global.css'];
 		$scripts = ['global.js'];
 
-		$moduleCss = $module . '.css';
-		$moduleJs = $module . '.js';
+		$moduleCss = $layoutModule . '.css';
+		$moduleJs = $layoutModule . '.js';
 
 		if (is_file(PUBLIC_PATH . '/css/' . $moduleCss)) {
 			$styles[] = $moduleCss;

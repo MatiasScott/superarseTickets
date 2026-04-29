@@ -14,6 +14,7 @@ spl_autoload_register(static function (string $class): void {
 		APP_PATH . '/core/' . $class . '.php',
 		APP_PATH . '/controllers/' . $class . '.php',
 		APP_PATH . '/models/' . $class . '.php',
+		APP_PATH . '/services/' . $class . '.php',
 	];
 
 	foreach ($paths as $path) {

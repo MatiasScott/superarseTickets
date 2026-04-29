@@ -36,6 +36,12 @@ class Router
 		$method = strtoupper($method);
 		$path = parse_url($uri, PHP_URL_PATH) ?: '/';
 		$path = $this->stripBasePath($path);
+		if ($path !== '/') {
+			$path = rtrim($path, '/');
+			if ($path === '') {
+				$path = '/';
+			}
+		}
 
 		foreach ($this->routes[$method] ?? [] as $route) {
 			if (!preg_match($route['pattern'], $path, $matches)) {
