@@ -7,11 +7,13 @@ class MailboxService
 
 	private array $config;
 	private MailService $mailService;
+	private ?GraphMailService $graphService;
 
 	public function __construct()
 	{
 		$this->config = require APP_PATH . '/config/mail.php';
 		$this->mailService = new MailService();
+		$this->graphService = class_exists('GraphMailService') ? new GraphMailService($this->config) : null;
 	}
 
 	public function getAvailableAccounts(): array
@@ -38,13 +40,20 @@ class MailboxService
 
 	public function verifyConnection(?string $accountAlias, bool $ignoreLocalCooldown = false): array
 	{
-		if (!function_exists('imap_open')) {
-			return ['ok' => false, 'error' => 'La extension IMAP de PHP no esta habilitada. Activa extension=imap en php.ini.'];
-		}
-
 		$account = $this->resolveAccount($accountAlias);
 		if ($account === null) {
 			return ['ok' => false, 'error' => 'No hay cuentas de correo habilitadas.'];
+		}
+
+		if ($this->isGraphMode()) {
+			if ($this->graphService === null) {
+				return ['ok' => false, 'error' => 'No se pudo inicializar servicio Graph.'];
+			}
+			return $this->graphService->verifyConnection($account);
+		}
+
+		if (!function_exists('imap_open')) {
+			return ['ok' => false, 'error' => 'La extension IMAP de PHP no esta habilitada. Activa extension=imap en php.ini.'];
 		}
 
 		$alias = $this->getAccountAlias($account);
@@ -77,13 +86,20 @@ class MailboxService
 
 	public function fetchUnreadForTicketing(?string $accountAlias, int $limit = 30): array
 	{
-		if (!function_exists('imap_open')) {
-			return ['ok' => false, 'error' => 'La extension IMAP de PHP no esta habilitada. Activa extension=imap en php.ini.', 'emails' => []];
-		}
-
 		$account = $this->resolveAccount($accountAlias);
 		if ($account === null) {
 			return ['ok' => false, 'error' => 'No hay cuentas de correo habilitadas.', 'emails' => []];
+		}
+
+		if ($this->isGraphMode()) {
+			if ($this->graphService === null) {
+				return ['ok' => false, 'error' => 'No se pudo inicializar servicio Graph.', 'emails' => []];
+			}
+			return $this->graphService->fetchUnreadForTicketing($account, $limit);
+		}
+
+		if (!function_exists('imap_open')) {
+			return ['ok' => false, 'error' => 'La extension IMAP de PHP no esta habilitada. Activa extension=imap en php.ini.', 'emails' => []];
 		}
 
 		$alias = $this->getAccountAlias($account);
@@ -148,14 +164,21 @@ class MailboxService
 		return ['ok' => true, 'error' => null, 'emails' => $emails];
 	}
 
-	public function markMessageAsSeen(?string $accountAlias, int $uid): void
+	public function markMessageAsSeen(?string $accountAlias, string $uid): void
 	{
-		if (!function_exists('imap_open')) {
+		$account = $this->resolveAccount($accountAlias);
+		if ($account === null) {
 			return;
 		}
 
-		$account = $this->resolveAccount($accountAlias);
-		if ($account === null) {
+		if ($this->isGraphMode()) {
+			if ($this->graphService !== null) {
+				$this->graphService->markMessageAsSeen($account, $uid);
+			}
+			return;
+		}
+
+		if (!function_exists('imap_open')) {
 			return;
 		}
 
@@ -164,16 +187,20 @@ class MailboxService
 			return;
 		}
 
-		imap_setflag_full($imap, (string) $uid, '\\Seen', ST_UID);
+		$numericUid = (int) $uid;
+		if ($numericUid > 0) {
+			imap_setflag_full($imap, (string) $numericUid, '\\Seen', ST_UID);
+		}
 		imap_close($imap);
 	}
 
 	public function listInbox(?string $accountAlias, int $page = 1, int $perPage = 20): array
 	{
-		if (!function_exists('imap_open')) {
+		$account = $this->resolveAccount($accountAlias);
+		if ($account === null) {
 			return [
 				'ok' => false,
-				'error' => 'La extension IMAP de PHP no esta habilitada. Activa extension=imap en php.ini.',
+				'error' => 'No hay cuentas de correo habilitadas.',
 				'messages' => [],
 				'total' => 0,
 				'page' => 1,
@@ -182,11 +209,25 @@ class MailboxService
 			];
 		}
 
-		$account = $this->resolveAccount($accountAlias);
-		if ($account === null) {
+		if ($this->isGraphMode()) {
+			if ($this->graphService === null) {
+				return [
+					'ok' => false,
+					'error' => 'No se pudo inicializar servicio Graph.',
+					'messages' => [],
+					'total' => 0,
+					'page' => 1,
+					'perPage' => $perPage,
+					'pages' => 1,
+				];
+			}
+			return $this->graphService->listInbox($account, $page, $perPage);
+		}
+
+		if (!function_exists('imap_open')) {
 			return [
 				'ok' => false,
-				'error' => 'No hay cuentas de correo habilitadas.',
+				'error' => 'La extension IMAP de PHP no esta habilitada. Activa extension=imap en php.ini.',
 				'messages' => [],
 				'total' => 0,
 				'page' => 1,
@@ -247,7 +288,7 @@ class MailboxService
 			}
 
 			$messages[] = [
-				'uid' => (int) $uid,
+				'uid' => (string) $uid,
 				'subject' => $this->decodeMime((string) ($overview->subject ?? '(Sin asunto)')),
 				'from' => $this->decodeMime((string) ($overview->from ?? '')),
 				'date' => (string) ($overview->date ?? ''),
@@ -273,15 +314,22 @@ class MailboxService
 		];
 	}
 
-	public function getMessage(?string $accountAlias, int $uid): array
+	public function getMessage(?string $accountAlias, string $uid): array
 	{
-		if (!function_exists('imap_open')) {
-			return ['ok' => false, 'error' => 'La extension IMAP de PHP no esta habilitada.'];
-		}
-
 		$account = $this->resolveAccount($accountAlias);
 		if ($account === null) {
 			return ['ok' => false, 'error' => 'Cuenta no disponible.'];
+		}
+
+		if ($this->isGraphMode()) {
+			if ($this->graphService === null) {
+				return ['ok' => false, 'error' => 'No se pudo inicializar servicio Graph.'];
+			}
+			return $this->graphService->getMessage($account, $uid);
+		}
+
+		if (!function_exists('imap_open')) {
+			return ['ok' => false, 'error' => 'La extension IMAP de PHP no esta habilitada.'];
 		}
 
 		$alias = $this->getAccountAlias($account);
@@ -299,18 +347,24 @@ class MailboxService
 
 		$this->clearImapFailure($alias);
 
-		$msgNo = imap_msgno($imap, $uid);
+		$numericUid = (int) $uid;
+		if ($numericUid <= 0) {
+			imap_close($imap);
+			return ['ok' => false, 'error' => 'Correo no encontrado.'];
+		}
+
+		$msgNo = imap_msgno($imap, $numericUid);
 		if ($msgNo <= 0) {
 			imap_close($imap);
 			return ['ok' => false, 'error' => 'Correo no encontrado.'];
 		}
 
-		$overviewList = imap_fetch_overview($imap, (string) $uid, FT_UID);
+		$overviewList = imap_fetch_overview($imap, (string) $numericUid, FT_UID);
 		$overview = is_array($overviewList) && isset($overviewList[0]) ? $overviewList[0] : null;
 		$headerInfo = imap_headerinfo($imap, $msgNo);
-		$bodyData = $this->extractBody($imap, $uid);
+		$bodyData = $this->extractBody($imap, $numericUid);
 
-		imap_setflag_full($imap, (string) $uid, '\\Seen', ST_UID);
+		imap_setflag_full($imap, (string) $numericUid, '\\Seen', ST_UID);
 		imap_close($imap);
 
 		$fromEmail = $this->extractAddressFromHeader($headerInfo->from ?? []);
@@ -320,7 +374,7 @@ class MailboxService
 			'ok' => true,
 			'error' => null,
 			'message' => [
-				'uid' => $uid,
+				'uid' => (string) $numericUid,
 				'subject' => $this->decodeMime((string) ($overview->subject ?? '(Sin asunto)')),
 				'from' => $this->decodeMime((string) ($overview->from ?? '')),
 				'from_email' => $fromEmail,
@@ -339,8 +393,21 @@ class MailboxService
 		];
 	}
 
-	public function replyToMessage(?string $accountAlias, int $uid, string $bodyText): array
+	public function replyToMessage(?string $accountAlias, string $uid, string $bodyText): array
 	{
+		if ($this->isGraphMode()) {
+			$account = $this->resolveAccount($accountAlias);
+			if ($account === null) {
+				return ['ok' => false, 'error' => 'Cuenta no disponible.'];
+			}
+
+			if ($this->graphService === null) {
+				return ['ok' => false, 'error' => 'No se pudo inicializar servicio Graph.'];
+			}
+
+			return $this->graphService->replyToMessage($account, $uid, $bodyText);
+		}
+
 		$current = $this->getMessage($accountAlias, $uid);
 		if (!$current['ok']) {
 			return $current;
@@ -658,5 +725,19 @@ class MailboxService
 		}
 
 		return trim($value);
+	}
+
+	private function isGraphMode(): bool
+	{
+		$driver = strtolower(trim((string) ($this->config['driver'] ?? 'smtp')));
+		if ($driver === 'graph') {
+			return true;
+		}
+
+		if ($this->graphService === null) {
+			return false;
+		}
+
+		return $this->graphService->isEnabled();
 	}
 }

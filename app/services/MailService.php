@@ -7,12 +7,14 @@ private $from;
 private array $accounts = [];
 private array $activeAccount = [];
 private static int $roundRobinCursor = 0;
+private ?GraphMailService $graphService = null;
 
 public function __construct()
 {
 $this->config = require APP_PATH . '/config/mail.php';
 $this->from = $this->config['from'];
 $this->accounts = is_array($this->config['accounts'] ?? null) ? $this->config['accounts'] : [];
+		$this->graphService = class_exists('GraphMailService') ? new GraphMailService($this->config) : null;
 }
 
 /**
@@ -31,6 +33,10 @@ $this->activeAccount = $account;
 if (($this->config['driver'] ?? 'smtp') === 'smtp') {
 return $this->sendViaSMTP($to, $subject, $body, $cc, $bcc, $extraHeaders);
 }
+
+		if (($this->config['driver'] ?? '') === 'graph') {
+			return $this->sendViaGraph($to, $subject, $body, $cc, $bcc);
+		}
 
 if (($this->config['driver'] ?? '') === 'sendmail') {
 $headers = $this->getHeaders($cc, $bcc, $extraHeaders);
@@ -253,6 +259,23 @@ return false;
 private function sendViaSendmail(string $to, string $subject, string $body, string $headers): bool
 {
 return @mail($to, $subject, $body, $headers);
+}
+
+private function sendViaGraph(string $to, string $subject, string $body, array $cc, array $bcc): bool
+{
+		if ($this->graphService === null || !$this->graphService->isEnabled()) {
+			error_log('Mail Graph Error: Graph no esta habilitado o no fue inicializado.');
+			return false;
+		}
+
+		$account = $this->activeAccount;
+		$result = $this->graphService->sendMail($account, $to, $subject, $body, $cc, $bcc);
+		if (!($result['ok'] ?? false)) {
+			error_log('Mail Graph Error: ' . (string) ($result['error'] ?? 'Error no especificado.'));
+			return false;
+		}
+
+		return true;
 }
 
 /**

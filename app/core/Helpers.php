@@ -123,6 +123,7 @@ function validate_password_strength(string $password): array
 function env(string $key, mixed $default = null): mixed
 {
 	static $env = null;
+	$requestedKey = $key;
 
 	if ($env === null) {
 		$env = [];
@@ -142,18 +143,18 @@ function env(string $key, mixed $default = null): mixed
 		}
 
 		// Agregar variables de entorno del sistema
-		foreach ($_ENV as $key => $value) {
-			$env[$key] = $value;
+		foreach ($_ENV as $envKey => $value) {
+			$env[$envKey] = $value;
 		}
 
-		foreach ($_SERVER as $key => $value) {
-			if (str_starts_with($key, 'APP_') || str_starts_with($key, 'DB_') || str_starts_with($key, 'MAIL_')) {
-				$env[$key] = $value;
+		foreach ($_SERVER as $serverKey => $value) {
+			if (str_starts_with($serverKey, 'APP_') || str_starts_with($serverKey, 'DB_') || str_starts_with($serverKey, 'MAIL_')) {
+				$env[$serverKey] = $value;
 			}
 		}
 	}
 
-	return $env[$key] ?? $default;
+	return $env[$requestedKey] ?? $default;
 }
 
 function env_file_path(): string

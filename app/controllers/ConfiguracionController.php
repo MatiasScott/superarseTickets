@@ -38,7 +38,7 @@ class ConfiguracionController extends Controller
 		}
 
 		$updates = [
-			'MAIL_DRIVER' => 'smtp',
+			'MAIL_DRIVER' => trim((string) env('MAIL_DRIVER', 'smtp')),
 			'MAIL_HOST' => 'smtp.office365.com',
 			'MAIL_PORT' => '587',
 			'MAIL_ENCRYPTION' => 'tls',

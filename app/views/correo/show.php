@@ -31,7 +31,7 @@
 	<div class="card">
 		<div class="card-header">Responder</div>
 		<div class="card-body">
-			<form method="POST" action="<?= e(base_url('correo/' . (int) ($message['uid'] ?? 0) . '/reply')) ?>">
+			<form method="POST" action="<?= e(base_url('correo/' . rawurlencode((string) ($message['uid'] ?? '')) . '/reply')) ?>">
 				<?= csrf_field() ?>
 				<input type="hidden" name="account_alias" value="<?= e($accountAlias ?? '') ?>">
 				<div class="mb-3">

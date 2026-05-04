@@ -73,7 +73,7 @@
 								<td><?= e($mail['from']) ?></td>
 								<td><?= e($mail['date']) ?></td>
 								<td>
-									<a class="btn btn-sm btn-outline-primary" href="<?= e(base_url('correo/' . $mail['uid'] . '?account=' . urlencode($accountAlias ?? ''))) ?>">Abrir</a>
+									<a class="btn btn-sm btn-outline-primary" href="<?= e(base_url('correo/' . rawurlencode((string) ($mail['uid'] ?? '')) . '?account=' . urlencode($accountAlias ?? ''))) ?>">Abrir</a>
 								</td>
 							</tr>
 						<?php endforeach; ?>

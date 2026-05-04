@@ -61,7 +61,7 @@ class CorreoController extends Controller
 
 		$mailbox = new MailboxService();
 		$accountAlias = trim((string) ($_GET['account'] ?? ''));
-		$messageResult = $mailbox->getMessage($accountAlias !== '' ? $accountAlias : null, (int) $uid);
+		$messageResult = $mailbox->getMessage($accountAlias !== '' ? $accountAlias : null, $uid);
 
 		if (!$messageResult['ok']) {
 			set_flash('error', $messageResult['error'] ?? 'No se pudo abrir el correo.');
@@ -145,22 +145,22 @@ class CorreoController extends Controller
 
 		if (!verify_csrf($_POST['_token'] ?? null)) {
 			set_flash('error', 'Token CSRF invalido.');
-			redirect('correo/' . (int) $uid);
+			redirect('correo/' . rawurlencode($uid));
 		}
 
 		$accountAlias = trim((string) ($_POST['account_alias'] ?? ''));
 		$body = trim((string) ($_POST['body'] ?? ''));
 		if ($body === '') {
 			set_flash('error', 'El mensaje de respuesta no puede estar vacio.');
-			redirect('correo/' . (int) $uid . ($accountAlias !== '' ? '?account=' . urlencode($accountAlias) : ''));
+			redirect('correo/' . rawurlencode($uid) . ($accountAlias !== '' ? '?account=' . urlencode($accountAlias) : ''));
 		}
 
 		$mailbox = new MailboxService();
-		$replyResult = $mailbox->replyToMessage($accountAlias !== '' ? $accountAlias : null, (int) $uid, $body);
+		$replyResult = $mailbox->replyToMessage($accountAlias !== '' ? $accountAlias : null, $uid, $body);
 
 		if (!$replyResult['ok']) {
 			set_flash('error', $replyResult['error'] ?? 'No se pudo enviar respuesta.');
-			redirect('correo/' . (int) $uid . ($accountAlias !== '' ? '?account=' . urlencode($accountAlias) : ''));
+			redirect('correo/' . rawurlencode($uid) . ($accountAlias !== '' ? '?account=' . urlencode($accountAlias) : ''));
 		}
 
 		set_flash('success', 'Respuesta enviada correctamente.');
@@ -244,7 +244,7 @@ class CorreoController extends Controller
 				]);
 
 				$this->markEmailProcessed($db, $email, $ticketId);
-				$mailbox->markMessageAsSeen((string) ($email['account_alias'] ?? ''), (int) ($email['uid'] ?? 0));
+				$mailbox->markMessageAsSeen((string) ($email['account_alias'] ?? ''), (string) ($email['uid'] ?? ''));
 				$created++;
 			} catch (Throwable $e) {
 				$skipped++;
@@ -261,7 +261,7 @@ class CorreoController extends Controller
 		$sql = "CREATE TABLE IF NOT EXISTS mail_ticket_sync (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			account_alias VARCHAR(100) NOT NULL,
-			email_uid BIGINT NOT NULL,
+			email_uid VARCHAR(255) NOT NULL,
 			message_id VARCHAR(255) NULL,
 			ticket_id INT NOT NULL,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -270,6 +270,7 @@ class CorreoController extends Controller
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
 
 		$db->exec($sql);
+		$db->exec('ALTER TABLE mail_ticket_sync MODIFY email_uid VARCHAR(255) NOT NULL');
 	}
 
 	private function resolveTicketDefaults(PDO $db): array
@@ -305,9 +306,10 @@ class CorreoController extends Controller
 	private function alreadyProcessedEmail(PDO $db, array $email): bool
 	{
 		$stmt = $db->prepare('SELECT id FROM mail_ticket_sync WHERE account_alias = :alias AND email_uid = :uid LIMIT 1');
+		$uid = trim((string) ($email['uid'] ?? ''));
 		$stmt->execute([
 			'alias' => (string) ($email['account_alias'] ?? ''),
-			'uid' => (int) ($email['uid'] ?? 0),
+			'uid' => $uid,
 		]);
 
 		return (bool) $stmt->fetchColumn();
@@ -316,9 +318,10 @@ class CorreoController extends Controller
 	private function markEmailProcessed(PDO $db, array $email, int $ticketId): void
 	{
 		$stmt = $db->prepare('INSERT INTO mail_ticket_sync (account_alias, email_uid, message_id, ticket_id) VALUES (:alias, :uid, :message_id, :ticket_id)');
+		$uid = trim((string) ($email['uid'] ?? ''));
 		$stmt->execute([
 			'alias' => (string) ($email['account_alias'] ?? ''),
-			'uid' => (int) ($email['uid'] ?? 0),
+			'uid' => $uid,
 			'message_id' => (string) ($email['message_id'] ?? ''),
 			'ticket_id' => $ticketId,
 		]);

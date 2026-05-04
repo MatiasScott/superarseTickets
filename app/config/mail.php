@@ -47,8 +47,8 @@ if (empty($mailAccounts)) {
 }
 
 return [
-	// Configuración de Correo SMTP
-	'driver' => env('MAIL_DRIVER', 'smtp'), // smtp, sendmail, mailgun, ses
+	// Configuración de transporte de correo
+	'driver' => env('MAIL_DRIVER', 'smtp'), // smtp, sendmail, graph
 	'from' => [
 		'name' => env('MAIL_FROM_NAME', 'ISTS Ticket System'),
 		'email' => env('MAIL_FROM_EMAIL', 'noreply@ists.local'),
@@ -73,6 +73,16 @@ return [
 		'host' => env('MAIL_IMAP_HOST', 'outlook.office365.com'),
 		'port' => env('MAIL_IMAP_PORT', 993),
 		'encryption' => env('MAIL_IMAP_ENCRYPTION', 'ssl'),
+	],
+
+	// Microsoft Graph (Office 365 moderno)
+	'graph' => [
+		'enabled' => strtolower(trim((string) env('GRAPH_ENABLED', 'false'))) === 'true',
+		'tenant_id' => trim((string) env('GRAPH_TENANT_ID', '')),
+		'client_id' => trim((string) env('GRAPH_CLIENT_ID', '')),
+		'client_secret' => trim((string) env('GRAPH_CLIENT_SECRET', '')),
+		'base_url' => trim((string) env('GRAPH_BASE_URL', 'https://graph.microsoft.com/v1.0')),
+		'timeout' => (int) env('GRAPH_TIMEOUT', 30),
 	],
 
 	// Sendmail Configuration
