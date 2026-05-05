@@ -1,0 +1,16 @@
+# Variables de entorno — NUNCA subir credenciales al repositorio
+.env
+
+# Logs y scripts temporales de depuración
+storage/logs/*.log
+storage/logs/*.php
+
+# Archivos subidos por usuarios
+storage/uploads/
+
+# Cache del sistema operativo
+.DS_Store
+Thumbs.db
+
+# Dependencias (si se añade Composer en el futuro)
+vendor/

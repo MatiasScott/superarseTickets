@@ -49,7 +49,7 @@ class CorreoController extends Controller
 		$this->view('correo/index', [
 			'accounts' => $accounts,
 			'inbox' => $inbox,
-			'accountAlias' => $accountAlias !== '' ? $accountAlias : ($inbox['account']['alias'] ?? ''),
+			'accountAlias' => $accountAlias,
 		], [
 			'title' => 'Correo - Bandeja',
 		]);
@@ -198,16 +198,46 @@ class CorreoController extends Controller
 
 		$accountAlias = trim((string) ($_POST['account_alias'] ?? ''));
 		$mailbox = new MailboxService();
-		$sync = $mailbox->fetchUnreadForTicketing($accountAlias !== '' ? $accountAlias : null, 50);
 
-		if (!$sync['ok']) {
-			set_flash('error', $sync['error'] ?? 'No se pudo sincronizar la bandeja.');
-			redirect('correo' . ($accountAlias !== '' ? '?account=' . urlencode($accountAlias) : ''));
+		$aliasesToSync = [];
+		if ($accountAlias !== '') {
+			$aliasesToSync[] = $accountAlias;
+		} else {
+			foreach ($mailbox->getAvailableAccounts() as $account) {
+				$alias = trim((string) ($account['alias'] ?? ''));
+				if ($alias !== '') {
+					$aliasesToSync[] = $alias;
+				}
+			}
 		}
 
-		$emails = is_array($sync['emails'] ?? null) ? $sync['emails'] : [];
+		$aliasesToSync = array_values(array_unique($aliasesToSync));
+		if (empty($aliasesToSync)) {
+			set_flash('error', 'No hay cuentas de correo habilitadas para sincronizar.');
+			redirect('correo');
+		}
+
+		$emails = [];
+		$syncErrors = [];
+		foreach ($aliasesToSync as $aliasToSync) {
+			$sync = $mailbox->fetchUnreadForTicketing($aliasToSync, 50);
+			if (!$sync['ok']) {
+				$syncErrors[] = '[' . $aliasToSync . '] ' . (string) ($sync['error'] ?? 'No se pudo sincronizar la bandeja.');
+				continue;
+			}
+
+			$emailsBatch = is_array($sync['emails'] ?? null) ? $sync['emails'] : [];
+			if (!empty($emailsBatch)) {
+				$emails = array_merge($emails, $emailsBatch);
+			}
+		}
+
 		if (empty($emails)) {
-			set_flash('success', 'No hay correos nuevos sin leer para convertir en tickets.');
+			if (!empty($syncErrors)) {
+				set_flash('error', implode(' | ', $syncErrors));
+			} else {
+				set_flash('success', 'No hay correos nuevos sin leer para convertir en tickets.');
+			}
 			redirect('correo' . ($accountAlias !== '' ? '?account=' . urlencode($accountAlias) : ''));
 		}
 
@@ -252,7 +282,10 @@ class CorreoController extends Controller
 			}
 		}
 
-		set_flash('success', 'Sincronizacion finalizada. Tickets creados: ' . $created . '. Omitidos: ' . $skipped . '.');
+		set_flash('success', 'Sincronizacion finalizada en ' . count($aliasesToSync) . ' cuenta(s). Tickets creados: ' . $created . '. Omitidos: ' . $skipped . '.');
+		if (!empty($syncErrors)) {
+			set_flash('error', implode(' | ', $syncErrors));
+		}
 		redirect('correo' . ($accountAlias !== '' ? '?account=' . urlencode($accountAlias) : ''));
 	}
 
@@ -283,12 +316,19 @@ class CorreoController extends Controller
 		];
 	}
 
-	private function pickCatalogId(PDO $db, string $table, array $preferredNames): int
+	private function pickCatalogId(PDO $db, string $table, array $preferredNames): ?int
 	{
+		// Intentar primero con registros activos; si no hay, cualquier registro.
 		$stmt = $db->query("SELECT id, nombre FROM {$table} WHERE estado = 'activo' ORDER BY id ASC");
 		$rows = $stmt ? ($stmt->fetchAll() ?: []) : [];
+
 		if (empty($rows)) {
-			throw new RuntimeException('No hay registros activos en ' . $table);
+			$stmt2 = $db->query("SELECT id, nombre FROM {$table} ORDER BY id ASC LIMIT 1");
+			$rows = $stmt2 ? ($stmt2->fetchAll() ?: []) : [];
+		}
+
+		if (empty($rows)) {
+			return null;
 		}
 
 		foreach ($rows as $row) {
@@ -456,10 +496,11 @@ class CorreoController extends Controller
 			$subject = 'Correo entrante';
 		}
 
-		if ($from !== '') {
-			return '[Email] ' . $subject . ' - ' . $from;
-		}
+		$result = $from !== ''
+			? '[Email] ' . $subject . ' - ' . $from
+			: '[Email] ' . $subject;
 
-		return '[Email] ' . $subject;
+		// Truncar a 490 chars para no exceder VARCHAR(500)
+		return mb_strlen($result) > 490 ? mb_substr($result, 0, 490) . '...' : $result;
 	}
 }

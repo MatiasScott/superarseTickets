@@ -41,6 +41,7 @@
 					<?= csrf_field() ?>
 					<input type="hidden" name="account_alias" value="<?= e($accountAlias ?? '') ?>">
 					<button class="btn btn-success w-100" type="submit">Crear Tickets de Correos No Leidos</button>
+					<small class="text-muted d-block mt-1">Si la cuenta esta en Default, sincroniza todas las cuentas habilitadas.</small>
 				</form>
 			</div>
 		</div>
