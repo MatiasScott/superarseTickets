@@ -1,97 +1,89 @@
 <section class="module-page">
 	<div class="container-fluid py-4">
-		<h1 class="h3 mb-3">Crear ticket</h1>
+		<div class="d-flex justify-content-between align-items-center mb-3">
+			<h1 class="h3 m-0">Nuevo ticket</h1>
+			<a class="btn btn-outline-primary" href="<?= e(base_url('tickets')) ?>">Ver todos los tickets</a>
+		</div>
 
 		<?php if ($error = get_flash('error')): ?>
 			<div class="alert alert-danger py-2"><?= e($error) ?></div>
 		<?php endif; ?>
 
-		<form method="post" action="<?= e(base_url('tickets')) ?>" class="card card-body shadow-sm border-0">
+		<form method="post" action="<?= e(base_url('tickets')) ?>" class="card card-body shadow-sm border-0" id="ticketComposeForm">
 			<?= csrf_field() ?>
+			<div class="row g-3 mb-3">
+				<div class="col-lg-6">
+					<label class="form-label" for="account_alias">Enviar desde</label>
+					<select class="form-select" id="account_alias" name="account_alias">
+						<?php if (empty($mailAccounts ?? [])): ?>
+							<option value="">Cuenta por defecto del sistema</option>
+						<?php endif; ?>
+						<?php foreach (($mailAccounts ?? []) as $acc): ?>
+							<?php $selected = (($defaultAccountAlias ?? '') !== '' && ($acc['alias'] ?? '') === ($defaultAccountAlias ?? '')) ? 'selected' : ''; ?>
+							<option value="<?= e((string) ($acc['alias'] ?? '')) ?>" <?= e($selected) ?>>
+								<?= e((string) ($acc['name'] ?? 'Cuenta')) ?> - <?= e((string) ($acc['email'] ?? '')) ?>
+							</option>
+						<?php endforeach; ?>
+					</select>
+				</div>
+				<div class="col-lg-6">
+					<label class="form-label" for="buscar_correo">Buscar correo registrado</label>
+					<input class="form-control" id="buscar_correo" list="contactosCorreos" placeholder="correo@dominio.com">
+					<datalist id="contactosCorreos">
+						<?php foreach (($contactos ?? []) as $contacto): ?>
+							<?php $mail = trim((string) ($contacto['contacto_email'] ?? '')); ?>
+							<?php if ($mail !== ''): ?>
+								<option value="<?= e($mail) ?>" data-contacto-id="<?= e((string) ($contacto['id'] ?? '')) ?>"></option>
+							<?php endif; ?>
+						<?php endforeach; ?>
+					</datalist>
+				</div>
+			</div>
+
 			<div class="mb-3">
 				<label class="form-label" for="contacto_id">Contacto</label>
 				<select class="form-select" id="contacto_id" name="contacto_id" required>
 					<option value="">Seleccione...</option>
 					<?php foreach (($contactos ?? []) as $contacto): ?>
-						<option value="<?= e($contacto['id']) ?>"><?= e(trim((($contacto['nombre'] ?? '') . ' ' . ($contacto['apellido'] ?? '')))) ?></option>
+						<option value="<?= e((string) ($contacto['id'] ?? '')) ?>" data-email="<?= e((string) ($contacto['contacto_email'] ?? '')) ?>">
+							<?= e(trim((($contacto['nombre'] ?? '') . ' ' . ($contacto['apellido'] ?? '')))) ?><?= !empty($contacto['contacto_email']) ? (' - ' . e((string) $contacto['contacto_email'])) : '' ?>
+						</option>
 					<?php endforeach; ?>
 				</select>
 			</div>
 
 			<div class="mb-3">
 				<label class="form-label" for="asunto">Asunto</label>
-				<input class="form-control" id="asunto" name="asunto" required>
+				<input class="form-control" id="asunto" name="asunto" required maxlength="500" placeholder="Ingresa el asunto del ticket/correo">
 			</div>
 
 			<div class="mb-3">
-				<label class="form-label" for="estado_id">Estado de ticket</label>
-				<select class="form-select" id="estado_id" name="estado_id" required>
-					<option value="">Seleccione...</option>
-					<?php foreach (($estados ?? []) as $estado): ?>
-						<option value="<?= e($estado['id']) ?>"><?= e($estado['nombre']) ?></option>
-					<?php endforeach; ?>
-				</select>
+				<label class="form-label" for="ticket-editor">Descripcion</label>
+				<div class="ticket-editor-shell">
+					<div class="ticket-editor-toolbar" role="toolbar" aria-label="Formato de descripcion">
+						<button type="button" class="btn btn-sm btn-outline-secondary" data-editor-cmd="bold"><strong>B</strong></button>
+						<button type="button" class="btn btn-sm btn-outline-secondary" data-editor-cmd="italic"><em>I</em></button>
+						<button type="button" class="btn btn-sm btn-outline-secondary" data-editor-cmd="underline"><u>U</u></button>
+						<button type="button" class="btn btn-sm btn-outline-secondary" data-editor-action="link">Link</button>
+						<button type="button" class="btn btn-sm btn-outline-secondary" data-editor-action="image">Imagen</button>
+						<button type="button" class="btn btn-sm btn-outline-secondary" data-editor-action="image-file">Subir imagen</button>
+					</div>
+					<div id="ticket-editor" class="ticket-editor" contenteditable="true" data-placeholder="Escribe la descripcion del ticket..."></div>
+					<input type="file" id="ticket-editor-image-file" class="d-none" accept="image/*">
+				</div>
+				<input type="hidden" name="descripcion_html" id="descripcion_html">
 			</div>
 
-			<div class="row">
-				<div class="col-md-6 mb-3">
-					<label class="form-label" for="prioridad_id">Prioridad</label>
-					<select class="form-select" id="prioridad_id" name="prioridad_id" required>
-						<option value="">Seleccione...</option>
-						<?php foreach (($prioridades ?? []) as $prioridad): ?>
-							<option value="<?= e($prioridad['id']) ?>"><?= e($prioridad['nombre']) ?></option>
-						<?php endforeach; ?>
-					</select>
-				</div>
-				<div class="col-md-6 mb-3">
-					<label class="form-label" for="tipo_id">Tipo</label>
-					<select class="form-select" id="tipo_id" name="tipo_id" required>
-						<option value="">Seleccione...</option>
-						<?php foreach (($tipos ?? []) as $tipo): ?>
-							<option value="<?= e($tipo['id']) ?>"><?= e($tipo['nombre']) ?></option>
-						<?php endforeach; ?>
-					</select>
-				</div>
+			<div class="ticket-defaults-note mb-3">
+				<div><strong>Prioridad:</strong> <?= e((string) (($defaults['prioridad_label'] ?? 'Media'))) ?></div>
+				<div><strong>Estado:</strong> <?= e((string) (($defaults['estado_label'] ?? 'Pendiente'))) ?></div>
+				<div><strong>Grupo:</strong> <?= e((string) (($defaults['grupo_label'] ?? 'Sin asignar'))) ?></div>
+				<div><strong>Tipo:</strong> Vacio</div>
 			</div>
 
-			<div class="row">
-				<div class="col-md-6 mb-3">
-					<label class="form-label" for="grupo_id">Grupo</label>
-					<select class="form-select" id="grupo_id" name="grupo_id" required>
-						<option value="">Seleccione...</option>
-						<?php foreach (($grupos ?? []) as $grupo): ?>
-							<option value="<?= e($grupo['id']) ?>"><?= e($grupo['nombre']) ?></option>
-						<?php endforeach; ?>
-					</select>
-				</div>
-				<div class="col-md-6 mb-3">
-					<label class="form-label" for="asignado_a">Asignado a</label>
-					<select class="form-select" id="asignado_a" name="asignado_a">
-						<option value="">Sin asignar</option>
-						<?php foreach (($usuarios ?? []) as $usuario): ?>
-							<option value="<?= e($usuario['id']) ?>"><?= e($usuario['nombre']) ?></option>
-						<?php endforeach; ?>
-					</select>
-				</div>
-			</div>
-
-			<div class="row">
-				<div class="col-md-6 mb-3">
-					<label class="form-label" for="fecha_resolucion">Fecha resolucion (opcional)</label>
-					<input type="datetime-local" class="form-control" id="fecha_resolucion" name="fecha_resolucion">
-				</div>
-				<div class="col-md-6 mb-3">
-					<label class="form-label" for="estado">Estado del registro</label>
-					<select class="form-select" id="estado" name="estado">
-						<option value="activo">Activo</option>
-						<option value="inactivo">Inactivo</option>
-					</select>
-				</div>
-			</div>
-
-			<div>
-				<button class="btn btn-primary" type="submit">Guardar ticket</button>
-				<a class="btn btn-outline-secondary" href="<?= e(base_url('tickets')) ?>">Volver</a>
+			<div class="d-flex gap-2">
+				<a class="btn btn-outline-secondary" href="<?= e(base_url('tickets')) ?>">Cancelar</a>
+				<button class="btn btn-primary" type="submit">Enviar</button>
 			</div>
 		</form>
 	</div>

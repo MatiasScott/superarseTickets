@@ -11,6 +11,8 @@ return static function (Router $router): void {
 
 	$router->get('/dashboard', 'DashboardController@index');
 	$router->get('/tickets/dashboard', 'TicketController@dashboard');
+	$router->get('/tickets/dashboard/data', 'TicketController@dashboardData');
+	$router->get('/tickets/dashboard/grupos', 'TicketController@dashboardGroupDetails');
 	$router->get('/configuracion', 'ConfiguracionController@index');
 	$router->post('/configuracion/mail', 'ConfiguracionController@saveMail');
 	$router->post('/configuracion/whatsapp', 'ConfiguracionController@saveWhatsApp');

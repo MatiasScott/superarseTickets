@@ -308,11 +308,27 @@ class CorreoController extends Controller
 
 	private function resolveTicketDefaults(PDO $db): array
 	{
+		$ticketCols = $this->getTableColumns($db, 'tickets');
+		$tipoNullable = false;
+		if (in_array('tipo_id', $ticketCols, true)) {
+			$stmtTipoMeta = $db->query("SHOW COLUMNS FROM tickets LIKE 'tipo_id'");
+			$rowTipoMeta = $stmtTipoMeta ? ($stmtTipoMeta->fetch() ?: null) : null;
+			$tipoNullable = is_array($rowTipoMeta) && strtoupper((string) ($rowTipoMeta['Null'] ?? 'NO')) === 'YES';
+		}
+
+		$tipoId = null;
+		if (!$tipoNullable) {
+			$tipoId = $this->pickCatalogId($db, 'ticket_tipos', ['sin tipo', 'ninguno', 'n/a', 'no aplica']);
+			if ($tipoId === null) {
+				$tipoId = $this->pickCatalogId($db, 'ticket_tipos', []);
+			}
+		}
+
 		return [
-			'estado_id' => $this->pickCatalogId($db, 'ticket_estados', ['abierto', 'nuevo', 'pendiente']),
+			'estado_id' => $this->pickCatalogId($db, 'ticket_estados', ['abierto', 'pendiente', 'nuevo']),
 			'prioridad_id' => $this->pickCatalogId($db, 'ticket_prioridades', ['media', 'normal']),
-			'tipo_id' => $this->pickCatalogId($db, 'ticket_tipos', ['correo', 'email']),
-			'grupo_id' => $this->pickCatalogId($db, 'ticket_grupos', ['soporte', 'mesa']),
+			'tipo_id' => $tipoId,
+			'grupo_id' => $this->pickCatalogId($db, 'ticket_grupos', ['sin asignar', 'no asignado', 'mesa', 'soporte']),
 		];
 	}
 
