@@ -23,6 +23,7 @@ return static function (Router $router): void {
 	$router->post('/correo/send', 'CorreoController@send');
 	$router->get('/correo/verify', 'CorreoController@verify');
 	$router->post('/correo/sync-tickets', 'CorreoController@syncTickets');
+	$router->post('/correo/sync-tickets/auto', 'CorreoController@syncTicketsAuto');
 	$router->get('/correo/{uid}', 'CorreoController@show');
 	$router->post('/correo/{uid}/reply', 'CorreoController@reply');
 
@@ -52,6 +53,10 @@ return static function (Router $router): void {
 	$router->get('/tickets/create', 'TicketController@create');
 	$router->post('/tickets', 'TicketController@store');
 	$router->get('/tickets/{id}', 'TicketController@show');
+	$router->get('/tickets/{id}/attachment', 'TicketController@attachment');
+	$router->post('/tickets/{id}/reply', 'TicketController@replyTicket');
+	$router->post('/tickets/{id}/note', 'TicketController@addNote');
+	$router->post('/tickets/{id}/properties', 'TicketController@updateProperties');
 
 	$router->get('/campanas', 'CampanaController@index');
 	$router->get('/bot', 'BotController@index');

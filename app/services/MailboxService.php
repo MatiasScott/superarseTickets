@@ -384,11 +384,73 @@ class MailboxService
 				'message_id' => trim((string) ($overview->message_id ?? '')),
 				'references' => trim((string) ($overview->references ?? '')),
 				'body_text' => $bodyData['text'],
+				'attachments' => is_array($bodyData['attachments'] ?? null) ? $bodyData['attachments'] : [],
 			],
 			'account' => [
 				'alias' => (string) ($account['alias'] ?? ''),
 				'name' => $this->cleanDisplayText((string) ($account['name'] ?? '')),
 				'email' => (string) ($account['email'] ?? ''),
+			],
+		];
+	}
+
+	public function getAttachment(?string $accountAlias, string $uid, string $partToken): array
+	{
+		$account = $this->resolveAccount($accountAlias);
+		if ($account === null) {
+			return ['ok' => false, 'error' => 'Cuenta no disponible.'];
+		}
+
+		if ($this->isGraphMode()) {
+			if ($this->graphService === null) {
+				return ['ok' => false, 'error' => 'No se pudo inicializar servicio Graph.'];
+			}
+			return $this->graphService->getAttachment($account, $uid, $partToken);
+		}
+
+		if (!function_exists('imap_open')) {
+			return ['ok' => false, 'error' => 'La extension IMAP de PHP no esta habilitada.'];
+		}
+
+		$alias = $this->getAccountAlias($account);
+		$waitSeconds = $this->getImapBlockSeconds($alias);
+		if ($waitSeconds > 0) {
+			return ['ok' => false, 'error' => 'Proteccion local activa para evitar mas intentos fallidos.'];
+		}
+
+		$imap = $this->openInbox($account);
+		if (!is_resource($imap)) {
+			$error = $this->buildImapErrorMessage($this->lastImapError('No se pudo abrir la bandeja IMAP.'));
+			$this->registerImapFailure($alias, $error);
+			return ['ok' => false, 'error' => $error];
+		}
+
+		$numericUid = (int) $uid;
+		$structure = imap_fetchstructure($imap, $numericUid, FT_UID);
+		if (!$structure) {
+			imap_close($imap);
+			return ['ok' => false, 'error' => 'No se pudo obtener la estructura del correo.'];
+		}
+
+		$part = $this->findPartByToken($structure, $partToken);
+		if ($part === null) {
+			imap_close($imap);
+			return ['ok' => false, 'error' => 'Adjunto no encontrado.'];
+		}
+
+		$body = (string) imap_fetchbody($imap, $numericUid, $partToken, FT_UID | FT_PEEK);
+		$content = $this->decodeBody($body, (int) ($part->encoding ?? 0));
+		$filename = $this->extractPartFilename($part);
+		$mime = $this->resolvePartMime($part);
+		imap_close($imap);
+
+		return [
+			'ok' => true,
+			'error' => null,
+			'attachment' => [
+				'filename' => $filename !== '' ? $filename : ('Adjunto-' . $partToken),
+				'mime' => $mime,
+				'content' => $content,
 			],
 		];
 	}
@@ -548,30 +610,148 @@ class MailboxService
 		$structure = imap_fetchstructure($imap, $uid, FT_UID);
 		if (!$structure) {
 			$raw = (string) imap_body($imap, $uid, FT_UID | FT_PEEK);
-			return ['text' => $this->decodeBody($raw, 0)];
+			return [
+				'text' => $this->decodeBody($raw, 0),
+				'attachments' => [],
+			];
 		}
 
 		$text = '';
+		$attachments = [];
 		if (!empty($structure->parts) && is_array($structure->parts)) {
 			foreach ($structure->parts as $index => $part) {
 				$partNo = (string) ($index + 1);
-				$chunk = (string) imap_fetchbody($imap, $uid, $partNo, FT_UID | FT_PEEK);
-				$decoded = $this->decodeBody($chunk, (int) ($part->encoding ?? 0));
-				$subtype = strtoupper((string) ($part->subtype ?? ''));
-				if ($subtype === 'PLAIN' && $decoded !== '') {
-					$text = $decoded;
-					break;
-				}
-				if ($text === '' && $decoded !== '') {
-					$text = strip_tags($decoded);
-				}
+				$this->collectPartData($imap, $uid, $part, $partNo, $text, $attachments);
 			}
 		} else {
 			$raw = (string) imap_body($imap, $uid, FT_UID | FT_PEEK);
 			$text = $this->decodeBody($raw, (int) ($structure->encoding ?? 0));
 		}
 
-		return ['text' => trim($text)];
+		return [
+			'text' => trim($text),
+			'attachments' => $attachments,
+		];
+	}
+
+	private function collectPartData($imap, int $uid, object $part, string $partNo, string &$text, array &$attachments): void
+	{
+		$disposition = strtoupper((string) ($part->disposition ?? ''));
+		$subtype = strtoupper((string) ($part->subtype ?? ''));
+		$type = (int) ($part->type ?? 0);
+
+		$filename = '';
+		if (!empty($part->dparameters) && is_array($part->dparameters)) {
+			foreach ($part->dparameters as $param) {
+				$attr = strtolower((string) ($param->attribute ?? ''));
+				if ($attr === 'filename') {
+					$filename = $this->decodeMime((string) ($param->value ?? ''));
+					break;
+				}
+			}
+		}
+		if ($filename === '' && !empty($part->parameters) && is_array($part->parameters)) {
+			foreach ($part->parameters as $param) {
+				$attr = strtolower((string) ($param->attribute ?? ''));
+				if ($attr === 'name') {
+					$filename = $this->decodeMime((string) ($param->value ?? ''));
+					break;
+				}
+			}
+		}
+
+		if ($filename !== '' || $disposition === 'ATTACHMENT' || $disposition === 'INLINE') {
+			$mime = strtolower((string) ($part->subtype ?? 'application/octet-stream'));
+			$attachments[] = [
+				'filename' => $filename !== '' ? $filename : ('Adjunto-' . $partNo),
+				'part_no' => $partNo,
+				'size' => (int) ($part->bytes ?? 0),
+				'mime' => $mime,
+			];
+		}
+
+		if ($type === 0 && $filename === '') {
+			$chunk = (string) imap_fetchbody($imap, $uid, $partNo, FT_UID | FT_PEEK);
+			$decoded = $this->decodeBody($chunk, (int) ($part->encoding ?? 0));
+			if ($subtype === 'PLAIN' && trim($decoded) !== '') {
+				if ($text === '') {
+					$text = $decoded;
+				}
+			} elseif ($text === '' && trim($decoded) !== '') {
+				$text = strip_tags($decoded);
+			}
+		}
+
+		if (!empty($part->parts) && is_array($part->parts)) {
+			foreach ($part->parts as $i => $child) {
+				$childNo = $partNo . '.' . ($i + 1);
+				$this->collectPartData($imap, $uid, $child, $childNo, $text, $attachments);
+			}
+		}
+	}
+
+	private function findPartByToken(object $structure, string $targetToken, string $currentToken = ''): ?object
+	{
+		if ($currentToken === $targetToken) {
+			return $structure;
+		}
+
+		if (empty($structure->parts) || !is_array($structure->parts)) {
+			return null;
+		}
+
+		foreach ($structure->parts as $index => $child) {
+			$childToken = $currentToken === '' ? (string) ($index + 1) : $currentToken . '.' . ($index + 1);
+			if ($childToken === $targetToken) {
+				return $child;
+			}
+
+			$nested = $this->findPartByToken($child, $targetToken, $childToken);
+			if ($nested !== null) {
+				return $nested;
+			}
+		}
+
+		return null;
+	}
+
+	private function extractPartFilename(object $part): string
+	{
+		if (!empty($part->dparameters) && is_array($part->dparameters)) {
+			foreach ($part->dparameters as $param) {
+				if (strtolower((string) ($param->attribute ?? '')) === 'filename') {
+					return $this->decodeMime((string) ($param->value ?? ''));
+				}
+			}
+		}
+
+		if (!empty($part->parameters) && is_array($part->parameters)) {
+			foreach ($part->parameters as $param) {
+				if (strtolower((string) ($param->attribute ?? '')) === 'name') {
+					return $this->decodeMime((string) ($param->value ?? ''));
+				}
+			}
+		}
+
+		return '';
+	}
+
+	private function resolvePartMime(object $part): string
+	{
+		$typeMap = [
+			0 => 'text',
+			1 => 'multipart',
+			2 => 'message',
+			3 => 'application',
+			4 => 'audio',
+			5 => 'image',
+			6 => 'video',
+			7 => 'other',
+		];
+
+		$primary = $typeMap[(int) ($part->type ?? 3)] ?? 'application';
+		$subtype = strtolower((string) ($part->subtype ?? 'octet-stream'));
+		return $primary . '/' . $subtype;
 	}
 
 	private function decodeBody(string $body, int $encoding): string

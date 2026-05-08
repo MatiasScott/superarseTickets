@@ -162,6 +162,38 @@ function env_file_path(): string
 	return dirname(APP_PATH) . '/.env';
 }
 
+function env_backup_dir_path(): string
+{
+	return dirname(APP_PATH) . '/storage/backups/env';
+}
+
+function env_create_backup(string $envContent): ?string
+{
+	$backupDir = env_backup_dir_path();
+	if (!is_dir($backupDir)) {
+		if (!@mkdir($backupDir, 0775, true) && !is_dir($backupDir)) {
+			return null;
+		}
+	}
+
+	$timestamp = date('Ymd_His');
+	$backupPath = $backupDir . '/env_' . $timestamp . '_' . substr(bin2hex(random_bytes(4)), 0, 8) . '.bak';
+	if (@file_put_contents($backupPath, $envContent, LOCK_EX) === false) {
+		return null;
+	}
+
+	$existing = glob($backupDir . '/env_*.bak');
+	if (is_array($existing) && count($existing) > 20) {
+		sort($existing, SORT_STRING);
+		$toDelete = array_slice($existing, 0, count($existing) - 20);
+		foreach ($toDelete as $filePath) {
+			@unlink($filePath);
+		}
+	}
+
+	return $backupPath;
+}
+
 function env_write_many(array $updates): array
 {
 	$envPath = env_file_path();
@@ -186,6 +218,14 @@ function env_write_many(array $updates): array
 	if ($content === false) {
 		$err = error_get_last();
 		return ['ok' => false, 'error' => 'No se pudo leer .env: ' . (($err['message'] ?? 'error desconocido'))];
+	}
+
+	$backupPath = null;
+	if ($content !== '') {
+		$backupPath = env_create_backup($content);
+		if ($backupPath === null) {
+			return ['ok' => false, 'error' => 'No se pudo crear respaldo de .env en storage/backups/env antes de guardar.'];
+		}
 	}
 
 	$lines = $content === '' ? [] : preg_split("/\r\n|\n|\r/", $content);
@@ -238,5 +278,5 @@ function env_write_many(array $updates): array
 		return ['ok' => false, 'error' => 'No se pudo escribir .env: ' . (($err['message'] ?? 'error desconocido'))];
 	}
 
-	return ['ok' => true, 'error' => null];
+	return ['ok' => true, 'error' => null, 'backup' => $backupPath];
 }

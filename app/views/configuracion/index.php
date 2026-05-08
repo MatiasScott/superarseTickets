@@ -16,6 +16,17 @@
 		</div>
 	<?php endif; ?>
 
+	<?php if (!empty($warnings)): ?>
+		<div class="alert alert-warning" role="alert">
+			<strong>Revisa esta configuracion antes de usar Office 365:</strong>
+			<ul class="mb-0 mt-2">
+				<?php foreach ($warnings as $warning): ?>
+					<li><?= e((string) $warning) ?></li>
+				<?php endforeach; ?>
+			</ul>
+		</div>
+	<?php endif; ?>
+
 	<div class="row g-4">
 		<div class="col-12">
 			<div class="card">
@@ -27,22 +38,36 @@
 						<?= csrf_field() ?>
 
 						<div class="row g-3 mb-3">
+							<div class="col-md-2">
+								<label class="form-label">Transporte</label>
+								<select class="form-select" name="mail_driver">
+									<option value="smtp" <?= (($mail['driver'] ?? 'smtp') === 'smtp') ? 'selected' : '' ?>>SMTP</option>
+									<option value="graph" <?= (($mail['driver'] ?? '') === 'graph') ? 'selected' : '' ?>>Microsoft Graph</option>
+									<option value="sendmail" <?= (($mail['driver'] ?? '') === 'sendmail') ? 'selected' : '' ?>>Sendmail</option>
+								</select>
+							</div>
 							<div class="col-md-4">
 								<label class="form-label">Nombre remitente principal</label>
 								<input class="form-control" name="mail_from_name" value="<?= e($mail['from_name'] ?? '') ?>" required>
 							</div>
-							<div class="col-md-4">
+							<div class="col-md-3">
 								<label class="form-label">Correo remitente principal</label>
 								<input type="email" class="form-control" name="mail_from_email" value="<?= e($mail['from_email'] ?? '') ?>" required>
 							</div>
-							<div class="col-md-2">
+							<div class="col-md-1">
+								<label class="form-label">Graph</label>
+								<div class="form-check mt-2">
+									<input class="form-check-input" type="checkbox" name="graph_enabled" <?= !empty($mail['graph_enabled']) ? 'checked' : '' ?>>
+								</div>
+							</div>
+							<div class="col-md-1">
 								<label class="form-label">Estrategia</label>
 								<select class="form-select" name="mail_account_strategy">
 									<option value="round_robin" <?= (($mail['account_strategy'] ?? '') === 'round_robin') ? 'selected' : '' ?>>Round robin</option>
 									<option value="first" <?= (($mail['account_strategy'] ?? '') === 'first') ? 'selected' : '' ?>>Primera cuenta</option>
 								</select>
 							</div>
-							<div class="col-md-2">
+							<div class="col-md-1">
 								<label class="form-label">Alias por defecto</label>
 								<input class="form-control" name="mail_default_account_alias" value="<?= e($mail['default_account_alias'] ?? 'acc1') ?>" placeholder="acc1">
 							</div>
@@ -50,6 +75,35 @@
 
 						<div class="alert alert-info py-2">
 							Office 365 recomendado: host <strong>smtp.office365.com</strong>, puerto <strong>587</strong>, cifrado <strong>tls</strong>.
+						</div>
+
+						<div class="card border-0 bg-light mb-3">
+							<div class="card-body">
+								<h6 class="mb-3">Microsoft Graph</h6>
+								<div class="row g-3">
+									<div class="col-md-4">
+										<label class="form-label">Tenant ID</label>
+										<input class="form-control" name="graph_tenant_id" value="<?= e($mail['graph_tenant_id'] ?? '') ?>">
+									</div>
+									<div class="col-md-4">
+										<label class="form-label">Client ID</label>
+										<input class="form-control" name="graph_client_id" value="<?= e($mail['graph_client_id'] ?? '') ?>">
+									</div>
+									<div class="col-md-4">
+										<label class="form-label">Client Secret</label>
+										<input type="password" class="form-control" name="graph_client_secret" value="<?= e($mail['graph_client_secret'] ?? '') ?>">
+									</div>
+									<div class="col-md-9">
+										<label class="form-label">Base URL</label>
+										<input class="form-control" name="graph_base_url" value="<?= e($mail['graph_base_url'] ?? 'https://graph.microsoft.com/v1.0') ?>">
+									</div>
+									<div class="col-md-3">
+										<label class="form-label">Timeout</label>
+										<input class="form-control" name="graph_timeout" value="<?= e($mail['graph_timeout'] ?? '30') ?>">
+									</div>
+								</div>
+								<div class="form-text mt-2">Si vas a usar Graph para leer y enviar correos, activa Graph y cambia el transporte a Microsoft Graph.</div>
+							</div>
 						</div>
 
 						<div class="table-responsive">

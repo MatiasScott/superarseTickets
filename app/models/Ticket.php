@@ -29,7 +29,55 @@ class Ticket extends Model
 		return $stmt->fetchAll() ?: [];
 	}
 
-	public function getFiltered(array $filters = [], int $limit = 200): array
+	public function getFiltered(array $filters = [], int $limit = 200, int $offset = 0): array
+	{
+		[$whereSql, $params] = $this->buildFilterWhere($filters);
+
+		$sql = "SELECT t.*, 
+				te.nombre AS estado_ticket,
+				tp.nombre AS prioridad_ticket,
+				tt.nombre AS tipo_ticket,
+				tg.nombre AS grupo_ticket,
+				CONCAT(c.nombre, ' ', c.apellido) AS contacto_nombre,
+				u.nombre AS asignado_nombre
+			FROM tickets t
+			LEFT JOIN ticket_estados te ON te.id = t.estado_id
+			LEFT JOIN ticket_prioridades tp ON tp.id = t.prioridad_id
+			LEFT JOIN ticket_tipos tt ON tt.id = t.tipo_id
+			LEFT JOIN ticket_grupos tg ON tg.id = t.grupo_id
+			LEFT JOIN contactos c ON c.id = t.contacto_id
+			LEFT JOIN usuarios u ON u.id = t.asignado_a
+			{$whereSql}
+			ORDER BY t.id DESC
+			LIMIT :limit OFFSET :offset";
+
+		$stmt = $this->db->prepare($sql);
+		foreach ($params as $key => $val) {
+			$stmt->bindValue(':' . $key, $val);
+		}
+		$stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+		$stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+		$stmt->execute();
+		return $stmt->fetchAll() ?: [];
+	}
+
+	public function countFiltered(array $filters = []): int
+	{
+		[$whereSql, $params] = $this->buildFilterWhere($filters);
+
+		$sql = "SELECT COUNT(*) FROM tickets t
+			LEFT JOIN contactos c ON c.id = t.contacto_id
+			{$whereSql}";
+
+		$stmt = $this->db->prepare($sql);
+		foreach ($params as $key => $val) {
+			$stmt->bindValue(':' . $key, $val);
+		}
+		$stmt->execute();
+		return (int) $stmt->fetchColumn();
+	}
+
+	private function buildFilterWhere(array $filters): array
 	{
 		$where = [];
 		$params = [];
@@ -71,32 +119,7 @@ class Ticket extends Model
 		}
 
 		$whereSql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
-
-		$sql = "SELECT t.*, 
-				te.nombre AS estado_ticket,
-				tp.nombre AS prioridad_ticket,
-				tt.nombre AS tipo_ticket,
-				tg.nombre AS grupo_ticket,
-				CONCAT(c.nombre, ' ', c.apellido) AS contacto_nombre,
-				u.nombre AS asignado_nombre
-			FROM tickets t
-			LEFT JOIN ticket_estados te ON te.id = t.estado_id
-			LEFT JOIN ticket_prioridades tp ON tp.id = t.prioridad_id
-			LEFT JOIN ticket_tipos tt ON tt.id = t.tipo_id
-			LEFT JOIN ticket_grupos tg ON tg.id = t.grupo_id
-			LEFT JOIN contactos c ON c.id = t.contacto_id
-			LEFT JOIN usuarios u ON u.id = t.asignado_a
-			{$whereSql}
-			ORDER BY t.id DESC
-			LIMIT :limit";
-
-		$stmt = $this->db->prepare($sql);
-		foreach ($params as $key => $val) {
-			$stmt->bindValue(':' . $key, $val);
-		}
-		$stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-		$stmt->execute();
-		return $stmt->fetchAll() ?: [];
+		return [$whereSql, $params];
 	}
 
 	public function findDetailed(int $id): ?array

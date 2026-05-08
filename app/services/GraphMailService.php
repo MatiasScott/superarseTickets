@@ -215,6 +215,31 @@ class GraphMailService
 			$bodyText = trim(strip_tags($rawBody));
 		}
 
+		$attachments = [];
+		$attachmentsResponse = $this->request(
+			'GET',
+			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId) . '/attachments',
+			null,
+			[
+				'$select' => 'id,name,contentType,size',
+			]
+		);
+		if ($attachmentsResponse['ok']) {
+			$attachmentItems = is_array($attachmentsResponse['body']['value'] ?? null) ? $attachmentsResponse['body']['value'] : [];
+			foreach ($attachmentItems as $attachmentItem) {
+				if (!is_array($attachmentItem)) {
+					continue;
+				}
+
+				$attachments[] = [
+					'filename' => (string) ($attachmentItem['name'] ?? 'Adjunto'),
+					'mime' => (string) ($attachmentItem['contentType'] ?? 'application/octet-stream'),
+					'size' => (int) ($attachmentItem['size'] ?? 0),
+					'part_no' => (string) ($attachmentItem['id'] ?? ''),
+				];
+			}
+		}
+
 		$markSeen = $this->request(
 			'PATCH',
 			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId),
@@ -238,11 +263,51 @@ class GraphMailService
 				'message_id' => (string) ($item['internetMessageId'] ?? ''),
 				'references' => '',
 				'body_text' => $bodyText,
+				'attachments' => $attachments,
 			],
 			'account' => [
 				'alias' => (string) ($account['alias'] ?? ''),
 				'name' => (string) ($account['name'] ?? ''),
 				'email' => $userPrincipalName,
+			],
+		];
+	}
+
+	public function getAttachment(array $account, string $messageToken, string $attachmentId): array
+	{
+		$userPrincipalName = trim((string) ($account['email'] ?? ''));
+		if ($userPrincipalName === '') {
+			return ['ok' => false, 'error' => 'La cuenta no tiene email configurado para Graph.'];
+		}
+
+		$messageId = $this->decodeMessageId($messageToken);
+		if ($messageId === '' || trim($attachmentId) === '') {
+			return ['ok' => false, 'error' => 'Identificador de adjunto invalido para Graph.'];
+		}
+
+		$response = $this->request(
+			'GET',
+			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId) . '/attachments/' . rawurlencode($attachmentId)
+		);
+
+		if (!$response['ok']) {
+			return ['ok' => false, 'error' => $response['error']];
+		}
+
+		$body = is_array($response['body'] ?? null) ? $response['body'] : [];
+		$contentBytes = (string) ($body['contentBytes'] ?? '');
+		$content = $contentBytes !== '' ? base64_decode($contentBytes, true) : false;
+		if ($content === false || $content === null) {
+			return ['ok' => false, 'error' => 'No se pudo decodificar el adjunto.'];
+		}
+
+		return [
+			'ok' => true,
+			'error' => null,
+			'attachment' => [
+				'filename' => (string) ($body['name'] ?? 'Adjunto'),
+				'mime' => (string) ($body['contentType'] ?? 'application/octet-stream'),
+				'content' => $content,
 			],
 		];
 	}

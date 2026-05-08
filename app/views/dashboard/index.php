@@ -161,7 +161,7 @@
 		<div class="row g-3">
 			<div class="col-lg-6">
 				<div class="dash-card h-100">
-					<div class="card-title">Tickets sin resolver por grupo</div>
+					<div class="card-title">Tickets activos por grupo</div>
 					<div class="mini-table">
 						<?php foreach ($grupos as $row): ?>
 							<div><span><?= e($row['grupo'] ?? 'No asignado') ?></span><strong><?= e((string) ($row['total'] ?? 0)) ?></strong></div>

@@ -2,6 +2,192 @@
     resize: vertical;
 }
 
+.tickets-list-page {
+    --tickets-ink: #15324d;
+    --tickets-muted: #607a94;
+    --tickets-panel: #ffffff;
+    --tickets-border: #dbe6f2;
+    --tickets-accent: #0d6efd;
+    --tickets-soft-bg: #f2f7fd;
+}
+
+.tickets-list-hero {
+    background: radial-gradient(1200px 220px at 20% -100%, #e7f0ff 0%, #f8fbff 48%, #ffffff 100%);
+    border: 1px solid var(--tickets-border);
+    border-radius: 14px;
+    padding: 16px 18px;
+}
+
+.tickets-list-eyebrow {
+    font-size: .74rem;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    font-weight: 700;
+    color: #1e5ea8;
+}
+
+.tickets-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.tickets-kpi-card {
+    background: var(--tickets-panel);
+    border: 1px solid var(--tickets-border);
+    border-radius: 12px;
+    padding: 14px;
+}
+
+.tickets-kpi-card.is-alert {
+    background: linear-gradient(180deg, #fff9ec 0%, #ffffff 100%);
+}
+
+.tickets-kpi-card.is-warn {
+    background: linear-gradient(180deg, #fff1f1 0%, #ffffff 100%);
+}
+
+.tickets-kpi-card.is-soft {
+    background: linear-gradient(180deg, #f1f9ff 0%, #ffffff 100%);
+}
+
+.tickets-kpi-label {
+    color: var(--tickets-muted);
+    font-size: .8rem;
+    margin-bottom: 6px;
+}
+
+.tickets-kpi-value {
+    color: var(--tickets-ink);
+    font-size: 1.45rem;
+    font-weight: 800;
+    line-height: 1.1;
+}
+
+.tickets-kpi-meta {
+    margin-top: 5px;
+    color: #6f879f;
+    font-size: .75rem;
+}
+
+.tickets-filter-card {
+    border: 1px solid var(--tickets-border);
+    border-radius: 12px;
+    background: var(--tickets-panel);
+    box-shadow: 0 1px 0 rgba(17, 40, 63, 0.02);
+}
+
+.tickets-table-shell {
+    background: var(--tickets-panel);
+    border: 1px solid var(--tickets-border);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.tickets-table thead th {
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    font-size: .72rem;
+    color: #546d86;
+    border-bottom-width: 1px;
+}
+
+.tickets-table tbody tr {
+    transition: background-color .16s ease;
+}
+
+.tickets-table tbody tr:hover {
+    background: #f7fbff;
+}
+
+.ticket-code-link {
+    color: #0f4f96;
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.ticket-code-link:hover {
+    color: #0d6efd;
+    text-decoration: underline;
+}
+
+.ticket-subject-cell {
+    max-width: 440px;
+}
+
+.tickets-badge-priority,
+.tickets-badge-state {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    font-size: .72rem;
+    font-weight: 700;
+    line-height: 1;
+    padding: 6px 10px;
+    border: 1px solid transparent;
+    white-space: nowrap;
+}
+
+.tickets-badge-priority.is-high {
+    color: #a11b2b;
+    background: #fff0f2;
+    border-color: #ffd9df;
+}
+
+.tickets-badge-priority.is-normal {
+    color: #8a5c07;
+    background: #fff6df;
+    border-color: #ffe8b3;
+}
+
+.tickets-badge-priority.is-low {
+    color: #1f6d36;
+    background: #eefcf3;
+    border-color: #cbf0d8;
+}
+
+.tickets-badge-state.is-open {
+    color: #0a4f9b;
+    background: #ecf4ff;
+    border-color: #d4e6ff;
+}
+
+.tickets-badge-state.is-closed {
+    color: #1f6d36;
+    background: #eefcf3;
+    border-color: #cbf0d8;
+}
+
+.tickets-badge-state.is-neutral {
+    color: #5e748a;
+    background: #f2f6fa;
+    border-color: #dce5ee;
+}
+
+@media (max-width: 1200px) {
+    .tickets-kpi-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .ticket-subject-cell {
+        max-width: 320px;
+    }
+}
+
+@media (max-width: 768px) {
+    .tickets-kpi-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .tickets-list-hero {
+        padding: 14px;
+    }
+
+    .ticket-subject-cell {
+        max-width: 220px;
+    }
+}
+
 .tickets-dashboard {
     color: #334155;
 }

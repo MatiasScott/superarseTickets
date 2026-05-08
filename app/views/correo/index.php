@@ -1,4 +1,6 @@
 <div class="container-fluid py-4">
+	<?php $autoSyncSummary = $autoSyncSummary ?? null; ?>
+	<?php $autoSyncEverySeconds = max(5, (int) ($autoSyncEverySeconds ?? 5)); ?>
 	<div class="d-flex justify-content-between align-items-center mb-3">
 		<div>
 			<h2 class="mb-1">Bandeja de Correo</h2>
@@ -13,6 +15,35 @@
 	<?php if ($msg = get_flash('error')): ?>
 		<div class="alert alert-danger"><?= e($msg) ?></div>
 	<?php endif; ?>
+
+	<?php if (is_array($autoSyncSummary)): ?>
+		<?php $autoSyncData = $autoSyncSummary; ?>
+		<?php $autoCreated = (int) ($autoSyncData['created'] ?? 0); ?>
+		<?php $autoErrors = is_array($autoSyncData['errors'] ?? []) ? $autoSyncData['errors'] : []; ?>
+		<?php if ($autoCreated > 0): ?>
+			<div class="alert alert-info">
+				Auto-sync: se crearon <?= e((string) $autoCreated) ?> ticket(s) nuevos al actualizar la bandeja.
+			</div>
+		<?php elseif (!empty($autoErrors)): ?>
+			<div class="alert alert-warning">
+				Auto-sync con advertencias: <?= e((string) $autoErrors[0]) ?>
+			</div>
+		<?php endif; ?>
+	<?php endif; ?>
+
+	<div
+		id="correoAutoSyncStatus"
+		class="alert alert-secondary d-flex flex-wrap justify-content-between align-items-center gap-2"
+		data-auto-sync-interval-ms="<?= e((string) ($autoSyncEverySeconds * 1000)) ?>"
+		data-auto-sync-url="<?= e(base_url('correo/sync-tickets/auto')) ?>"
+	>
+		<div>
+			<strong>Auto-sync:</strong>
+			<span data-sync-status-text>Activo</span>
+			<span class="text-muted">(cada <?= e((string) $autoSyncEverySeconds) ?> segundos)</span>
+		</div>
+		<div class="small text-muted" data-sync-last-run>Esperando primera ejecucion...</div>
+	</div>
 
 	<div class="card mb-3">
 		<div class="card-body">
@@ -30,14 +61,22 @@
 					</select>
 					</div>
 					<div class="col-md-3">
-					<button class="btn btn-outline-secondary w-100" type="submit">Actualizar</button>
+					<label class="form-label">Por pagina</label>
+					<select class="form-select" name="per_page">
+						<?php foreach ([20, 50, 100, 200] as $opt): ?>
+							<option value="<?= e((string) $opt) ?>" <?= ((int) ($perPage ?? 20) === $opt) ? 'selected' : '' ?>><?= e((string) $opt) ?></option>
+						<?php endforeach; ?>
+					</select>
 					</div>
 					<div class="col-md-3">
+					<button class="btn btn-outline-secondary w-100" type="submit">Actualizar</button>
+					</div>
+					<div class="col-md-12 col-lg-3">
 					<a class="btn btn-outline-primary w-100" href="<?= e(base_url('correo/verify?account=' . urlencode($accountAlias ?? '') . '&force=1')) ?>">Verificar Cuenta</a>
 					</div>
 				</form>
 
-				<form method="POST" action="<?= e(base_url('correo/sync-tickets')) ?>" class="col-md-4 m-0 p-0">
+				<form method="POST" action="<?= e(base_url('correo/sync-tickets')) ?>" class="col-md-4 m-0 p-0" id="correoSyncForm">
 					<?= csrf_field() ?>
 					<input type="hidden" name="account_alias" value="<?= e($accountAlias ?? '') ?>">
 					<button class="btn btn-success w-100" type="submit">Crear Tickets de Correos No Leidos</button>
@@ -87,8 +126,8 @@
 			<div class="card-body d-flex justify-content-between">
 				<?php $prev = max(1, (int) ($inbox['page'] ?? 1) - 1); ?>
 				<?php $next = min((int) ($inbox['pages'] ?? 1), (int) ($inbox['page'] ?? 1) + 1); ?>
-				<a class="btn btn-outline-secondary <?= ((int) ($inbox['page'] ?? 1) <= 1) ? 'disabled' : '' ?>" href="<?= e(base_url('correo?page=' . $prev . '&account=' . urlencode($accountAlias ?? ''))) ?>">Anterior</a>
-				<a class="btn btn-outline-secondary <?= ((int) ($inbox['page'] ?? 1) >= (int) ($inbox['pages'] ?? 1)) ? 'disabled' : '' ?>" href="<?= e(base_url('correo?page=' . $next . '&account=' . urlencode($accountAlias ?? ''))) ?>">Siguiente</a>
+				<a class="btn btn-outline-secondary <?= ((int) ($inbox['page'] ?? 1) <= 1) ? 'disabled' : '' ?>" href="<?= e(base_url('correo?page=' . $prev . '&account=' . urlencode($accountAlias ?? '') . '&per_page=' . (int) ($perPage ?? 20))) ?>">Anterior</a>
+				<a class="btn btn-outline-secondary <?= ((int) ($inbox['page'] ?? 1) >= (int) ($inbox['pages'] ?? 1)) ? 'disabled' : '' ?>" href="<?= e(base_url('correo?page=' . $next . '&account=' . urlencode($accountAlias ?? '') . '&per_page=' . (int) ($perPage ?? 20))) ?>">Siguiente</a>
 			</div>
 		</div>
 	<?php endif; ?>

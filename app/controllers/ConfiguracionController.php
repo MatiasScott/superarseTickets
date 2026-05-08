@@ -5,13 +5,21 @@ class ConfiguracionController extends Controller
 	public function index(): void
 	{
 		Auth::requireAuth();
+		$mailAccounts = $this->getMailAccounts();
 
 		$data = [
 			'mail' => [
+				'driver' => (string) env('MAIL_DRIVER', 'smtp'),
 				'from_name' => (string) env('MAIL_FROM_NAME', 'ISTS Ticket System'),
-				'from_email' => (string) env('MAIL_FROM_EMAIL', ''),
+				'from_email' => (string) env('MAIL_FROM_EMAIL', 'noreply@ists.local'),
 				'account_strategy' => (string) env('MAIL_ACCOUNT_STRATEGY', 'round_robin'),
 				'default_account_alias' => (string) env('MAIL_DEFAULT_ACCOUNT_ALIAS', 'acc1'),
+				'graph_enabled' => (string) env('GRAPH_ENABLED', 'false') === 'true',
+				'graph_tenant_id' => (string) env('GRAPH_TENANT_ID', ''),
+				'graph_client_id' => (string) env('GRAPH_CLIENT_ID', ''),
+				'graph_client_secret' => (string) env('GRAPH_CLIENT_SECRET', ''),
+				'graph_base_url' => (string) env('GRAPH_BASE_URL', 'https://graph.microsoft.com/v1.0'),
+				'graph_timeout' => (string) env('GRAPH_TIMEOUT', '30'),
 			],
 			'whatsapp' => [
 				'enabled' => (string) env('BOT_WHATSAPP_ENABLED', 'false') === 'true',
@@ -20,7 +28,8 @@ class ConfiguracionController extends Controller
 				'numbers' => $this->getWhatsAppNumbers(),
 				'strategy' => (string) env('BOT_WHATSAPP_NUMBER_STRATEGY', 'round_robin'),
 			],
-			'mailAccounts' => $this->getMailAccounts(),
+			'mailAccounts' => $mailAccounts,
+			'warnings' => $this->getConfigurationWarnings($mailAccounts),
 		];
 
 		$this->view('configuracion/index', $data, [
@@ -38,7 +47,7 @@ class ConfiguracionController extends Controller
 		}
 
 		$updates = [
-			'MAIL_DRIVER' => trim((string) env('MAIL_DRIVER', 'smtp')),
+			'MAIL_DRIVER' => trim((string) ($_POST['mail_driver'] ?? env('MAIL_DRIVER', 'smtp'))),
 			'MAIL_HOST' => 'smtp.office365.com',
 			'MAIL_PORT' => '587',
 			'MAIL_ENCRYPTION' => 'tls',
@@ -46,7 +55,17 @@ class ConfiguracionController extends Controller
 			'MAIL_FROM_EMAIL' => trim((string) ($_POST['mail_from_email'] ?? '')),
 			'MAIL_ACCOUNT_STRATEGY' => trim((string) ($_POST['mail_account_strategy'] ?? 'round_robin')),
 			'MAIL_DEFAULT_ACCOUNT_ALIAS' => trim((string) ($_POST['mail_default_account_alias'] ?? 'acc1')),
+			'GRAPH_ENABLED' => isset($_POST['graph_enabled']) ? 'true' : 'false',
+			'GRAPH_TENANT_ID' => trim((string) ($_POST['graph_tenant_id'] ?? '')),
+			'GRAPH_CLIENT_ID' => trim((string) ($_POST['graph_client_id'] ?? '')),
+			'GRAPH_CLIENT_SECRET' => trim((string) ($_POST['graph_client_secret'] ?? '')),
+			'GRAPH_BASE_URL' => trim((string) ($_POST['graph_base_url'] ?? 'https://graph.microsoft.com/v1.0')),
+			'GRAPH_TIMEOUT' => trim((string) ($_POST['graph_timeout'] ?? '30')),
 		];
+
+		if (!in_array($updates['MAIL_DRIVER'], ['smtp', 'graph', 'sendmail'], true)) {
+			$updates['MAIL_DRIVER'] = 'smtp';
+		}
 
 		$postedAccounts = $_POST['mail_accounts'] ?? [];
 		if (!is_array($postedAccounts)) {
@@ -126,6 +145,13 @@ class ConfiguracionController extends Controller
 			redirect('configuracion');
 		}
 
+		if ($updates['MAIL_DRIVER'] === 'graph' || $updates['GRAPH_ENABLED'] === 'true') {
+			if ($updates['GRAPH_TENANT_ID'] === '' || $updates['GRAPH_CLIENT_ID'] === '' || $updates['GRAPH_CLIENT_SECRET'] === '') {
+				set_flash('error', 'Para usar Microsoft Graph debes completar tenant id, client id y client secret.');
+				redirect('configuracion');
+			}
+		}
+
 		$result = env_write_many($updates);
 		if (!$result['ok']) {
 			set_flash('error', 'No se pudo guardar configuracion de correo: ' . $result['error']);
@@ -176,7 +202,7 @@ class ConfiguracionController extends Controller
 	private function getMailAccounts(): array
 	{
 		$accounts = [];
-		$total = (int) env('MAIL_ACCOUNTS_TOTAL', 10);
+		$total = (int) env('MAIL_ACCOUNTS_TOTAL', 1);
 		if ($total < 1) {
 			$total = 1;
 		}
@@ -237,5 +263,61 @@ class ConfiguracionController extends Controller
 		}
 
 		return $numbers;
+	}
+
+	private function getConfigurationWarnings(array $mailAccounts): array
+	{
+		$warnings = [];
+
+		if (!is_file(env_file_path())) {
+			$warnings[] = 'No existe el archivo .env en la raiz del proyecto. La configuracion que ves puede ser temporal hasta que guardes nuevamente.';
+		}
+
+		$fromEmail = trim((string) env('MAIL_FROM_EMAIL', ''));
+		$mailDriver = strtolower(trim((string) env('MAIL_DRIVER', 'smtp')));
+		$graphEnabled = (string) env('GRAPH_ENABLED', 'false') === 'true';
+		if ($fromEmail === '' || $fromEmail === 'noreply@ists.local') {
+			$warnings[] = 'El correo remitente principal aun no esta configurado con una direccion real.';
+		}
+
+		$hasReadyAccount = false;
+		$hasIncompleteEnabledAccount = false;
+		foreach ($mailAccounts as $account) {
+			if (!is_array($account)) {
+				continue;
+			}
+
+			$enabled = !empty($account['enabled']);
+			$email = trim((string) ($account['email'] ?? ''));
+			$username = trim((string) ($account['username'] ?? ''));
+			$password = trim((string) ($account['password'] ?? ''));
+
+			if ($email !== '' && $username !== '' && $password !== '') {
+				$hasReadyAccount = true;
+			}
+
+			if ($enabled && ($email === '' || $username === '' || $password === '')) {
+				$hasIncompleteEnabledAccount = true;
+			}
+		}
+
+		if (!$hasReadyAccount) {
+			$warnings[] = 'Todavia no hay ninguna cuenta de Office 365 lista para usarse. Completa email, usuario y password en al menos una cuenta.';
+		}
+
+		if ($hasIncompleteEnabledAccount) {
+			$warnings[] = 'Hay cuentas marcadas como activas pero incompletas. Eso puede hacer que parezca que las cuentas desaparecieron o no funcionen al sincronizar.';
+		}
+
+		if ($mailDriver === 'graph' || $graphEnabled) {
+			$tenantId = trim((string) env('GRAPH_TENANT_ID', ''));
+			$clientId = trim((string) env('GRAPH_CLIENT_ID', ''));
+			$clientSecret = trim((string) env('GRAPH_CLIENT_SECRET', ''));
+			if ($tenantId === '' || $clientId === '' || $clientSecret === '') {
+				$warnings[] = 'Microsoft Graph esta activado pero faltan credenciales. Completa GRAPH_TENANT_ID, GRAPH_CLIENT_ID y GRAPH_CLIENT_SECRET.';
+			}
+		}
+
+		return $warnings;
 	}
 }

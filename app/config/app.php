@@ -2,7 +2,7 @@
 
 return [
 	'name' => 'ISTS Ticket',
-	'url' => getenv('APP_URL') ?: '/istsTicket/public',
+	'url' => (string) env('APP_URL', '/istsTicket/public'),
 	'timezone' => 'America/Guayaquil',
-	'debug' => true,
+	'debug' => strtolower((string) env('APP_DEBUG', 'true')) === 'true',
 ];

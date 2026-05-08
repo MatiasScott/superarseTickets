@@ -41,7 +41,7 @@
 
 		<div class="ticket-block" id="conteo-grupos">
 			<div class="ticket-block-head split">
-				<span>Tickets sin resolver por grupo</span>
+				<span>Tickets activos por grupo</span>
 				<a href="<?= e(base_url('tickets/dashboard/grupos')) ?>">Ver detalles</a>
 			</div>
 			<div class="summary-table" data-ticket-group-list>

@@ -42,14 +42,21 @@ class CorreoController extends Controller
 		$mailbox = new MailboxService();
 		$accountAlias = trim((string) ($_GET['account'] ?? ''));
 		$page = max(1, (int) ($_GET['page'] ?? 1));
+		$perPage = (int) ($_GET['per_page'] ?? 20);
+		$allowedPerPage = [20, 50, 100, 200];
+		if (!in_array($perPage, $allowedPerPage, true)) {
+			$perPage = 20;
+		}
 
 		$accounts = $mailbox->getAvailableAccounts();
-		$inbox = $mailbox->listInbox($accountAlias !== '' ? $accountAlias : null, $page, 20);
+		$inbox = $mailbox->listInbox($accountAlias !== '' ? $accountAlias : null, $page, $perPage);
 
 		$this->view('correo/index', [
 			'accounts' => $accounts,
 			'inbox' => $inbox,
 			'accountAlias' => $accountAlias,
+			'perPage' => $perPage,
+			'autoSyncEverySeconds' => 5,
 		], [
 			'title' => 'Correo - Bandeja',
 		]);
@@ -197,11 +204,56 @@ class CorreoController extends Controller
 		}
 
 		$accountAlias = trim((string) ($_POST['account_alias'] ?? ''));
+		$result = $this->runTicketSync($accountAlias !== '' ? $accountAlias : null);
+
+		if (($result['created'] ?? 0) <= 0 && ($result['updated'] ?? 0) <= 0 && ($result['skipped'] ?? 0) <= 0 && empty($result['sync_errors'] ?? [])) {
+			set_flash('success', 'No hay correos nuevos sin leer para convertir en tickets.');
+			redirect('correo' . ($accountAlias !== '' ? '?account=' . urlencode($accountAlias) : ''));
+		}
+
+		set_flash('success', $this->buildSyncSummary($result));
+		if (!empty($result['sync_errors'] ?? [])) {
+			set_flash('error', implode(' | ', (array) $result['sync_errors']));
+		}
+		redirect('correo' . ($accountAlias !== '' ? '?account=' . urlencode($accountAlias) : ''));
+	}
+
+	public function syncTicketsAuto(): void
+	{
+		Auth::requireAuth();
+
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			http_response_code(403);
+			header('Content-Type: application/json; charset=UTF-8');
+			echo json_encode(['ok' => false, 'error' => 'Token CSRF invalido.']);
+			return;
+		}
+
+		$accountAlias = trim((string) ($_POST['account_alias'] ?? ''));
+		$result = $this->runTicketSync($accountAlias !== '' ? $accountAlias : null);
+
+		header('Content-Type: application/json; charset=UTF-8');
+		echo json_encode([
+			'ok' => true,
+			'summary' => $this->buildSyncSummary($result),
+			'created' => (int) ($result['created'] ?? 0),
+			'updated' => (int) ($result['updated'] ?? 0),
+			'skipped' => (int) ($result['skipped'] ?? 0),
+			'by_group' => (array) ($result['created_by_group'] ?? []),
+			'updated_by_group' => (array) ($result['updated_by_group'] ?? []),
+			'omitted_breakdown' => (array) ($result['omitted_breakdown'] ?? []),
+			'has_errors' => !empty($result['sync_errors'] ?? []),
+			'errors' => (array) ($result['sync_errors'] ?? []),
+		]);
+	}
+
+	private function runTicketSync(?string $accountAlias = null): array
+	{
 		$mailbox = new MailboxService();
 
 		$aliasesToSync = [];
-		if ($accountAlias !== '') {
-			$aliasesToSync[] = $accountAlias;
+		if ($accountAlias !== null && trim($accountAlias) !== '') {
+			$aliasesToSync[] = trim($accountAlias);
 		} else {
 			foreach ($mailbox->getAvailableAccounts() as $account) {
 				$alias = trim((string) ($account['alias'] ?? ''));
@@ -213,8 +265,59 @@ class CorreoController extends Controller
 
 		$aliasesToSync = array_values(array_unique($aliasesToSync));
 		if (empty($aliasesToSync)) {
-			set_flash('error', 'No hay cuentas de correo habilitadas para sincronizar.');
-			redirect('correo');
+			return [
+				'aliases' => [],
+				'created' => 0,
+				'updated' => 0,
+				'skipped' => 0,
+				'created_by_group' => [],
+				'updated_by_group' => [],
+				'omitted_breakdown' => [
+					'ya_procesado' => 0,
+					'grupo_actualizado' => 0,
+					'contacto_invalido' => 0,
+					'error' => 0,
+				],
+				'sync_errors' => ['No hay cuentas de correo habilitadas para sincronizar.'],
+			];
+		}
+
+		$accountEmailByAlias = [];
+		foreach ($mailbox->getAvailableAccounts() as $account) {
+			$alias = trim((string) ($account['alias'] ?? ''));
+			if ($alias === '' || !in_array($alias, $aliasesToSync, true)) {
+				continue;
+			}
+
+			$accountEmailByAlias[$alias] = trim((string) ($account['email'] ?? ''));
+		}
+
+		$db = Database::getInstance()->connection();
+		$this->ensureMailSyncTable($db);
+		$ticketCfg = $this->resolveTicketDefaults($db);
+
+		$createdByGroup = [];
+		$updatedByGroup = [];
+		$omittedBreakdown = [
+			'ya_procesado' => 0,
+			'grupo_actualizado' => 0,
+			'contacto_invalido' => 0,
+			'error' => 0,
+		];
+		$created = 0;
+		$updated = 0;
+		$skipped = 0;
+
+		$historical = $this->reclassifyHistoricalTicketGroups(
+			$db,
+			$aliasesToSync,
+			$accountEmailByAlias,
+			isset($ticketCfg['grupo_id']) ? (int) $ticketCfg['grupo_id'] : null
+		);
+		$updated += (int) ($historical['updated'] ?? 0);
+		$omittedBreakdown['grupo_actualizado'] += (int) ($historical['updated'] ?? 0);
+		foreach ((array) ($historical['updated_by_group'] ?? []) as $groupKey => $count) {
+			$updatedByGroup[(string) $groupKey] = (int) ($updatedByGroup[(string) $groupKey] ?? 0) + (int) $count;
 		}
 
 		$emails = [];
@@ -233,30 +336,43 @@ class CorreoController extends Controller
 		}
 
 		if (empty($emails)) {
-			if (!empty($syncErrors)) {
-				set_flash('error', implode(' | ', $syncErrors));
-			} else {
-				set_flash('success', 'No hay correos nuevos sin leer para convertir en tickets.');
-			}
-			redirect('correo' . ($accountAlias !== '' ? '?account=' . urlencode($accountAlias) : ''));
+			return [
+				'aliases' => $aliasesToSync,
+				'created' => $created,
+				'updated' => $updated,
+				'skipped' => $skipped,
+				'created_by_group' => $createdByGroup,
+				'updated_by_group' => $updatedByGroup,
+				'omitted_breakdown' => $omittedBreakdown,
+				'sync_errors' => $syncErrors,
+			];
 		}
 
-		$db = Database::getInstance()->connection();
-		$this->ensureMailSyncTable($db);
-		$ticketCfg = $this->resolveTicketDefaults($db);
-
-		$created = 0;
-		$skipped = 0;
 		foreach ($emails as $email) {
 			try {
 				if ($this->alreadyProcessedEmail($db, $email)) {
 					$skipped++;
+					$omittedBreakdown['ya_procesado']++;
+
+					$ticketId = $this->findProcessedTicketId($db, $email);
+					$fallbackGroupId = isset($ticketCfg['grupo_id']) ? (int) $ticketCfg['grupo_id'] : null;
+					$guessedGroupId = $this->guessGroupIdFromEmail($db, $email, $fallbackGroupId);
+					if ($ticketId !== null && $guessedGroupId !== null && ($fallbackGroupId === null || $guessedGroupId !== $fallbackGroupId)) {
+						if ($this->updateTicketGroupIfNeeded($db, $ticketId, $guessedGroupId)) {
+							$updated++;
+							$omittedBreakdown['grupo_actualizado']++;
+							$updatedGroupName = $this->resolveGroupNameByTicketId($db, $ticketId);
+							$updatedGroupKey = $updatedGroupName !== '' ? $updatedGroupName : 'Sin asignar';
+							$updatedByGroup[$updatedGroupKey] = (int) ($updatedByGroup[$updatedGroupKey] ?? 0) + 1;
+						}
+					}
 					continue;
 				}
 
 				$contactId = $this->findOrCreateContactFromEmail($db, $email);
 				if ($contactId <= 0) {
 					$skipped++;
+					$omittedBreakdown['contacto_invalido']++;
 					continue;
 				}
 
@@ -267,26 +383,158 @@ class CorreoController extends Controller
 					'estado_id' => $ticketCfg['estado_id'],
 					'prioridad_id' => $ticketCfg['prioridad_id'],
 					'tipo_id' => $ticketCfg['tipo_id'],
-					'grupo_id' => $ticketCfg['grupo_id'],
+					'grupo_id' => $this->guessGroupIdFromEmail($db, $email, $ticketCfg['grupo_id']),
 					'asignado_a' => null,
 					'fecha_resolucion' => null,
 					'estado' => 'activo',
 				]);
+
+				$grupoNombre = $this->resolveGroupNameByTicketId($db, $ticketId);
+				$groupKey = $grupoNombre !== '' ? $grupoNombre : 'Sin asignar';
+				$createdByGroup[$groupKey] = (int) ($createdByGroup[$groupKey] ?? 0) + 1;
 
 				$this->markEmailProcessed($db, $email, $ticketId);
 				$mailbox->markMessageAsSeen((string) ($email['account_alias'] ?? ''), (string) ($email['uid'] ?? ''));
 				$created++;
 			} catch (Throwable $e) {
 				$skipped++;
+				$omittedBreakdown['error']++;
 				error_log('Sync correo->ticket error: ' . $e->getMessage());
 			}
 		}
 
-		set_flash('success', 'Sincronizacion finalizada en ' . count($aliasesToSync) . ' cuenta(s). Tickets creados: ' . $created . '. Omitidos: ' . $skipped . '.');
-		if (!empty($syncErrors)) {
-			set_flash('error', implode(' | ', $syncErrors));
+		return [
+			'aliases' => $aliasesToSync,
+			'created' => $created,
+			'updated' => $updated,
+			'skipped' => $skipped,
+			'created_by_group' => $createdByGroup,
+			'updated_by_group' => $updatedByGroup,
+			'omitted_breakdown' => $omittedBreakdown,
+			'sync_errors' => $syncErrors,
+		];
+	}
+
+	private function reclassifyHistoricalTicketGroups(PDO $db, array $aliasesToSync, array $accountEmailByAlias, ?int $fallbackGroupId): array
+	{
+		$updated = 0;
+		$updatedByGroup = [];
+
+		if (empty($aliasesToSync) || $fallbackGroupId === null || $fallbackGroupId <= 0) {
+			return [
+				'updated' => 0,
+				'updated_by_group' => [],
+			];
 		}
-		redirect('correo' . ($accountAlias !== '' ? '?account=' . urlencode($accountAlias) : ''));
+
+		$placeholders = implode(', ', array_fill(0, count($aliasesToSync), '?'));
+		$sql = "SELECT x.ticket_id, x.account_alias
+			FROM (
+				SELECT ticket_id, MAX(id) AS last_id
+				FROM mail_ticket_sync
+				WHERE account_alias IN ({$placeholders})
+				GROUP BY ticket_id
+			) s
+			INNER JOIN mail_ticket_sync x ON x.id = s.last_id
+			INNER JOIN tickets t ON t.id = x.ticket_id
+			WHERE (t.grupo_id IS NULL OR t.grupo_id = ?)
+			ORDER BY x.id DESC
+			LIMIT 300";
+
+		$stmt = $db->prepare($sql);
+		$params = array_values($aliasesToSync);
+		$params[] = $fallbackGroupId;
+		$stmt->execute($params);
+		$rows = $stmt->fetchAll() ?: [];
+
+		foreach ($rows as $row) {
+			$ticketId = (int) ($row['ticket_id'] ?? 0);
+			$alias = trim((string) ($row['account_alias'] ?? ''));
+			$accountEmail = (string) ($accountEmailByAlias[$alias] ?? '');
+
+			if ($ticketId <= 0 || $accountEmail === '') {
+				continue;
+			}
+
+			$guessPayload = [
+				'account_alias' => $alias,
+				'account_email' => $accountEmail,
+				'subject' => '',
+				'body_text' => '',
+				'from_name' => '',
+				'from_email' => '',
+			];
+			$newGroupId = $this->guessGroupIdFromEmail($db, $guessPayload, $fallbackGroupId);
+			if ($newGroupId === null || $newGroupId === $fallbackGroupId) {
+				continue;
+			}
+
+			if ($this->updateTicketGroupIfNeeded($db, $ticketId, $newGroupId)) {
+				$updated++;
+				$updatedGroupName = $this->resolveGroupNameByTicketId($db, $ticketId);
+				$updatedGroupKey = $updatedGroupName !== '' ? $updatedGroupName : 'Sin asignar';
+				$updatedByGroup[$updatedGroupKey] = (int) ($updatedByGroup[$updatedGroupKey] ?? 0) + 1;
+			}
+		}
+
+		return [
+			'updated' => $updated,
+			'updated_by_group' => $updatedByGroup,
+		];
+	}
+
+	private function buildSyncSummary(array $result): string
+	{
+		$aliases = is_array($result['aliases'] ?? null) ? $result['aliases'] : [];
+		$created = (int) ($result['created'] ?? 0);
+		$updated = (int) ($result['updated'] ?? 0);
+		$skipped = (int) ($result['skipped'] ?? 0);
+		$createdByGroup = is_array($result['created_by_group'] ?? null) ? $result['created_by_group'] : [];
+		$updatedByGroup = is_array($result['updated_by_group'] ?? null) ? $result['updated_by_group'] : [];
+		$omitted = is_array($result['omitted_breakdown'] ?? null) ? $result['omitted_breakdown'] : [];
+
+		$summary = 'Sincronizacion finalizada en ' . count($aliases) . ' cuenta(s). Tickets creados: ' . $created . '. Grupos actualizados: ' . $updated . '. Omitidos: ' . $skipped . '.';
+
+		$omittedParts = [];
+		$yaProcesado = (int) ($omitted['ya_procesado'] ?? 0);
+		$gruposActualizados = (int) ($omitted['grupo_actualizado'] ?? 0);
+		$contactoInvalido = (int) ($omitted['contacto_invalido'] ?? 0);
+		$errores = (int) ($omitted['error'] ?? 0);
+		if ($yaProcesado > 0) {
+			$omittedParts[] = 'ya procesados: ' . $yaProcesado;
+		}
+		if ($gruposActualizados > 0) {
+			$omittedParts[] = 'grupos actualizados: ' . $gruposActualizados;
+		}
+		if ($contactoInvalido > 0) {
+			$omittedParts[] = 'sin contacto valido: ' . $contactoInvalido;
+		}
+		if ($errores > 0) {
+			$omittedParts[] = 'errores: ' . $errores;
+		}
+		if (!empty($omittedParts)) {
+			$summary .= ' Detalle omitidos (' . implode(', ', $omittedParts) . ').';
+		}
+
+		if (!empty($createdByGroup)) {
+			arsort($createdByGroup);
+			$parts = [];
+			foreach ($createdByGroup as $groupName => $count) {
+				$parts[] = $groupName . ': ' . $count;
+			}
+			$summary .= ' Clasificacion: ' . implode(', ', $parts) . '.';
+		}
+
+		if (!empty($updatedByGroup)) {
+			arsort($updatedByGroup);
+			$parts = [];
+			foreach ($updatedByGroup as $groupName => $count) {
+				$parts[] = $groupName . ': ' . $count;
+			}
+			$summary .= ' Reasignados: ' . implode(', ', $parts) . '.';
+		}
+
+		return $summary;
 	}
 
 	private function ensureMailSyncTable(PDO $db): void
@@ -328,8 +576,237 @@ class CorreoController extends Controller
 			'estado_id' => $this->pickCatalogId($db, 'ticket_estados', ['abierto', 'pendiente', 'nuevo']),
 			'prioridad_id' => $this->pickCatalogId($db, 'ticket_prioridades', ['media', 'normal']),
 			'tipo_id' => $tipoId,
-			'grupo_id' => $this->pickCatalogId($db, 'ticket_grupos', ['sin asignar', 'no asignado', 'mesa', 'soporte']),
+			'grupo_id' => $this->resolveFallbackGroupId($db),
 		];
+	}
+
+	private function resolveFallbackGroupId(PDO $db): ?int
+	{
+		$groups = $this->loadTicketGroups($db);
+		if (empty($groups)) {
+			return null;
+		}
+
+		foreach ($groups as $group) {
+			$norm = (string) ($group['norm'] ?? '');
+			if ($norm === 'sin asignar' || $norm === 'no asignado') {
+				return (int) ($group['id'] ?? 0);
+			}
+		}
+
+		foreach ($groups as $group) {
+			$norm = (string) ($group['norm'] ?? '');
+			if (str_contains($norm, 'sin asignar') || str_contains($norm, 'no asignado')) {
+				return (int) ($group['id'] ?? 0);
+			}
+		}
+
+		return null;
+	}
+
+	private function guessGroupIdFromEmail(PDO $db, array $email, ?int $fallbackGroupId): ?int
+	{
+		$groups = $this->loadTicketGroups($db);
+		if (empty($groups)) {
+			return $fallbackGroupId;
+		}
+
+		// 1) Mapeo directo por prefijo de email de la cuenta destino (más fiable)
+		$accountEmail = trim((string) ($email['account_email'] ?? ''));
+		if ($accountEmail !== '') {
+			$byDirect = $this->resolveGroupByDirectEmailMap($groups, $accountEmail);
+			if ($byDirect !== null) {
+				return $byDirect;
+			}
+		}
+
+		// 2) Detección por palabras clave en asunto + cuerpo
+		$searchText = $this->normalizeCatalogText(
+			(string) ($email['subject'] ?? '') . ' ' .
+			(string) ($email['body_text'] ?? '') . ' ' .
+			(string) ($email['from_name'] ?? '') . ' ' .
+			(string) ($email['from_email'] ?? '')
+		);
+
+		if ($searchText !== '') {
+			$intent = $this->detectIntentFromText($searchText);
+			if ($intent !== null) {
+				$groupId = $this->resolveGroupIdByIntent($groups, $intent);
+				if ($groupId !== null) {
+					return $groupId;
+				}
+			}
+		}
+
+		return $fallbackGroupId;
+	}
+
+	private function resolveGroupByDirectEmailMap(array $groups, string $accountEmail): ?int
+	{
+		$local = strtolower(trim((string) strstr($accountEmail, '@', true) ?: $accountEmail));
+		$local = preg_replace('/[^a-z0-9]/', '', $local) ?? $local; // quitar puntos, guiones
+
+		// Mapeo local-de-email -> nombre(s) de grupo (en orden de preferencia)
+		$map = [
+			'matriculas'          => ['admisiones'],
+			'admisiones'          => ['admisiones'],
+			'proveedores'         => ['facturacion', 'contabildiad'],
+			'facturacion'         => ['facturacion', 'contabildiad'],
+			'contabilidad'        => ['facturacion', 'contabildiad'],
+			'soporte'             => ['soporte'],
+			'mesadeayuda'         => ['soporte'],
+			'helpdesk'            => ['soporte'],
+			'info'                => [], // sin grupo fijo: depende de contenido
+			'ptitulacion'         => ['titulacion'],
+			'titulacion'          => ['titulacion'],
+			'investigacion'       => ['investigacion'],
+			'rectorado'           => ['rectorado'],
+			'practicas'           => ['practicas pre profesionales'],
+			'vinculacion'         => ['vinculacion con la sociedad'],
+			'direcciondocencia'   => ['docencia'],
+			'docencia'            => ['docencia'],
+			'ingles'              => ['docencia'],
+			'becas'               => ['bienestar institucional'],
+			'bienestar'           => ['bienestar institucional'],
+			'secretariageneral'   => ['secretaria general'],
+			'secretaria'          => ['secretaria general'],
+			'relacionesinternacionales' => ['relaciones interinstitucionales'],
+			'relaciones'          => ['relaciones interinstitucionales'],
+			'administrativo'      => ['administrativo'],
+			'administracion'      => ['administrativo'],
+		];
+
+		$candidates = $map[$local] ?? null;
+		if ($candidates === null || empty($candidates)) {
+			return null;
+		}
+
+		foreach ($candidates as $candidate) {
+			$candidateNorm = $this->normalizeCatalogText($candidate);
+			foreach ($groups as $group) {
+				$norm = (string) ($group['norm'] ?? '');
+				if (str_contains($norm, $candidateNorm)) {
+					return (int) ($group['id'] ?? 0);
+				}
+			}
+		}
+
+		return null;
+	}
+
+	private function detectIntentFromText(string $searchText): ?string
+	{
+		// Normalizar el texto aquí también, por si llega sin normalizar
+		$searchText = $this->normalizeCatalogText($searchText);
+
+		$rules = [
+			'admisiones' => ['matricula', 'matriculas', 'inscripcion', 'admis', 'postulacion'],
+			'facturacion' => ['factura', 'facturacion', 'contabil', 'contabildiad', 'proveedor', 'proveedores', 'orden de compra', 'retencion', 'pago', 'pagos', 'comprobante', 'cuotas', 'cuota'],
+			'soporte' => ['soporte', 'mesa de ayuda', 'helpdesk', 'error', 'falla', 'incidencia', 'no puedo', 'problema', 'contrasena', 'clave', 'acceso', 'sistema', 'plataforma'],
+			'administrativo' => ['administrativo', 'administracion', 'tesoreria'],
+			'titulacion' => ['titulacion', 'tesis', 'sustentacion'],
+			'investigacion' => ['investigacion', 'innovacion', 'proyecto'],
+			'rectorado' => ['rectorado', 'rector', 'rectora'],
+			'practicas' => ['practicas', 'pre profesionales', 'pasantias'],
+			'vinculacion' => ['vinculacion', 'comunidad', 'sociedad', 'vinculo', 'vincular'],
+			'docencia' => ['docencia', 'docente', 'materia', 'asignatura', 'curso', 'carrera'],
+			'bienestar' => ['bienestar', 'psicologia', 'trabajo social', 'deportes', 'cultural', 'salud', 'becas','beca'],
+			'relaciones' => ['relaciones interinstitucionales', 'convenio', 'relacion'],
+			'secretaria' => ['secretaria general', 'certificado', 'tramite', 'constancia', 'legalizacion', 'legalizar', 'documento', 'homologacion'],
+		];
+
+		$intent = null;
+		$bestScore = 0;
+		foreach ($rules as $ruleIntent => $keywords) {
+			$score = 0;
+			foreach ($keywords as $keyword) {
+				if (str_contains($searchText, $this->normalizeCatalogText($keyword))) {
+					$score++;
+				}
+			}
+
+			if ($score > $bestScore) {
+				$bestScore = $score;
+				$intent = $ruleIntent;
+			}
+		}
+
+		return $bestScore > 0 ? $intent : null;
+	}
+
+	private function resolveGroupIdByIntent(array $groups, string $intent): ?int
+	{
+		$intentToGroupNames = [
+			'admisiones' => ['admisiones', 'admisión', 'inscripcion', 'postulacion'],
+			'matriculas' => ['matriculas'],
+			'facturacion' => ['facturacion', 'contabilidad', 'contabildiad', 'proveedores'],
+			'soporte' => ['soporte', 'mesa de ayuda'],
+			'administrativo' => ['administrativo'],
+			'titulacion' => ['titulacion'],
+			'investigacion' => ['investigacion'],
+			'rectorado' => ['rectorado'],
+			'practicas' => ['practicas pre profesionales', 'practicas'],
+			'vinculacion' => ['vinculacion con la sociedad', 'vinculacion'],
+			'docencia' => ['docencia'],
+			'bienestar' => ['bienestar institucional'],
+			'relaciones' => ['relaciones interinstitucionales'],
+			'secretaria' => ['secretaria general'],
+		];
+
+		$candidates = $intentToGroupNames[$intent] ?? [];
+		foreach ($candidates as $candidate) {
+			$candidateNorm = $this->normalizeCatalogText($candidate);
+			foreach ($groups as $group) {
+				$norm = (string) ($group['norm'] ?? '');
+				if (str_contains($norm, $candidateNorm)) {
+					return (int) ($group['id'] ?? 0);
+				}
+			}
+		}
+
+		return null;
+	}
+
+	private function loadTicketGroups(PDO $db): array
+	{
+		$rows = [];
+		try {
+			$stmt = $db->query("SELECT id, nombre FROM ticket_grupos WHERE estado = 'activo' ORDER BY id ASC");
+			$rows = $stmt ? ($stmt->fetchAll() ?: []) : [];
+		} catch (Throwable $e) {
+			$stmt = $db->query('SELECT id, nombre FROM ticket_grupos ORDER BY id ASC');
+			$rows = $stmt ? ($stmt->fetchAll() ?: []) : [];
+		}
+
+		return array_map(function (array $row): array {
+			return [
+				'id' => (int) ($row['id'] ?? 0),
+				'nombre' => (string) ($row['nombre'] ?? ''),
+				'norm' => $this->normalizeCatalogText((string) ($row['nombre'] ?? '')),
+			];
+		}, $rows);
+	}
+
+	private function normalizeCatalogText(string $value): string
+	{
+		$value = mb_strtolower(trim($value), 'UTF-8');
+		$replacements = [
+			'á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u', 'ü' => 'u', 'ñ' => 'n',
+		];
+		$value = strtr($value, $replacements);
+		$value = preg_replace('/\s+/', ' ', $value) ?? $value;
+		return $value;
+	}
+
+	private function resolveGroupNameByTicketId(PDO $db, int $ticketId): string
+	{
+		if ($ticketId <= 0) {
+			return '';
+		}
+
+		$stmt = $db->prepare('SELECT tg.nombre FROM tickets t LEFT JOIN ticket_grupos tg ON tg.id = t.grupo_id WHERE t.id = :id LIMIT 1');
+		$stmt->execute(['id' => $ticketId]);
+		return trim((string) ($stmt->fetchColumn() ?: ''));
 	}
 
 	private function pickCatalogId(PDO $db, string $table, array $preferredNames): ?int
@@ -348,9 +825,10 @@ class CorreoController extends Controller
 		}
 
 		foreach ($rows as $row) {
-			$name = strtolower(trim((string) ($row['nombre'] ?? '')));
+			$name = $this->normalizeCatalogText((string) ($row['nombre'] ?? ''));
 			foreach ($preferredNames as $pref) {
-				if ($name !== '' && str_contains($name, $pref)) {
+				$prefNorm = $this->normalizeCatalogText($pref);
+				if ($name !== '' && str_contains($name, $prefNorm)) {
 					return (int) $row['id'];
 				}
 			}
@@ -369,6 +847,43 @@ class CorreoController extends Controller
 		]);
 
 		return (bool) $stmt->fetchColumn();
+	}
+
+	private function findProcessedTicketId(PDO $db, array $email): ?int
+	{
+		$stmt = $db->prepare('SELECT ticket_id FROM mail_ticket_sync WHERE account_alias = :alias AND email_uid = :uid LIMIT 1');
+		$uid = trim((string) ($email['uid'] ?? ''));
+		$stmt->execute([
+			'alias' => (string) ($email['account_alias'] ?? ''),
+			'uid' => $uid,
+		]);
+
+		$ticketId = (int) $stmt->fetchColumn();
+		return $ticketId > 0 ? $ticketId : null;
+	}
+
+	private function updateTicketGroupIfNeeded(PDO $db, int $ticketId, int $newGroupId): bool
+	{
+		if ($ticketId <= 0 || $newGroupId <= 0) {
+			return false;
+		}
+
+		$stmtCurrent = $db->prepare('SELECT grupo_id FROM tickets WHERE id = :id LIMIT 1');
+		$stmtCurrent->execute(['id' => $ticketId]);
+		$current = $stmtCurrent->fetchColumn();
+		$currentGroupId = $current !== false ? (int) $current : 0;
+
+		if ($currentGroupId === $newGroupId) {
+			return false;
+		}
+
+		$stmtUpdate = $db->prepare('UPDATE tickets SET grupo_id = :grupo_id WHERE id = :id');
+		$stmtUpdate->execute([
+			'grupo_id' => $newGroupId,
+			'id' => $ticketId,
+		]);
+
+		return $stmtUpdate->rowCount() > 0;
 	}
 
 	private function markEmailProcessed(PDO $db, array $email, int $ticketId): void

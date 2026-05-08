@@ -377,9 +377,7 @@ class DashboardController extends Controller
 			$sql = "SELECT COALESCE(tg.nombre, 'No asignado') AS grupo, COUNT(*) AS total
 					FROM tickets t
 					LEFT JOIN ticket_grupos tg ON tg.id = t.grupo_id
-					LEFT JOIN ticket_estados te ON te.id = t.estado_id
 					WHERE t.estado = 'activo'
-					  AND (COALESCE(te.es_final, 0) = 0 OR te.id IS NULL)
 					GROUP BY tg.nombre
 					ORDER BY total DESC, grupo ASC
 					LIMIT 8";
