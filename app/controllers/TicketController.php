@@ -2,6 +2,47 @@
 
 class TicketController extends Controller
 {
+	public function dashboard(): void
+	{
+		Auth::requireAuth();
+
+		$stats = [
+			'sin_resolver' => 0,
+			'vencidos' => 0,
+			'vencen_hoy' => 0,
+		];
+		$porGrupo = [];
+		$ranking = [];
+
+		try {
+			$db = Database::getInstance()->connection();
+
+			$stats['sin_resolver'] = (int) $db->query("SELECT COUNT(*) FROM tickets t LEFT JOIN ticket_estados te ON te.id = t.estado_id WHERE t.estado = 'activo' AND (COALESCE(te.es_final, 0) = 0 OR te.id IS NULL)")->fetchColumn();
+			$stats['vencidos'] = (int) $db->query("SELECT COUNT(*) FROM tickets t LEFT JOIN ticket_estados te ON te.id = t.estado_id WHERE t.estado = 'activo' AND t.fecha_resolucion IS NOT NULL AND DATE(t.fecha_resolucion) < CURDATE() AND (COALESCE(te.es_final, 0) = 0 OR te.id IS NULL)")->fetchColumn();
+			$stats['vencen_hoy'] = (int) $db->query("SELECT COUNT(*) FROM tickets t LEFT JOIN ticket_estados te ON te.id = t.estado_id WHERE t.estado = 'activo' AND t.fecha_resolucion IS NOT NULL AND DATE(t.fecha_resolucion) = CURDATE() AND (COALESCE(te.es_final, 0) = 0 OR te.id IS NULL)")->fetchColumn();
+
+			$porGrupo = $db->query("SELECT COALESCE(tg.nombre, 'No asignado') AS grupo, COUNT(*) AS total FROM tickets t LEFT JOIN ticket_grupos tg ON tg.id = t.grupo_id LEFT JOIN ticket_estados te ON te.id = t.estado_id WHERE t.estado = 'activo' AND (COALESCE(te.es_final, 0) = 0 OR te.id IS NULL) GROUP BY tg.nombre ORDER BY total DESC, grupo ASC LIMIT 6")->fetchAll() ?: [];
+
+			$ranking = $db->query("SELECT COALESCE(u.nombre, 'No asignado') AS agente, COUNT(*) AS total FROM tickets t LEFT JOIN usuarios u ON u.id = t.asignado_a WHERE t.estado = 'activo' GROUP BY u.nombre ORDER BY total DESC, agente ASC LIMIT 6")->fetchAll() ?: [];
+		} catch (Throwable $e) {
+			$stats = [
+				'sin_resolver' => 0,
+				'vencidos' => 0,
+				'vencen_hoy' => 0,
+			];
+			$porGrupo = [];
+			$ranking = [];
+		}
+
+		$this->view('tickets/dashboard', [
+			'stats' => $stats,
+			'porGrupo' => $porGrupo,
+			'ranking' => $ranking,
+		], [
+			'title' => 'Dashboard Tickets',
+		]);
+	}
+
 	public function index(): void
 	{
 		Auth::requireAuth();

@@ -3,7 +3,10 @@
 	<div class="container-fluid py-4">
 		<div class="d-flex justify-content-between align-items-center mb-3">
 			<h1 class="h3 m-0">Mesa de ayuda</h1>
-			<a class="btn btn-primary" href="<?= e(base_url('tickets/create')) ?>">Nuevo ticket</a>
+			<div class="d-flex gap-2">
+				<a class="btn btn-outline-primary" href="<?= e(base_url('tickets/dashboard')) ?>">Dashboard</a>
+				<a class="btn btn-primary" href="<?= e(base_url('tickets/create')) ?>">Nuevo ticket</a>
+			</div>
 		</div>
 
 		<?php if ($success = get_flash('success')): ?>

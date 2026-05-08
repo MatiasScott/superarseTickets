@@ -10,7 +10,7 @@ return static function (Router $router): void {
 	$router->post('/change-password', 'AuthController@changePassword');
 
 	$router->get('/dashboard', 'DashboardController@index');
-	$router->get('/tickets/dashboard', 'DashboardController@index');
+	$router->get('/tickets/dashboard', 'TicketController@dashboard');
 	$router->get('/configuracion', 'ConfiguracionController@index');
 	$router->post('/configuracion/mail', 'ConfiguracionController@saveMail');
 	$router->post('/configuracion/whatsapp', 'ConfiguracionController@saveWhatsApp');

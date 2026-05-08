@@ -1,3 +1,156 @@
 .module-page textarea.form-control {
     resize: vertical;
 }
+
+.tickets-dashboard {
+    color: #334155;
+}
+
+.tickets-dashboard .ticket-block {
+    background: #fff;
+    border: 1px solid #dbe4f0;
+    border-radius: 10px;
+    padding: 14px;
+}
+
+.tickets-dashboard .ticket-block-head {
+    font-weight: 700;
+    font-size: .9rem;
+    color: #38506d;
+    margin-bottom: 12px;
+}
+
+.tickets-dashboard .ticket-block-head.split,
+.tickets-dashboard .ticket-block-head.tabs {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.tickets-dashboard .ticket-block-head a {
+    color: #2563eb;
+    text-decoration: none;
+    font-size: .8rem;
+    font-weight: 600;
+}
+
+.tickets-dashboard .ticket-block-head a:hover {
+    text-decoration: underline;
+}
+
+.tickets-dashboard .trend-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.tickets-dashboard .trend-card {
+    border: 1px solid #e6edf7;
+    border-radius: 10px;
+    background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+    min-height: 164px;
+    padding: 18px 14px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+}
+
+.tickets-dashboard .trend-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    border: 1px solid #dbe8f6;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 4px;
+    color: #6b7f98;
+    font-size: 1.1rem;
+    background: #eef4fb;
+}
+
+.tickets-dashboard .trend-value {
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: #1f3652;
+}
+
+.tickets-dashboard .trend-label {
+    font-size: .82rem;
+    color: #6c7f95;
+}
+
+.tickets-dashboard .summary-table > div {
+    display: flex;
+    justify-content: space-between;
+    border-top: 1px solid #edf2f8;
+    padding: 8px 0;
+    font-size: .9rem;
+}
+
+.tickets-dashboard .summary-table > div:first-child {
+    border-top: 0;
+}
+
+.tickets-dashboard .summary-table strong {
+    color: #1e3a5f;
+}
+
+.tickets-dashboard .tab {
+    font-size: .8rem;
+    color: #8a9ab0;
+    padding-bottom: 6px;
+    border-bottom: 2px solid transparent;
+}
+
+.tickets-dashboard .tab.active {
+    color: #2563eb;
+    border-bottom-color: #2563eb;
+    font-weight: 700;
+}
+
+.tickets-dashboard .empty-panel {
+    min-height: 120px;
+    border: 1px dashed #d8e2ef;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 8px;
+    text-align: center;
+    color: #8193a8;
+    font-size: .86rem;
+    padding: 14px;
+}
+
+.tickets-dashboard .empty-panel.small {
+    min-height: 100px;
+}
+
+.tickets-dashboard .empty-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    background: #eef3fa;
+    color: #7e8fa5;
+    border: 1px solid #dbe5f1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+}
+
+.tickets-dashboard .empty-copy {
+    margin: 0;
+    color: #8fa0b4;
+    font-size: .85rem;
+}
+
+@media (max-width: 992px) {
+    .tickets-dashboard .trend-grid {
+        grid-template-columns: 1fr;
+    }
+}
