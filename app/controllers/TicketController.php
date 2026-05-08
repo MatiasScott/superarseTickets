@@ -59,15 +59,53 @@ class TicketController extends Controller
 	public function index(): void
 	{
 		Auth::requireAuth();
-		$tickets = [];
 
+		$tickets  = [];
+		$estados  = [];
+		$prioridades = [];
+		$tipos    = [];
+		$grupos   = [];
+		$usuarios = [];
+
+		// Filtros activos desde GET
+		$filters = [
+			'estado_id'    => trim((string) ($_GET['estado_id']    ?? '')),
+			'prioridad_id' => trim((string) ($_GET['prioridad_id'] ?? '')),
+			'tipo_id'      => trim((string) ($_GET['tipo_id']      ?? '')),
+			'grupo_id'     => trim((string) ($_GET['grupo_id']     ?? '')),
+			'asignado_id'  => trim((string) ($_GET['asignado_id']  ?? '')),
+			'buscar'       => trim((string) ($_GET['buscar']       ?? '')),
+		];
+		$activeFilters = array_filter($filters, function($v) { return $v !== ''; });
+
+		// Cargar catálogos (errores aquí no deben ocultar tickets)
 		try {
-			$tickets = (new Ticket())->getAllDetailed(100);
+			$db = Database::getInstance()->connection();
+			$estados     = $db->query("SELECT id, nombre FROM ticket_estados ORDER BY nombre")->fetchAll() ?: [];
+			$prioridades = $db->query("SELECT id, nombre FROM ticket_prioridades ORDER BY nombre")->fetchAll() ?: [];
+			$tipos       = $db->query("SELECT id, nombre FROM ticket_tipos ORDER BY nombre")->fetchAll() ?: [];
+
+			// Intentar con columna activo, si falla traer todos
+			try {
+				$grupos = $db->query("SELECT id, nombre FROM ticket_grupos WHERE activo = 1 ORDER BY nombre")->fetchAll() ?: [];
+			} catch (Throwable $eg) {
+				$grupos = $db->query("SELECT id, nombre FROM ticket_grupos ORDER BY nombre")->fetchAll() ?: [];
+			}
+
+			$usuarios = $db->query("SELECT id, nombre FROM usuarios WHERE estado = 'activo' ORDER BY nombre")->fetchAll() ?: [];
 		} catch (Throwable $e) {
-			$tickets = [];
+			// Los catálogos son opcionales para los filtros, continuar
 		}
 
-		$this->view('tickets/index', compact('tickets'), [
+		// Cargar tickets (siempre intentar)
+		try {
+			$tickets = (new Ticket())->getFiltered($activeFilters, 500);
+		} catch (Throwable $e) {
+			$tickets = [];
+			set_flash('error', 'No se pudieron cargar los tickets.');
+		}
+
+		$this->view('tickets/index', compact('tickets', 'filters', 'estados', 'prioridades', 'tipos', 'grupos', 'usuarios'), [
 			'title' => 'Tickets',
 		]);
 	}
