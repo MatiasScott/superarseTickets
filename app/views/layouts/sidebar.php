@@ -48,9 +48,6 @@
 				<a href="<?= e(base_url('crm/interesados')) ?>" class="sidebar-link">
 					<span class="icon">📇</span> Ver todo CRM
 				</a>
-				<a href="<?= e(base_url('catalogos/pipeline-estados')) ?>" class="sidebar-link">
-					<span class="icon">⚙️</span> Configuración
-				</a>
 			</div>
 		</div>
 

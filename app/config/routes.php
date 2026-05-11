@@ -48,6 +48,16 @@ return static function (Router $router): void {
 	$router->get('/crm/dashboard', 'CRMController@dashboard');
 	$router->get('/crm/interesados', 'CRMController@interesados');
 	$router->get('/crm/estudiantes', 'CRMController@estudiantes');
+	$router->get('/crm/getStudentDetail', 'CRMController@getStudentDetail');
+	$router->get('/crm/getStudentContactDetail', 'CRMController@getStudentContactDetail');
+	$router->post('/crm/updateStudentContact', 'CRMController@updateStudentContact');
+	$router->post('/crm/updateStudentState', 'CRMController@updateStudentState');
+	$router->get('/crm/getCRMPipelineHistory', 'CRMController@getCRMPipelineHistory');
+	$router->get('/crm/getStudentTicketsByEmail', 'CRMController@getStudentTicketsByEmail');
+	$router->get('/crm/getStudentNotes', 'CRMController@getStudentNotes');
+	$router->post('/crm/addStudentNote', 'CRMController@addStudentNote');
+	$router->post('/crm/updateStudentNote', 'CRMController@updateStudentNote');
+	$router->post('/crm/deleteStudentNote', 'CRMController@deleteStudentNote');
 
 	$router->get('/tickets', 'TicketController@index');
 	$router->get('/tickets/create', 'TicketController@create');

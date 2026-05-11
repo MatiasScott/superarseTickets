@@ -1,3 +1,436 @@
 .module-page .table-hover tbody tr:hover {
     background: #f7fbff;
 }
+
+.crm-kpi-card {
+    border-left: 4px solid #2f80ed;
+}
+
+.crm-kpi-card.accent-success {
+    border-left-color: #2ea66b;
+}
+
+.crm-filter-pill {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid #d8e4f2;
+    border-radius: 999px;
+    padding: 6px 12px;
+    color: #4b6886;
+    background: #f7fbff;
+    font-size: .88rem;
+}
+
+/* Estilos para Student Detail Modal */
+.student-detail-link {
+    color: #2f80ed;
+    text-decoration: none;
+    font-weight: 500;
+    cursor: pointer;
+    transition: color 0.2s ease;
+}
+
+.student-detail-link:hover {
+    color: #1e5ba3;
+    text-decoration: underline;
+}
+
+#studentDetailModal .card {
+    border: 1px solid #e4ecf6;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+#studentDetailModal .card-header {
+    border-bottom: 1px solid #e4ecf6;
+}
+
+#studentDetailModal .card-body {
+    padding: 1.25rem;
+}
+
+#studentDetailModal .form-label {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #607891;
+}
+
+#studentDetailModal p {
+    color: #2c3e50;
+    font-size: 0.95rem;
+}
+
+#studentDetailModal .card-sm {
+    border: 1px solid #e4ecf6;
+}
+
+#notesList {
+    border: 1px solid #e4ecf6;
+    border-radius: 4px;
+    padding: 0.75rem;
+    background-color: #fafbfd;
+}
+
+#notesList .card {
+    border: 1px solid #d8e4f2;
+    background-color: white;
+}
+
+#notesList .card-body {
+    background-color: white;
+}
+
+#studentDetailModal .btn-primary {
+    background-color: #2f80ed;
+    border-color: #2f80ed;
+}
+
+#studentDetailModal .btn-primary:hover {
+    background-color: #1e5ba3;
+    border-color: #1e5ba3;
+}
+
+#studentDetailModal .btn-success {
+    background-color: #2ea66b;
+    border-color: #2ea66b;
+}
+
+#studentDetailModal .btn-success:hover {
+    background-color: #1d7d4e;
+    border-color: #1d7d4e;
+}
+
+/* Botones de acciones en notas */
+.note-item {
+    position: relative;
+    transition: background-color 0.2s ease;
+}
+
+.note-item:hover {
+    background-color: #f8f9fa;
+}
+
+.note-actions {
+    opacity: 0.6;
+    transition: opacity 0.2s ease;
+}
+
+.note-item:hover .note-actions {
+    opacity: 1;
+}
+
+.edit-note-btn,
+.delete-note-btn {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.875rem;
+    border: 1px solid #dee2e6;
+    background-color: white;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.edit-note-btn:hover {
+    background-color: #e7f1ff;
+    border-color: #2f80ed;
+    color: #2f80ed;
+}
+
+.delete-note-btn:hover {
+    background-color: #ffe7e7;
+    border-color: #dc3545;
+    color: #dc3545;
+}
+
+.note-text {
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+
+.contact-extra-row .contact-extra-input {
+    border-right: 0;
+}
+
+.contact-extra-row .contact-remove-extra {
+    min-width: 82px;
+}
+
+#crmFilterName,
+#crmFilterCareer {
+    background: #fff;
+}
+
+#crmFilterClear {
+    white-space: nowrap;
+}
+
+.pipeline-edit-shell {
+    background: #f6f9fc;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 14px;
+}
+
+.pipeline-topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+
+.pipeline-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    font-weight: 700;
+    background: #ffd9d9;
+    color: #c24848;
+}
+
+.pipeline-student-name {
+    font-size: 1rem;
+    font-weight: 800;
+    color: #17324d;
+}
+
+.pipeline-student-meta {
+    font-size: 0.82rem;
+    color: #6a7c90;
+}
+
+.pipeline-stage-wrap {
+    margin-top: 12px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+
+.pipeline-stage-title {
+    font-size: 0.86rem;
+    color: #556b82;
+    margin-bottom: 8px;
+}
+
+.pipeline-stage-list {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 8px;
+    padding-bottom: 2px;
+}
+
+.pipeline-stage-chip {
+    border: 1px solid #cad6e4;
+    border-radius: 999px;
+    background: #f8fbff;
+    color: #3f5872;
+    font-size: 0.78rem;
+    font-weight: 700;
+    padding: 6px 11px;
+    white-space: nowrap;
+    transition: all 0.2s ease;
+}
+
+.pipeline-stage-chip:hover {
+    border-color: #8fb8e7;
+    color: #1f4f84;
+}
+
+.pipeline-stage-chip.is-active {
+    background: #dff0ff;
+    border-color: #5fa0e8;
+    color: #11487d;
+}
+
+.pipeline-details-panel {
+    margin-top: 12px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 12px;
+}
+
+.pipeline-details-head {
+    font-size: 1rem;
+    font-weight: 800;
+    color: #17324d;
+    margin-bottom: 10px;
+}
+
+.pipeline-detail-label {
+    font-size: 0.78rem;
+    color: #668199;
+    margin-bottom: 3px;
+}
+
+.pipeline-detail-value {
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: #1e3f5f;
+    min-height: 18px;
+}
+
+.pipeline-history-panel {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 12px;
+}
+
+.pipeline-history-list {
+    max-height: 180px;
+    overflow-y: auto;
+    display: grid;
+    gap: 8px;
+}
+
+.pipeline-history-item {
+    border: 1px solid #e6edf5;
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: #f9fcff;
+}
+
+.pipeline-history-text {
+    font-size: 0.9rem;
+    color: #17324d;
+    font-weight: 600;
+}
+
+.pipeline-history-meta {
+    font-size: 0.78rem;
+    color: #6e8297;
+    margin-top: 2px;
+}
+
+/* Improved Activity Items */
+.activity-item {
+    padding: 1rem;
+    margin-bottom: 1rem;
+    border-left: 4px solid #2f80ed;
+    background-color: #f8fafc;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+}
+
+.activity-item:hover {
+    background-color: #f0f5fb;
+    box-shadow: 0 2px 4px rgba(47, 128, 237, 0.1);
+}
+
+.activity-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 0.75rem;
+    gap: 1rem;
+}
+
+.activity-user {
+    color: #1e3a5f;
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.activity-date {
+    color: #7a94b0;
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+
+.activity-action {
+    color: #3d5a80;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    word-break: break-word;
+}
+
+/* Improved Ticket Items */
+.ticket-date-group {
+    display: block;
+    margin: 1.25rem 0 0.75rem 0;
+    padding-bottom: 0.75rem;
+    border-bottom: 2px solid #e4ecf6;
+}
+
+.ticket-date {
+    color: #2f80ed;
+    font-size: 0.9rem;
+    font-weight: 600;
+    display: block;
+}
+
+.ticket-item {
+    padding: 0.875rem;
+    margin-bottom: 0.75rem;
+    border: 1px solid #d8e4f2;
+    border-radius: 6px;
+    background-color: #ffffff;
+    transition: all 0.2s ease;
+}
+
+.ticket-item:hover {
+    border-color: #2f80ed;
+    background-color: #f7faff;
+    box-shadow: 0 2px 6px rgba(47, 128, 237, 0.12);
+}
+
+.ticket-subject {
+    color: #1e3a5f;
+    font-weight: 600;
+    font-size: 0.95rem;
+    margin-bottom: 0.4rem;
+}
+
+.ticket-link {
+    color: #1e3a5f;
+    text-decoration: none;
+}
+
+.ticket-link:hover {
+    color: #2f80ed;
+    text-decoration: underline;
+}
+
+.ticket-desc {
+    font-size: 0.85rem;
+    color: #7a94b0;
+    display: block;
+    line-height: 1.35;
+    margin-bottom: 0.5rem;
+}
+
+/* Tab Styling */
+.nav-tabs {
+    border-bottom: 2px solid #e4ecf6;
+}
+
+.nav-tabs .nav-link {
+    color: #607891;
+    border: none;
+    border-bottom: 3px solid transparent;
+    font-size: 0.95rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    padding: 0.75rem 1rem;
+}
+
+.nav-tabs .nav-link:hover {
+    color: #2f80ed;
+    border-bottom-color: #d8e4f2;
+}
+
+.nav-tabs .nav-link.active {
+    color: #2f80ed;
+    border-bottom-color: #2f80ed;
+    background: transparent;
+}
+
+.tab-content {
+    min-height: 200px;
+}
