@@ -16,9 +16,6 @@
 				<a href="<?= e(base_url('tickets')) ?>" class="sidebar-link">
 					<span class="icon">🎫</span> Ver todos los tickets
 				</a>
-				<a href="<?= e(base_url('catalogos/ticket-estados')) ?>" class="sidebar-link">
-					<span class="icon">⚙️</span> Configuración
-				</a>
 			</div>
 		</div>
 
@@ -34,9 +31,6 @@
 				</a>
 				<a href="<?= e(base_url('correo')) ?>" class="sidebar-link">
 					<span class="icon">📨</span> Ver todos los chats
-				</a>
-				<a href="<?= e(base_url('configuracion')) ?>" class="sidebar-link">
-					<span class="icon">⚙️</span> Configuración
 				</a>
 			</div>
 		</div>

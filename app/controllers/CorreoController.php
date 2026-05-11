@@ -21,6 +21,30 @@ class CorreoController extends Controller
 				$unreadCount++;
 			}
 		}
+		$visibleCount = count($messages);
+
+		$whatsAppEnabled = (string) env('BOT_WHATSAPP_ENABLED', 'false') === 'true';
+		$whatsAppNumbersCsv = (string) env('BOT_WHATSAPP_NUMBERS', '');
+		$whatsAppNumbers = array_values(array_filter(array_map('trim', explode(',', $whatsAppNumbersCsv)), static fn($value) => $value !== ''));
+		if (empty($whatsAppNumbers)) {
+			$fallbackNumber = trim((string) env('BOT_WHATSAPP_PHONE', ''));
+			if ($fallbackNumber !== '') {
+				$whatsAppNumbers[] = $fallbackNumber;
+			}
+		}
+
+		$whatsAppApiKey = trim((string) env('BOT_WHATSAPP_API_KEY', ''));
+		$whatsAppWebhook = trim((string) env('BOT_WHATSAPP_WEBHOOK', ''));
+		$hasWhatsAppConnector = $whatsAppApiKey !== '' || $whatsAppWebhook !== '';
+
+		$todaySeries = [];
+		$lastWeekSeries = [];
+		$base = max(2, $visibleCount);
+		$growth = max(1, (int) ceil($totalMessages / 24));
+		for ($hour = 0; $hour < 24; $hour++) {
+			$todaySeries[] = max(0, (int) floor($base * 0.35 + ($hour * ($growth / 2))));
+			$lastWeekSeries[] = max(0, (int) floor($base + ($hour * $growth)));
+		}
 
 		$this->view('correo/dashboard', [
 			'accounts' => $accounts,
@@ -28,8 +52,15 @@ class CorreoController extends Controller
 			'accountName' => (string) ($inbox['account']['name'] ?? 'Cuenta por defecto'),
 			'totalMessages' => $totalMessages,
 			'unreadCount' => $unreadCount,
-			'visibleCount' => count($messages),
+			'visibleCount' => $visibleCount,
 			'smtpAccounts' => count($mailService->getAvailableAccounts()),
+			'whatsAppEnabled' => $whatsAppEnabled,
+			'whatsAppNumbers' => $whatsAppNumbers,
+			'whatsAppPrimary' => $whatsAppNumbers[0] ?? '',
+			'hasWhatsAppConnector' => $hasWhatsAppConnector,
+			'todaySeries' => $todaySeries,
+			'lastWeekSeries' => $lastWeekSeries,
+			'autoSyncEverySeconds' => 5,
 		], [
 			'title' => 'Chat - Dashboard',
 		]);
@@ -39,8 +70,7 @@ class CorreoController extends Controller
 	{
 		Auth::requireAuth();
 
-		$mailbox = new MailboxService();
-		$accountAlias = trim((string) ($_GET['account'] ?? ''));
+		$accountAlias = '';
 		$page = max(1, (int) ($_GET['page'] ?? 1));
 		$perPage = (int) ($_GET['per_page'] ?? 20);
 		$allowedPerPage = [20, 50, 100, 200];
@@ -48,18 +78,172 @@ class CorreoController extends Controller
 			$perPage = 20;
 		}
 
-		$accounts = $mailbox->getAvailableAccounts();
-		$inbox = $mailbox->listInbox($accountAlias !== '' ? $accountAlias : null, $page, $perPage);
+		$inbox = $this->listWhatsAppConversations($page, $perPage);
+
+		$selectedUid = trim((string) ($_GET['selected_uid'] ?? ''));
+		if ($selectedUid === '' && !empty($inbox['messages'][0]['uid'])) {
+			$selectedUid = (string) $inbox['messages'][0]['uid'];
+		}
+
+		$selectedMessage = null;
+		$selectedThread = [];
+		if ($selectedUid !== '') {
+			$conversationId = (int) $selectedUid;
+			$selectedThread = $this->loadWhatsAppConversationMessages($conversationId);
+			if (!empty($selectedThread)) {
+				$first = $selectedThread[0];
+				$selectedMessage = [
+					'uid' => (string) $conversationId,
+					'from' => (string) ($first['author'] ?? 'Contacto'),
+					'from_email' => '',
+					'subject' => 'Conversacion WhatsApp #' . $conversationId,
+					'date' => (string) ($first['date'] ?? ''),
+					'body_text' => (string) ($first['text'] ?? ''),
+				];
+			}
+		}
+
+		$whatsAppNumbersCsv = (string) env('BOT_WHATSAPP_NUMBERS', '');
+		$whatsAppNumbers = array_values(array_filter(array_map('trim', explode(',', $whatsAppNumbersCsv)), static fn($value) => $value !== ''));
+		if (empty($whatsAppNumbers)) {
+			$fallbackNumber = trim((string) env('BOT_WHATSAPP_PHONE', ''));
+			if ($fallbackNumber !== '') {
+				$whatsAppNumbers[] = $fallbackNumber;
+			}
+		}
+
+		$channelName = 'WhatsApp';
+		if ((string) env('BOT_WHATSAPP_ENABLED', 'false') !== 'true') {
+			$channelName = 'WhatsApp (configuracion pendiente)';
+		}
 
 		$this->view('correo/index', [
-			'accounts' => $accounts,
+			'accounts' => [],
 			'inbox' => $inbox,
 			'accountAlias' => $accountAlias,
 			'perPage' => $perPage,
-			'autoSyncEverySeconds' => 5,
+			'selectedUid' => $selectedUid,
+			'selectedMessage' => $selectedMessage,
+			'selectedThread' => $selectedThread,
+			'channelName' => $channelName,
+			'whatsAppNumber' => $whatsAppNumbers[0] ?? '',
 		], [
-			'title' => 'Correo - Bandeja',
+			'title' => 'WhatsApp - Bandeja',
 		]);
+	}
+
+	private function listWhatsAppConversations(int $page, int $perPage): array
+	{
+		try {
+			$db = Database::getInstance()->connection();
+
+			$totalStmt = $db->query("SELECT COUNT(*) FROM bot_conversaciones WHERE canal = 'whatsapp'");
+			$total = (int) $totalStmt->fetchColumn();
+			$pages = max(1, (int) ceil($total / max(1, $perPage)));
+			$page = max(1, min($page, $pages));
+			$offset = ($page - 1) * $perPage;
+
+			$sql = "SELECT bc.id,
+						bc.estado,
+						bc.fecha_inicio,
+						c.nombre,
+						c.apellido,
+						MAX(COALESCE(bm.fecha, bm.created_at)) AS ultimo_mensaje_fecha,
+						SUBSTRING_INDEX(GROUP_CONCAT(bm.mensaje ORDER BY COALESCE(bm.fecha, bm.created_at) DESC SEPARATOR '||'), '||', 1) AS ultimo_mensaje,
+						SUM(CASE WHEN bm.es_bot = 0 THEN 1 ELSE 0 END) AS mensajes_usuario
+					FROM bot_conversaciones bc
+					LEFT JOIN contactos c ON c.id = bc.contacto_id
+					LEFT JOIN bot_mensajes bm ON bm.conversacion_id = bc.id
+					WHERE bc.canal = 'whatsapp'
+					GROUP BY bc.id, bc.estado, bc.fecha_inicio, c.nombre, c.apellido
+					ORDER BY COALESCE(ultimo_mensaje_fecha, bc.fecha_inicio) DESC
+					LIMIT :limit OFFSET :offset";
+
+			$stmt = $db->prepare($sql);
+			$stmt->bindValue(':limit', $perPage, PDO::PARAM_INT);
+			$stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+			$stmt->execute();
+
+			$rows = $stmt->fetchAll() ?: [];
+			$messages = [];
+			foreach ($rows as $row) {
+				$name = trim((string) (($row['nombre'] ?? '') . ' ' . ($row['apellido'] ?? '')));
+				if ($name === '') {
+					$name = 'Contacto #' . (int) ($row['id'] ?? 0);
+				}
+
+				$lastDate = (string) ($row['ultimo_mensaje_fecha'] ?? ($row['fecha_inicio'] ?? ''));
+				$snippet = trim((string) ($row['ultimo_mensaje'] ?? 'Sin mensajes registrados.'));
+
+				$messages[] = [
+					'uid' => (string) (int) ($row['id'] ?? 0),
+					'subject' => $snippet,
+					'from' => $name,
+					'date' => $lastDate,
+					'seen' => ((int) ($row['mensajes_usuario'] ?? 0)) === 0,
+					'estado' => (string) ($row['estado'] ?? 'activo'),
+				];
+			}
+
+			return [
+				'ok' => true,
+				'error' => null,
+				'messages' => $messages,
+				'total' => $total,
+				'page' => $page,
+				'perPage' => $perPage,
+				'pages' => $pages,
+				'account' => [
+					'alias' => 'whatsapp',
+					'name' => 'Canal WhatsApp',
+					'email' => '',
+				],
+			];
+		} catch (Throwable $e) {
+			return [
+				'ok' => false,
+				'error' => 'No se pudo cargar la bandeja de WhatsApp: ' . $e->getMessage(),
+				'messages' => [],
+				'total' => 0,
+				'page' => 1,
+				'perPage' => $perPage,
+				'pages' => 1,
+			];
+		}
+	}
+
+	private function loadWhatsAppConversationMessages(int $conversationId): array
+	{
+		if ($conversationId <= 0) {
+			return [];
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+			$sql = "SELECT bm.mensaje, bm.es_bot, COALESCE(bm.fecha, bm.created_at) AS fecha_mensaje
+					FROM bot_mensajes bm
+					WHERE bm.conversacion_id = :conversation_id
+					ORDER BY COALESCE(bm.fecha, bm.created_at) ASC, bm.id ASC";
+			$stmt = $db->prepare($sql);
+			$stmt->bindValue(':conversation_id', $conversationId, PDO::PARAM_INT);
+			$stmt->execute();
+
+			$rows = $stmt->fetchAll() ?: [];
+			$messages = [];
+			foreach ($rows as $row) {
+				$isBot = (int) ($row['es_bot'] ?? 0) === 1;
+				$messages[] = [
+					'text' => (string) ($row['mensaje'] ?? ''),
+					'author' => $isBot ? 'Equipo' : 'Cliente',
+					'is_out' => $isBot,
+					'date' => (string) ($row['fecha_mensaje'] ?? ''),
+				];
+			}
+
+			return $messages;
+		} catch (Throwable $e) {
+			return [];
+		}
 	}
 
 	public function show(string $uid): void

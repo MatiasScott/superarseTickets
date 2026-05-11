@@ -1,12 +1,10 @@
 <div class="container-fluid py-4">
-	<?php $autoSyncSummary = $autoSyncSummary ?? null; ?>
-	<?php $autoSyncEverySeconds = max(5, (int) ($autoSyncEverySeconds ?? 5)); ?>
 	<div class="d-flex justify-content-between align-items-center mb-3">
 		<div>
-			<h2 class="mb-1">Bandeja de Correo</h2>
-			<p class="text-muted mb-0">Lee, envia y responde mensajes de tus cuentas configuradas.</p>
+			<h2 class="mb-1">Bandeja de Entrada del Equipo</h2>
+			<p class="text-muted mb-0">Conversaciones del canal WhatsApp.</p>
 		</div>
-		<a class="btn btn-primary" href="<?= e(base_url('correo/compose')) ?>">Redactar</a>
+		<a class="btn btn-outline-secondary" href="<?= e(base_url('chat/dashboard')) ?>">Ir al panel</a>
 	</div>
 
 	<?php if ($msg = get_flash('success')): ?>
@@ -16,119 +14,116 @@
 		<div class="alert alert-danger"><?= e($msg) ?></div>
 	<?php endif; ?>
 
-	<?php if (is_array($autoSyncSummary)): ?>
-		<?php $autoSyncData = $autoSyncSummary; ?>
-		<?php $autoCreated = (int) ($autoSyncData['created'] ?? 0); ?>
-		<?php $autoErrors = is_array($autoSyncData['errors'] ?? []) ? $autoSyncData['errors'] : []; ?>
-		<?php if ($autoCreated > 0): ?>
-			<div class="alert alert-info">
-				Auto-sync: se crearon <?= e((string) $autoCreated) ?> ticket(s) nuevos al actualizar la bandeja.
-			</div>
-		<?php elseif (!empty($autoErrors)): ?>
-			<div class="alert alert-warning">
-				Auto-sync con advertencias: <?= e((string) $autoErrors[0]) ?>
-			</div>
-		<?php endif; ?>
-	<?php endif; ?>
-
-	<div
-		id="correoAutoSyncStatus"
-		class="alert alert-secondary d-flex flex-wrap justify-content-between align-items-center gap-2"
-		data-auto-sync-interval-ms="<?= e((string) ($autoSyncEverySeconds * 1000)) ?>"
-		data-auto-sync-url="<?= e(base_url('correo/sync-tickets/auto')) ?>"
-	>
-		<div>
-			<strong>Auto-sync:</strong>
-			<span data-sync-status-text>Activo</span>
-			<span class="text-muted">(cada <?= e((string) $autoSyncEverySeconds) ?> segundos)</span>
-		</div>
-		<div class="small text-muted" data-sync-last-run>Esperando primera ejecucion...</div>
-	</div>
-
-	<div class="card mb-3">
-		<div class="card-body">
-			<div class="row g-2 align-items-end">
-				<form method="GET" action="<?= e(base_url('correo')) ?>" class="col-md-8 row g-2 align-items-end m-0 p-0">
-					<div class="col-md-6">
-					<label class="form-label">Cuenta</label>
-					<select class="form-select" name="account">
-						<option value="">Default</option>
-						<?php foreach (($accounts ?? []) as $acc): ?>
-							<option value="<?= e($acc['alias']) ?>" <?= (($accountAlias ?? '') === $acc['alias']) ? 'selected' : '' ?>>
-								<?= e($acc['name'] . ' (' . $acc['email'] . ')') ?>
-							</option>
-						<?php endforeach; ?>
-					</select>
-					</div>
-					<div class="col-md-3">
-					<label class="form-label">Por pagina</label>
-					<select class="form-select" name="per_page">
-						<?php foreach ([20, 50, 100, 200] as $opt): ?>
-							<option value="<?= e((string) $opt) ?>" <?= ((int) ($perPage ?? 20) === $opt) ? 'selected' : '' ?>><?= e((string) $opt) ?></option>
-						<?php endforeach; ?>
-					</select>
-					</div>
-					<div class="col-md-3">
-					<button class="btn btn-outline-secondary w-100" type="submit">Actualizar</button>
-					</div>
-					<div class="col-md-12 col-lg-3">
-					<a class="btn btn-outline-primary w-100" href="<?= e(base_url('correo/verify?account=' . urlencode($accountAlias ?? '') . '&force=1')) ?>">Verificar Cuenta</a>
-					</div>
-				</form>
-
-				<form method="POST" action="<?= e(base_url('correo/sync-tickets')) ?>" class="col-md-4 m-0 p-0" id="correoSyncForm">
-					<?= csrf_field() ?>
-					<input type="hidden" name="account_alias" value="<?= e($accountAlias ?? '') ?>">
-					<button class="btn btn-success w-100" type="submit">Crear Tickets de Correos No Leidos</button>
-					<small class="text-muted d-block mt-1">Si la cuenta esta en Default, sincroniza todas las cuentas habilitadas.</small>
-				</form>
-			</div>
-		</div>
+	<div class="d-flex justify-content-end mb-2">
+		<form method="GET" action="<?= e(base_url('correo')) ?>" class="d-flex align-items-center gap-2">
+			<label class="form-label mb-0">Por pagina</label>
+			<select class="form-select" style="width: 110px;" name="per_page" onchange="this.form.submit()">
+				<?php foreach ([20, 50, 100, 200] as $opt): ?>
+					<option value="<?= e((string) $opt) ?>" <?= ((int) ($perPage ?? 20) === $opt) ? 'selected' : '' ?>><?= e((string) $opt) ?></option>
+				<?php endforeach; ?>
+			</select>
+		</form>
 	</div>
 
 	<?php if (!($inbox['ok'] ?? false)): ?>
 		<div class="alert alert-warning"><?= e($inbox['error'] ?? 'No se pudo leer la bandeja.') ?></div>
 	<?php else: ?>
-		<div class="card">
-			<div class="card-header d-flex justify-content-between">
-				<span>Total: <?= e((string) ($inbox['total'] ?? 0)) ?> mensajes</span>
-				<span>Pagina <?= e((string) ($inbox['page'] ?? 1)) ?> de <?= e((string) ($inbox['pages'] ?? 1)) ?></span>
+		<?php $selectedUidSafe = isset($selectedUid) ? (string) $selectedUid : ''; ?>
+		<?php $selectedMessageSafe = (isset($selectedMessage) && is_array($selectedMessage)) ? $selectedMessage : null; ?>
+		<?php $channelNameSafe = isset($channelName) ? (string) $channelName : 'WhatsApp'; ?>
+		<?php $whatsAppNumberSafe = isset($whatsAppNumber) ? (string) $whatsAppNumber : ''; ?>
+		<?php $selectedThreadSafe = (isset($selectedThread) && is_array($selectedThread)) ? $selectedThread : []; ?>
+
+		<div class="chat-inbox-shell card">
+			<div class="chat-inbox-left">
+				<div class="chat-inbox-left-head">
+					<strong>Todas las conversaciones</strong>
+					<span class="badge rounded-pill text-bg-secondary"><?= e((string) ($inbox['total'] ?? 0)) ?></span>
+				</div>
+				<div class="chat-inbox-list">
+					<?php foreach (($inbox['messages'] ?? []) as $chat): ?>
+						<?php $chatUid = (string) ($chat['uid'] ?? ''); ?>
+						<?php $isActive = $selectedUidSafe !== '' && $selectedUidSafe === $chatUid; ?>
+						<a class="chat-thread-item <?= $isActive ? 'active' : '' ?>" href="<?= e(base_url('correo?per_page=' . (int) ($perPage ?? 20) . '&page=' . (int) ($inbox['page'] ?? 1) . '&selected_uid=' . rawurlencode($chatUid))) ?>">
+							<div class="chat-thread-avatar"><?= e(strtoupper(substr((string) ($chat['from'] ?? 'U'), 0, 1))) ?></div>
+							<div class="chat-thread-main">
+								<div class="chat-thread-top">
+									<span class="chat-thread-name"><?= e((string) ($chat['from'] ?? 'Sin remitente')) ?></span>
+									<small><?= e((string) ($chat['date'] ?? '')) ?></small>
+								</div>
+								<div class="chat-thread-snippet">
+									<?= e((string) ($chat['subject'] ?? '(Sin mensaje)')) ?>
+								</div>
+								<div class="chat-thread-tags">
+									<span class="badge text-bg-light border"><?= e($channelNameSafe) ?></span>
+									<?php if (empty($chat['seen'])): ?>
+										<span class="badge text-bg-success">Nuevo</span>
+									<?php endif; ?>
+									<?php if (($chat['estado'] ?? '') === 'inactivo'): ?>
+										<span class="badge text-bg-secondary">Cerrado</span>
+									<?php endif; ?>
+								</div>
+							</div>
+						</a>
+					<?php endforeach; ?>
+					<?php if (empty($inbox['messages'])): ?>
+						<div class="p-3 text-muted">No hay conversaciones de WhatsApp registradas.</div>
+					<?php endif; ?>
+				</div>
 			</div>
-			<div class="table-responsive">
-				<table class="table table-hover mb-0">
-					<thead>
-						<tr>
-							<th>Asunto</th>
-							<th>De</th>
-							<th>Fecha</th>
-							<th></th>
-						</tr>
-					</thead>
-					<tbody>
-						<?php foreach (($inbox['messages'] ?? []) as $mail): ?>
-							<tr>
-								<td>
-									<?= !empty($mail['seen']) ? '' : '<strong>' ?><?= e($mail['subject']) ?><?= !empty($mail['seen']) ? '' : '</strong>' ?>
-								</td>
-								<td><?= e($mail['from']) ?></td>
-								<td><?= e($mail['date']) ?></td>
-								<td>
-									<a class="btn btn-sm btn-outline-primary" href="<?= e(base_url('correo/' . rawurlencode((string) ($mail['uid'] ?? '')) . '?account=' . urlencode($accountAlias ?? ''))) ?>">Abrir</a>
-								</td>
-							</tr>
+
+			<div class="chat-inbox-right">
+				<?php if ($selectedMessageSafe === null): ?>
+					<div class="chat-empty-state">
+						<h5 class="mb-2">Selecciona una conversacion</h5>
+						<p class="text-muted mb-0">Cuando elijas un chat de la lista izquierda, se mostrara aqui como hilo.</p>
+					</div>
+				<?php else: ?>
+					<div class="chat-conv-head">
+						<div>
+							<div class="chat-conv-title"><?= e((string) ($selectedMessageSafe['from'] ?? 'Contacto')) ?></div>
+							<div class="chat-conv-subtitle">
+								<?= e($channelNameSafe) ?>
+								<?php if ($whatsAppNumberSafe !== ''): ?>
+									| Linea: <?= e($whatsAppNumberSafe) ?>
+								<?php endif; ?>
+							</div>
+						</div>
+						<div class="d-flex gap-2">
+							<a class="btn btn-sm btn-outline-secondary" href="<?= e(base_url('chat/dashboard')) ?>">Panel</a>
+							<a class="btn btn-sm btn-primary" href="<?= e(base_url('configuracion')) ?>">Configurar canal</a>
+						</div>
+					</div>
+
+					<div class="chat-conv-body">
+						<?php foreach ($selectedThreadSafe as $threadMsg): ?>
+							<div class="chat-bubble <?= !empty($threadMsg['is_out']) ? 'chat-bubble-out' : 'chat-bubble-in' ?>">
+								<div class="chat-bubble-meta"><?= e((string) ($threadMsg['author'] ?? 'Mensaje')) ?></div>
+								<div style="white-space: pre-wrap;"><?= e((string) ($threadMsg['text'] ?? '')) ?></div>
+								<div class="chat-bubble-time"><?= e((string) ($threadMsg['date'] ?? '')) ?></div>
+							</div>
 						<?php endforeach; ?>
-						<?php if (empty($inbox['messages'])): ?>
-							<tr><td colspan="4" class="text-center text-muted py-4">No hay mensajes.</td></tr>
+						<?php if (empty($selectedThreadSafe)): ?>
+							<div class="chat-bubble chat-bubble-in">
+								<div class="chat-bubble-meta">Sistema</div>
+								<div>No hay mensajes en esta conversacion.</div>
+							</div>
 						<?php endif; ?>
-					</tbody>
-				</table>
+					</div>
+
+					<div class="chat-conv-footer">
+						<div class="text-muted small">Conversacion: <?= e((string) ($selectedMessageSafe['subject'] ?? 'WhatsApp')) ?></div>
+					</div>
+				<?php endif; ?>
 			</div>
-			<div class="card-body d-flex justify-content-between">
-				<?php $prev = max(1, (int) ($inbox['page'] ?? 1) - 1); ?>
-				<?php $next = min((int) ($inbox['pages'] ?? 1), (int) ($inbox['page'] ?? 1) + 1); ?>
-				<a class="btn btn-outline-secondary <?= ((int) ($inbox['page'] ?? 1) <= 1) ? 'disabled' : '' ?>" href="<?= e(base_url('correo?page=' . $prev . '&account=' . urlencode($accountAlias ?? '') . '&per_page=' . (int) ($perPage ?? 20))) ?>">Anterior</a>
-				<a class="btn btn-outline-secondary <?= ((int) ($inbox['page'] ?? 1) >= (int) ($inbox['pages'] ?? 1)) ? 'disabled' : '' ?>" href="<?= e(base_url('correo?page=' . $next . '&account=' . urlencode($accountAlias ?? '') . '&per_page=' . (int) ($perPage ?? 20))) ?>">Siguiente</a>
-			</div>
+		</div>
+
+		<div class="card-body d-flex justify-content-between">
+			<?php $prev = max(1, (int) ($inbox['page'] ?? 1) - 1); ?>
+			<?php $next = min((int) ($inbox['pages'] ?? 1), (int) ($inbox['page'] ?? 1) + 1); ?>
+			<a class="btn btn-outline-secondary <?= ((int) ($inbox['page'] ?? 1) <= 1) ? 'disabled' : '' ?>" href="<?= e(base_url('correo?page=' . $prev . '&per_page=' . (int) ($perPage ?? 20))) ?>">Anterior</a>
+			<span class="text-muted align-self-center">Pagina <?= e((string) ($inbox['page'] ?? 1)) ?> de <?= e((string) ($inbox['pages'] ?? 1)) ?></span>
+			<a class="btn btn-outline-secondary <?= ((int) ($inbox['page'] ?? 1) >= (int) ($inbox['pages'] ?? 1)) ? 'disabled' : '' ?>" href="<?= e(base_url('correo?page=' . $next . '&per_page=' . (int) ($perPage ?? 20))) ?>">Siguiente</a>
 		</div>
 	<?php endif; ?>
 </div>
