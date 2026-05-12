@@ -105,4 +105,18 @@ document.addEventListener('DOMContentLoaded', () => {
         closeOtherGroups(sidebarGroups[0]);
         setGroupState(sidebarGroups[0], true);
     }
+
+    const responsiveTables = document.querySelectorAll('.table-responsive[data-mobile-cards] table');
+    responsiveTables.forEach((table) => {
+        const headers = Array.from(table.querySelectorAll('thead th')).map((th) => (th.textContent || '').trim());
+        if (headers.length === 0) return;
+
+        table.querySelectorAll('tbody tr').forEach((row) => {
+            Array.from(row.children).forEach((cell, index) => {
+                if (!cell.getAttribute('data-label')) {
+                    cell.setAttribute('data-label', headers[index] || 'Dato');
+                }
+            });
+        });
+    });
 });

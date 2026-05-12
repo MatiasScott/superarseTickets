@@ -1,3 +1,66 @@
 .module-page h1 {
     color: #0f4c81;
 }
+
+.campanas-header {
+    border: 1px solid #dbe6f2;
+    border-radius: 12px;
+    padding: 14px 16px;
+    background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+}
+
+.campanas-header h1 i {
+    color: #1f61bd;
+    margin-right: 6px;
+}
+
+.campanas-filters {
+    border: 1px solid #dbe6f2;
+    border-radius: 12px;
+    background: #ffffff;
+    padding: 12px;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.campanas-filters .filter-group label {
+    display: block;
+    font-size: .8rem;
+    color: #5e758e;
+    margin-bottom: 4px;
+}
+
+.campanas-filters .filter-group label i {
+    margin-right: 4px;
+}
+
+.campanas-table-shell {
+    border: 1px solid #dbe6f2;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #ffffff;
+}
+
+.campanas-table-shell thead th {
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    font-size: .74rem;
+    color: #546d86;
+}
+
+.campanas-footer {
+    text-align: right;
+}
+
+@media (max-width: 992px) {
+    .campanas-filters {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 576px) {
+    .campanas-filters {
+        grid-template-columns: 1fr;
+    }
+}

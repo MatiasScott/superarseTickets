@@ -1,3 +1,60 @@
 .module-page table {
     background: #fff;
 }
+
+.relaciones-header {
+    border: 1px solid #dbe6f2;
+    border-radius: 12px;
+    padding: 14px 16px;
+    background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+}
+
+.relaciones-header h1 i {
+    color: #1f61bd;
+    margin-right: 6px;
+}
+
+.relaciones-filters {
+    border: 1px solid #dbe6f2;
+    border-radius: 12px;
+    background: #ffffff;
+    padding: 12px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.relaciones-filters .filter-group label {
+    display: block;
+    font-size: .8rem;
+    color: #5e758e;
+    margin-bottom: 4px;
+}
+
+.relaciones-filters .filter-group label i {
+    margin-right: 4px;
+}
+
+.relaciones-table-shell {
+    border: 1px solid #dbe6f2;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #ffffff;
+}
+
+.relaciones-table-shell thead th {
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    font-size: .74rem;
+    color: #546d86;
+}
+
+.relaciones-footer {
+    text-align: right;
+}
+
+@media (max-width: 768px) {
+    .relaciones-filters {
+        grid-template-columns: 1fr;
+    }
+}

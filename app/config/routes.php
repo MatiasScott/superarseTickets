@@ -104,7 +104,16 @@ return static function (Router $router): void {
 	$router->post('/tickets/{id}/note', 'TicketController@addNote');
 	$router->post('/tickets/{id}/properties', 'TicketController@updateProperties');
 
+	// Campañas de correo
 	$router->get('/campanas', 'CampanaController@index');
+	$router->get('/campanas/create', 'CampanaController@create');
+	$router->post('/campanas', 'CampanaController@store');
+	$router->get('/campanas/edit/{id}', 'CampanaController@edit');
+	$router->post('/campanas/update/{id}', 'CampanaController@update');
+	$router->post('/campanas/send/{id}', 'CampanaController@send');
+	$router->post('/campanas/delete/{id}', 'CampanaController@delete');
+	$router->get('/campanas/preview/{id}', 'CampanaController@preview');
+
 	$router->get('/bot', 'BotController@index');
 	$router->get('/relaciones', 'RelacionesController@index');
 	$router->get('/academico', 'ControlAcademicoController@index');

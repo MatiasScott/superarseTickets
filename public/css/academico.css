@@ -1,3 +1,60 @@
 .module-page td:nth-child(2) {
     font-weight: 700;
 }
+
+.academico-header {
+    border: 1px solid #dbe6f2;
+    border-radius: 12px;
+    padding: 14px 16px;
+    background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+}
+
+.academico-header h1 i {
+    color: #1f61bd;
+    margin-right: 6px;
+}
+
+.academico-filters {
+    border: 1px solid #dbe6f2;
+    border-radius: 12px;
+    background: #ffffff;
+    padding: 12px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.academico-filters .filter-group label {
+    display: block;
+    font-size: .8rem;
+    color: #5e758e;
+    margin-bottom: 4px;
+}
+
+.academico-filters .filter-group label i {
+    margin-right: 4px;
+}
+
+.academico-table-shell {
+    border: 1px solid #dbe6f2;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #ffffff;
+}
+
+.academico-table-shell thead th {
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    font-size: .74rem;
+    color: #546d86;
+}
+
+.academico-footer {
+    text-align: right;
+}
+
+@media (max-width: 768px) {
+    .academico-filters {
+        grid-template-columns: 1fr;
+    }
+}

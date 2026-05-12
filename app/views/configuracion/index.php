@@ -29,6 +29,60 @@
 
 	<div class="row g-4">
 		<div class="col-12">
+			<div class="card border-info">
+				<div class="card-header bg-info-subtle d-flex justify-content-between align-items-center">
+					<h5 class="mb-0">Monitoreo de Automatización</h5>
+					<a class="btn btn-sm btn-outline-primary" href="<?= e(base_url('chat/dashboard')) ?>">Ir a Dashboard de Chat</a>
+				</div>
+				<div class="card-body">
+					<?php $automation = $automation ?? []; ?>
+					<div class="row g-3">
+						<div class="col-md-6">
+							<div class="p-3 border rounded h-100">
+								<h6 class="mb-3">
+									<i class="bi bi-arrow-repeat"></i> Actualización automática (Auto-sync)
+								</h6>
+								<?php 
+									$schedulerStatus = $automation['scheduler_status'] ?? [];
+									$isEnabled = !empty($automation['scheduler_enabled']);
+									$statusClass = $isEnabled ? 'text-success' : 'text-warning';
+									$statusText = $isEnabled ? '✓ Activo' : '⚠ En espera';
+								?>
+								<p class="mb-1"><strong>Estado:</strong> <span class="<?= $statusClass ?>"> <?= $statusText ?></span></p>
+								<p class="mb-1"><strong>Intervalo:</strong> cada <?= e((string) ($schedulerStatus['interval_seconds'] ?? 300)) ?> segundos (5 minutos)</p>
+								<p class="mb-1"><strong>Última ejecución:</strong> <?= e((string) ($schedulerStatus['last_run'] ?? 'Nunca')) ?></p>
+								<p class="mb-0"><strong>Próxima ejecución:</strong> <?= e((string) ($schedulerStatus['next_run'] ?? '-')) ?>
+									<?php if (!empty($schedulerStatus['seconds_until_next'])): ?>
+										<br><small class="text-muted">En <?= e((string) ($schedulerStatus['seconds_until_next'])) ?> segundos</small>
+									<?php endif; ?>
+								</p>
+							</div>
+						</div>
+						<div class="col-md-6">
+							<div class="p-3 border rounded h-100">
+								<h6 class="mb-3">
+									<i class="bi bi-ticket"></i> Creación automática de tickets
+								</h6>
+								<p class="mb-1"><strong>Estado:</strong> <?= !empty($automation['tickets_auto_enabled']) ? '<span class="text-success">✓ Habilitada</span>' : '<span class="text-warning">⚠ Deshabilitada</span>' ?></p>
+								<p class="mb-1"><strong>Tickets de hoy:</strong> <strong class="text-primary"><?= e((string) ($automation['auto_tickets_today'] ?? 0)) ?></strong></p>
+								<p class="mb-1"><strong>Total tickets:</strong> <?= e((string) ($automation['auto_tickets_total'] ?? 0)) ?></p>
+								<p class="mb-0"><strong>Último ticket:</strong> <?= e((string) (($automation['last_auto_ticket_at'] ?? '') !== '' ? $automation['last_auto_ticket_at'] : 'Sin registros')) ?></p>
+							</div>
+						</div>
+					</div>
+					<div class="alert alert-light border mt-3 mb-0">
+						<strong>Información técnica:</strong>
+						<ul class="mb-0 mt-2 small">
+							<li>Registros de sincronización acumulados: <strong><?= e((string) ($automation['sync_rows_total'] ?? 0)) ?></strong></li>
+							<li>El scheduler se ejecuta automáticamente cada 5 minutos cuando un usuario accede al sistema</li>
+							<li>Verifica correos sin leer en todas las cuentas configuradas de Office 365</li>
+							<li>Crea tickets automáticamente con grupo asignado según palabras clave del asunto</li>
+						</ul>
+					</div>
+				</div>
+			</div>
+		</div>
+		<div class="col-12">
 			<div class="card">
 				<div class="card-header">
 					<h5 class="mb-0">Office 365 - Correo</h5>

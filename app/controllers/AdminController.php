@@ -2,6 +2,188 @@
 
 class AdminController extends Controller
 {
+	private function permissionModules(): array
+	{
+		return Auth::moduleCatalog();
+	}
+
+	private function ensureRolePermissionTable(PDO $db): void
+	{
+		$db->exec("CREATE TABLE IF NOT EXISTS role_module_permissions (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			rol_id INT NOT NULL,
+			module_key VARCHAR(80) NOT NULL,
+			allowed TINYINT(1) NOT NULL DEFAULT 1,
+			created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uniq_role_module (rol_id, module_key),
+			INDEX idx_role_module_role (rol_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+	}
+
+	private function normalizeModuleSelection(array $rawModules): array
+	{
+		$catalog = $this->permissionModules();
+		$selected = [];
+
+		foreach ($rawModules as $moduleKey) {
+			$key = trim((string) $moduleKey);
+			if ($key !== '' && isset($catalog[$key])) {
+				$selected[$key] = true;
+			}
+		}
+
+		return array_keys($selected);
+	}
+
+	private function saveRoleModulePermissions(PDO $db, int $roleId, array $moduleKeys): void
+	{
+		$this->ensureRolePermissionTable($db);
+
+		$delete = $db->prepare('DELETE FROM role_module_permissions WHERE rol_id = :rol_id');
+		$delete->execute(['rol_id' => $roleId]);
+
+		if (empty($moduleKeys)) {
+			return;
+		}
+
+		$insert = $db->prepare('INSERT INTO role_module_permissions (rol_id, module_key, allowed) VALUES (:rol_id, :module_key, 1)');
+		foreach ($moduleKeys as $moduleKey) {
+			$insert->execute([
+				'rol_id' => $roleId,
+				'module_key' => $moduleKey,
+			]);
+		}
+	}
+
+	private function getRoleModulePermissions(PDO $db, int $roleId): array
+	{
+		$catalog = $this->permissionModules();
+
+		try {
+			$this->ensureRolePermissionTable($db);
+			$stmt = $db->prepare('SELECT module_key FROM role_module_permissions WHERE rol_id = :rol_id AND allowed = 1');
+			$stmt->execute(['rol_id' => $roleId]);
+			$rows = $stmt->fetchAll() ?: [];
+
+			if (empty($rows)) {
+				// Sin registros definidos aun para este rol: se asume acceso total por compatibilidad.
+				return array_keys($catalog);
+			}
+
+			$allowed = [];
+			foreach ($rows as $row) {
+				$key = (string) ($row['module_key'] ?? '');
+				if ($key !== '' && isset($catalog[$key])) {
+					$allowed[] = $key;
+				}
+			}
+
+			return $allowed;
+		} catch (Throwable $e) {
+			return array_keys($catalog);
+		}
+	}
+
+	private function ensureActionPermissionsTable(PDO $db): void
+	{
+		try {
+			// Intentar verificar si la tabla existe
+			$db->query("SELECT 1 FROM role_action_permissions LIMIT 1");
+		} catch (PDOException $e) {
+			// Tabla no existe, crearla - usar exec FUERA de transacción si es posible
+			// Si estamos en transacción, no usar exec() porque interfiere
+			$inTransaction = $db->inTransaction();
+			
+			if ($inTransaction) {
+				// Dentro de transacción: usar preparado en lugar de exec
+				$sql = "CREATE TABLE IF NOT EXISTS role_action_permissions (
+					id INT AUTO_INCREMENT PRIMARY KEY,
+					rol_id INT NOT NULL,
+					module_key VARCHAR(80) NOT NULL,
+					accion ENUM('ver', 'listar', 'crear', 'editar', 'eliminar', 'exportar', 'enviar', 'responder', 'configurar') NOT NULL,
+					allowed TINYINT(1) NOT NULL DEFAULT 1,
+					created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+					updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+					UNIQUE KEY uniq_role_action (rol_id, module_key, accion),
+					INDEX idx_role (rol_id),
+					INDEX idx_module (module_key),
+					FOREIGN KEY (rol_id) REFERENCES roles(id) ON DELETE CASCADE
+				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
+				$db->prepare($sql)->execute();
+			} else {
+				// Fuera de transacción: usar exec normalmente
+				$db->exec("CREATE TABLE IF NOT EXISTS role_action_permissions (
+					id INT AUTO_INCREMENT PRIMARY KEY,
+					rol_id INT NOT NULL,
+					module_key VARCHAR(80) NOT NULL,
+					accion ENUM('ver', 'listar', 'crear', 'editar', 'eliminar', 'exportar', 'enviar', 'responder', 'configurar') NOT NULL,
+					allowed TINYINT(1) NOT NULL DEFAULT 1,
+					created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+					updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+					UNIQUE KEY uniq_role_action (rol_id, module_key, accion),
+					INDEX idx_role (rol_id),
+					INDEX idx_module (module_key),
+					FOREIGN KEY (rol_id) REFERENCES roles(id) ON DELETE CASCADE
+				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+			}
+		}
+	}
+
+	private function saveRoleActionPermissions(PDO $db, int $roleId, array $actions): void
+	{
+		$this->ensureActionPermissionsTable($db);
+
+		// Eliminar permisos anteriores
+		$delete = $db->prepare('DELETE FROM role_action_permissions WHERE rol_id = :rol_id');
+		$delete->execute(['rol_id' => $roleId]);
+
+		if (empty($actions)) {
+			return;
+		}
+
+		$insert = $db->prepare('INSERT INTO role_action_permissions (rol_id, module_key, accion, allowed) VALUES (:rol_id, :module_key, :accion, 1)');
+
+		foreach ($actions as $actionStr) {
+			// Formato: "module_key|action"
+			$parts = explode('|', $actionStr);
+			if (count($parts) === 2) {
+				$moduleKey = trim($parts[0]);
+				$accion = strtolower(trim($parts[1]));
+				$insert->execute([
+					'rol_id' => $roleId,
+					'module_key' => $moduleKey,
+					'accion' => $accion,
+				]);
+			}
+		}
+	}
+
+	private function getRoleActionPermissions(PDO $db, int $roleId): array
+	{
+		$catalog = $this->permissionModules();
+
+		try {
+			$this->ensureActionPermissionsTable($db);
+			$stmt = $db->prepare('SELECT module_key, accion FROM role_action_permissions WHERE rol_id = :rol_id AND allowed = 1');
+			$stmt->execute(['rol_id' => $roleId]);
+			$rows = $stmt->fetchAll() ?: [];
+
+			$actions = [];
+			foreach ($rows as $row) {
+				$moduleKey = (string) ($row['module_key'] ?? '');
+				$accion = (string) ($row['accion'] ?? '');
+				if ($moduleKey !== '' && $accion !== '') {
+					$actions[] = $moduleKey . '|' . $accion;
+				}
+			}
+
+			return $actions;
+		} catch (Throwable $e) {
+			return [];
+		}
+	}
+
 	private function audit(string $action, string $table, ?int $recordId, mixed $before, mixed $after): void
 	{
 		AuditLogger::log($action, $table, $recordId, $before, $after);
@@ -144,7 +326,17 @@ class AdminController extends Controller
 	public function rolesCreate(): void
 	{
 		Auth::requireAuth();
-		$this->view('admin/roles/create', [], ['title' => 'Crear Rol']);
+		$permissionModules = $this->permissionModules();
+		$selectedActions = [];
+		
+		// Para nuevo rol, preseleccionar todas las acciones
+		foreach ($permissionModules as $moduleKey => $module) {
+			foreach (($module['actions'] ?? []) as $action) {
+				$selectedActions[] = $moduleKey . '|' . $action;
+			}
+		}
+		
+		$this->view('admin/roles/create', compact('permissionModules', 'selectedActions'), ['title' => 'Crear Rol']);
 	}
 
 	public function rolesStore(): void
@@ -154,20 +346,33 @@ class AdminController extends Controller
 
 		$nombre = trim($_POST['nombre'] ?? '');
 		$descripcion = trim($_POST['descripcion'] ?? '');
+		$actions = (array) ($_POST['actions'] ?? []);
 
 		if (empty($nombre)) {
 			set_flash('error', 'El nombre es obligatorio.');
 			redirect('admin/roles/create');
 		}
 
+		$db = null;
+		$inTransaction = false;
 		try {
 			$db = Database::getInstance()->connection();
+			$db->beginTransaction();
+			$inTransaction = true;
+
 			$stmt = $db->prepare("INSERT INTO roles (nombre, descripcion, estado) VALUES (:nombre, :descripcion, 'activo')");
 			$stmt->execute(['nombre' => $nombre, 'descripcion' => $descripcion]);
 			$id = (int) $db->lastInsertId();
+
+			// Guardar permisos por acciones
+			$this->saveRoleActionPermissions($db, $id, $actions);
+
 			$this->audit('CREATE', 'roles', $id, null, ['nombre' => $nombre, 'descripcion' => $descripcion, 'estado' => 'activo']);
+			
+			$db->commit();
 			set_flash('success', 'Rol creado correctamente.');
 		} catch (Throwable $e) {
+			if ($db && $inTransaction) $db->rollBack();
 			set_flash('error', 'Error al crear rol: ' . $e->getMessage());
 		}
 		redirect('admin/roles');
@@ -184,7 +389,9 @@ class AdminController extends Controller
 			set_flash('error', 'Rol no encontrado.');
 			redirect('admin/roles');
 		}
-		$this->view('admin/roles/edit', compact('rol'), ['title' => 'Editar Rol']);
+		$permissionModules = $this->permissionModules();
+		$selectedActions = $this->getRoleActionPermissions($db, $id);
+		$this->view('admin/roles/edit', compact('rol', 'permissionModules', 'selectedActions'), ['title' => 'Editar Rol']);
 	}
 
 	public function rolesUpdate(int $id): void
@@ -194,14 +401,20 @@ class AdminController extends Controller
 
 		$nombre = trim($_POST['nombre'] ?? '');
 		$descripcion = trim($_POST['descripcion'] ?? '');
+		$actions = (array) ($_POST['actions'] ?? []);
 
 		if (empty($nombre)) {
 			set_flash('error', 'El nombre es obligatorio.');
 			redirect('admin/roles/edit/' . $id);
 		}
 
+		$db = null;
+		$inTransaction = false;
 		try {
 			$db = Database::getInstance()->connection();
+			$db->beginTransaction();
+			$inTransaction = true;
+
 			$beforeStmt = $db->prepare("SELECT id, nombre, descripcion, estado FROM roles WHERE id = :id");
 			$beforeStmt->execute(['id' => $id]);
 			$before = $beforeStmt->fetch();
@@ -209,13 +422,18 @@ class AdminController extends Controller
 			$stmt = $db->prepare("UPDATE roles SET nombre = :nombre, descripcion = :descripcion WHERE id = :id");
 			$stmt->execute(['nombre' => $nombre, 'descripcion' => $descripcion, 'id' => $id]);
 
+			// Guardar permisos por acciones
+			$this->saveRoleActionPermissions($db, $id, $actions);
+
 			$afterStmt = $db->prepare("SELECT id, nombre, descripcion, estado FROM roles WHERE id = :id");
 			$afterStmt->execute(['id' => $id]);
 			$after = $afterStmt->fetch();
 			$this->audit('UPDATE', 'roles', $id, $before, $after);
 
+			$db->commit();
 			set_flash('success', 'Rol actualizado correctamente.');
 		} catch (Throwable $e) {
+			if ($db && $inTransaction) $db->rollBack();
 			set_flash('error', 'Error al actualizar: ' . $e->getMessage());
 		}
 		redirect('admin/roles');

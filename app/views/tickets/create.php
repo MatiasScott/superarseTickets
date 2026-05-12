@@ -1,19 +1,19 @@
 <section class="module-page">
 	<div class="container-fluid py-4">
 		<div class="d-flex justify-content-between align-items-center mb-3">
-			<h1 class="h3 m-0">Nuevo ticket</h1>
-			<a class="btn btn-outline-primary" href="<?= e(base_url('tickets')) ?>">Ver todos los tickets</a>
+			<h1 class="h3 m-0"><i class="bi bi-plus-circle"></i> Nuevo ticket</h1>
+			<a class="btn btn-outline-primary" href="<?= e(base_url('tickets')) ?>"><i class="bi bi-list-ul"></i> Ver todos los tickets</a>
 		</div>
 
 		<?php if ($error = get_flash('error')): ?>
 			<div class="alert alert-danger py-2"><?= e($error) ?></div>
 		<?php endif; ?>
 
-		<form method="post" action="<?= e(base_url('tickets')) ?>" class="card card-body shadow-sm border-0" id="ticketComposeForm">
+		<form method="post" action="<?= e(base_url('tickets')) ?>" class="card card-body shadow-sm border-0" id="ticketComposeForm" data-validate>
 			<?= csrf_field() ?>
 			<div class="row g-3 mb-3">
 				<div class="col-lg-6">
-					<label class="form-label" for="account_alias">Enviar desde</label>
+					<label class="form-label" for="account_alias"><i class="bi bi-send"></i> Enviar desde</label>
 					<select class="form-select" id="account_alias" name="account_alias">
 						<?php if (empty($mailAccounts ?? [])): ?>
 							<option value="">Cuenta por defecto del sistema</option>
@@ -27,7 +27,7 @@
 					</select>
 				</div>
 				<div class="col-lg-6">
-					<label class="form-label" for="buscar_correo">Buscar correo registrado</label>
+					<label class="form-label" for="buscar_correo"><i class="bi bi-search"></i> Buscar correo registrado</label>
 					<input class="form-control" id="buscar_correo" list="contactosCorreos" placeholder="correo@dominio.com">
 					<datalist id="contactosCorreos">
 						<?php foreach (($contactos ?? []) as $contacto): ?>
@@ -41,7 +41,7 @@
 			</div>
 
 			<div class="mb-3">
-				<label class="form-label" for="contacto_id">Contacto</label>
+				<label class="form-label" for="contacto_id"><i class="bi bi-person"></i> Contacto</label>
 				<select class="form-select" id="contacto_id" name="contacto_id" required>
 					<option value="">Seleccione...</option>
 					<?php foreach (($contactos ?? []) as $contacto): ?>
@@ -53,12 +53,12 @@
 			</div>
 
 			<div class="mb-3">
-				<label class="form-label" for="asunto">Asunto</label>
+				<label class="form-label" for="asunto"><i class="bi bi-chat-square-text"></i> Asunto</label>
 				<input class="form-control" id="asunto" name="asunto" required maxlength="500" placeholder="Ingresa el asunto del ticket/correo">
 			</div>
 
 			<div class="mb-3">
-				<label class="form-label" for="ticket-editor">Descripcion</label>
+				<label class="form-label" for="ticket-editor"><i class="bi bi-card-text"></i> Descripcion</label>
 				<div class="ticket-editor-shell">
 					<div class="ticket-editor-toolbar" role="toolbar" aria-label="Formato de descripcion">
 						<button type="button" class="btn btn-sm btn-outline-secondary" data-editor-cmd="bold"><strong>B</strong></button>
@@ -82,8 +82,8 @@
 			</div>
 
 			<div class="d-flex gap-2">
-				<a class="btn btn-outline-secondary" href="<?= e(base_url('tickets')) ?>">Cancelar</a>
-				<button class="btn btn-primary" type="submit">Enviar</button>
+				<a class="btn btn-outline-secondary" href="<?= e(base_url('tickets')) ?>"><i class="bi bi-x-circle"></i> Cancelar</a>
+				<button class="btn btn-primary" type="submit"><i class="bi bi-check-circle"></i> Enviar</button>
 			</div>
 		</form>
 	</div>

@@ -9,15 +9,17 @@
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&display=swap" rel="stylesheet">
 	<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+	<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
 	<?php foreach ($styles as $style): ?>
 		<link rel="stylesheet" href="<?= e(asset('css/' . $style)) ?>">
 	<?php endforeach; ?>
 </head>
 <body data-module="<?= e($layoutModule ?? 'dashboard') ?>">
+	<?php $homePath = Auth::check() ? Auth::homePath() : 'dashboard'; ?>
 	<header class="topbar shadow-sm">
 		<div class="container-fluid topbar-inner">
 			<div class="topbar-left">
-				<a class="brand-link" href="<?= e(base_url('dashboard')) ?>">
+				<a class="brand-link" href="<?= e(base_url($homePath)) ?>">
 					<span class="brand-badge">FD</span>
 					<span>ISTS Helpdesk</span>
 				</a>

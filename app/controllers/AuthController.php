@@ -5,7 +5,7 @@ class AuthController extends Controller
 	public function showLogin(): void
 	{
 		if (Auth::check()) {
-			redirect('dashboard');
+			redirect(Auth::homePath());
 		}
 
 		$this->view('auth/login', [], [
@@ -34,7 +34,13 @@ class AuthController extends Controller
 			redirect('login');
 		}
 
-		redirect('dashboard');
+		// Debug: confirmar que sesión se seteó
+		if (!Auth::check() || Auth::id() === null) {
+			set_flash('error', 'Error al establecer sesión. Intenta de nuevo.');
+			redirect('login');
+		}
+
+		redirect(Auth::homePath());
 	}
 
 	public function logout(): void

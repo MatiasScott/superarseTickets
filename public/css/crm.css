@@ -2,6 +2,11 @@
     background: #f7fbff;
 }
 
+.crm-header h1 i {
+    color: #1f61bd;
+    margin-right: 6px;
+}
+
 .crm-kpi-card {
     border-left: 4px solid #2f80ed;
 }
@@ -13,6 +18,7 @@
 .crm-filter-pill {
     display: inline-flex;
     align-items: center;
+    gap: 6px;
     border: 1px solid #d8e4f2;
     border-radius: 999px;
     padding: 6px 12px;

@@ -6,6 +6,7 @@ class ConfiguracionController extends Controller
 	{
 		Auth::requireAuth();
 		$mailAccounts = $this->getMailAccounts();
+		$autoSyncSeconds = max(5, (int) env('MAIL_AUTO_SYNC_SECONDS', 5));
 
 		$data = [
 			'mail' => [
@@ -30,6 +31,8 @@ class ConfiguracionController extends Controller
 			],
 			'mailAccounts' => $mailAccounts,
 			'warnings' => $this->getConfigurationWarnings($mailAccounts),
+			'automation' => $this->getAutomationStatus($autoSyncSeconds),
+			'autoSyncSeconds' => $autoSyncSeconds,
 		];
 
 		$this->view('configuracion/index', $data, [
@@ -319,6 +322,57 @@ class ConfiguracionController extends Controller
 		}
 
 		return $warnings;
+	}
+
+	private function getAutomationStatus(int $autoSyncSeconds): array
+	{
+		$status = [
+			'auto_sync_enabled' => true,
+			'auto_sync_interval_seconds' => max(5, $autoSyncSeconds),
+			'auto_sync_method' => 'scheduler', // Ahora usando scheduler interno
+			'tickets_auto_enabled' => (string) env('BOT_EMAIL_ENABLED', 'true') === 'true',
+			'last_sync_at' => null,
+			'last_auto_ticket_at' => null,
+			'auto_tickets_today' => 0,
+			'auto_tickets_total' => 0,
+			'sync_rows_total' => 0,
+			'scheduler_status' => [],
+		];
+
+		try {
+			// Obtener estado del scheduler
+			$schedulerStatus = AutoSyncScheduler::getStatus();
+			$status['scheduler_status'] = $schedulerStatus;
+			$status['scheduler_enabled'] = $schedulerStatus['enabled'] ?? false;
+			
+			$db = Database::getInstance()->connection();
+
+			// Obtener último timestamp de sincronización y total de registros
+			$lastSyncStmt = $db->query('SELECT MAX(created_at) AS last_sync_at, COUNT(*) AS sync_rows_total FROM mail_ticket_sync');
+			$lastSync = $lastSyncStmt ? ($lastSyncStmt->fetch() ?: null) : null;
+			if (is_array($lastSync)) {
+				$status['last_sync_at'] = $lastSync['last_sync_at'] ?? null;
+				$status['sync_rows_total'] = (int) ($lastSync['sync_rows_total'] ?? 0);
+			}
+
+			// Obtener estadísticas de tickets automáticos (usa la zona horaria configurada en la conexión)
+			$autoStatsStmt = $db->query("SELECT
+				COUNT(DISTINCT ticket_id) AS auto_tickets_total,
+				COUNT(DISTINCT CASE WHEN DATE(created_at) = CURDATE() THEN ticket_id END) AS auto_tickets_today,
+				MAX(created_at) AS last_auto_ticket_at
+			FROM mail_ticket_sync");
+			$autoStats = $autoStatsStmt ? ($autoStatsStmt->fetch() ?: null) : null;
+			if (is_array($autoStats)) {
+				$status['auto_tickets_total'] = (int) ($autoStats['auto_tickets_total'] ?? 0);
+				$status['auto_tickets_today'] = (int) ($autoStats['auto_tickets_today'] ?? 0);
+				$status['last_auto_ticket_at'] = $autoStats['last_auto_ticket_at'] ?? null;
+			}
+		} catch (Throwable $e) {
+			// Si la tabla aun no existe o falla la consulta, se muestra estado base.
+			error_log('Error en getAutomationStatus: ' . $e->getMessage());
+		}
+
+		return $status;
 	}
 
 	public function general(): void

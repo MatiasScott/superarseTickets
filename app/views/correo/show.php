@@ -1,7 +1,7 @@
 <div class="container-fluid py-4">
 	<div class="d-flex justify-content-between align-items-center mb-3">
-		<h2 class="mb-0">Detalle de Correo</h2>
-		<a class="btn btn-outline-secondary" href="<?= e(base_url('correo?account=' . urlencode($accountAlias ?? ''))) ?>">Volver</a>
+		<h2 class="mb-0"><i class="bi bi-envelope-open"></i> Detalle de Correo</h2>
+		<a class="btn btn-outline-secondary" href="<?= e(base_url('correo?account=' . urlencode($accountAlias ?? ''))) ?>"><i class="bi bi-arrow-left"></i> Volver</a>
 	</div>
 
 	<?php if ($msg = get_flash('success')): ?>
@@ -22,23 +22,23 @@
 	</div>
 
 	<div class="card mb-3">
-		<div class="card-header">Mensaje</div>
+		<div class="card-header"><i class="bi bi-chat-square-text"></i> Mensaje</div>
 		<div class="card-body">
 			<div class="border rounded p-3 bg-light" style="white-space:pre-wrap;"><?= e($message['body_text'] ?? '') ?></div>
 		</div>
 	</div>
 
 	<div class="card">
-		<div class="card-header">Responder</div>
+		<div class="card-header"><i class="bi bi-reply"></i> Responder</div>
 		<div class="card-body">
-			<form method="POST" action="<?= e(base_url('correo/' . rawurlencode((string) ($message['uid'] ?? '')) . '/reply')) ?>">
+			<form method="POST" action="<?= e(base_url('correo/' . rawurlencode((string) ($message['uid'] ?? '')) . '/reply')) ?>" data-validate>
 				<?= csrf_field() ?>
 				<input type="hidden" name="account_alias" value="<?= e($accountAlias ?? '') ?>">
 				<div class="mb-3">
-					<label class="form-label">Respuesta</label>
+					<label class="form-label"><i class="bi bi-pencil-square"></i> Respuesta</label>
 					<textarea class="form-control" name="body" rows="6" required></textarea>
 				</div>
-				<button class="btn btn-primary" type="submit">Enviar Respuesta</button>
+				<button class="btn btn-primary" type="submit"><i class="bi bi-send-check"></i> Enviar Respuesta</button>
 			</form>
 		</div>
 	</div>

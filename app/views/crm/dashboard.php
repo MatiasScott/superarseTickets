@@ -1,21 +1,21 @@
-<section class="module-page">
+<section class="module-page crm-page">
 	<div class="container-fluid py-4">
-		<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+		<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2 crm-header">
 			<div>
-				<h1 class="h3 m-0">Dashboard CRM</h1>
+				<h1 class="h3 m-0"><i class="bi bi-graph-up-arrow"></i> Dashboard CRM</h1>
 				<p class="text-muted mb-0">Panel gerencial con KPIs, estados de pipeline y tendencia comercial.</p>
 			</div>
 			<div class="d-flex gap-2">
-				<a class="btn btn-outline-secondary" href="<?= e(base_url('crm/interesados')) ?>">Ver todo CRM</a>
-				<a class="btn btn-primary" href="<?= e(base_url('configuracion')) ?>">Configuración</a>
+				<a class="btn btn-outline-secondary" href="<?= e(base_url('crm/interesados')) ?>"><i class="bi bi-people"></i> Ver todo CRM</a>
+				<a class="btn btn-primary" href="<?= e(base_url('configuracion')) ?>"><i class="bi bi-sliders"></i> Configuracion</a>
 			</div>
 		</div>
 
 		<div class="card mb-3">
 			<div class="card-body">
-				<form method="GET" action="<?= e(base_url('crm/dashboard')) ?>" class="row g-2 align-items-end">
+				<form method="GET" action="<?= e(base_url('crm/dashboard')) ?>" class="row g-2 align-items-end" data-validate>
 					<div class="col-md-4">
-						<label class="form-label">Estado de pipeline</label>
+						<label class="form-label"><i class="bi bi-funnel"></i> Estado de pipeline</label>
 						<select class="form-select" name="estado_id">
 							<option value="0">Todos los estados</option>
 							<?php foreach (($pipelineEstados ?? []) as $estado): ?>
@@ -26,10 +26,10 @@
 						</select>
 					</div>
 					<div class="col-md-3">
-						<button type="submit" class="btn btn-outline-primary w-100">Aplicar filtro</button>
+						<button type="submit" class="btn btn-outline-primary w-100"><i class="bi bi-check2-circle"></i> Aplicar filtro</button>
 					</div>
 					<div class="col-md-5 text-md-end">
-						<div class="crm-filter-pill">Vista actual: <?= e((string) ($estadoLabel ?? 'Todos los estados')) ?></div>
+						<div class="crm-filter-pill"><i class="bi bi-filter-circle"></i> Vista actual: <?= e((string) ($estadoLabel ?? 'Todos los estados')) ?></div>
 					</div>
 				</form>
 			</div>
@@ -39,7 +39,7 @@
 			<div class="col-md-3">
 				<div class="card h-100 crm-kpi-card">
 					<div class="card-body">
-						<div class="text-muted small">Contactos activos</div>
+						<div class="text-muted small"><i class="bi bi-person-lines-fill"></i> Contactos activos</div>
 						<div class="display-6 mb-0"><?= e((string) (($metrics['contactos'] ?? 0))) ?></div>
 					</div>
 				</div>
@@ -47,7 +47,7 @@
 			<div class="col-md-3">
 				<div class="card h-100 crm-kpi-card">
 					<div class="card-body">
-						<div class="text-muted small">Interesados del filtro</div>
+						<div class="text-muted small"><i class="bi bi-person-plus"></i> Interesados del filtro</div>
 						<div class="display-6 mb-0"><?= e((string) (($metrics['interesados'] ?? 0))) ?></div>
 					</div>
 				</div>
@@ -55,7 +55,7 @@
 			<div class="col-md-3">
 				<div class="card h-100 crm-kpi-card">
 					<div class="card-body">
-						<div class="text-muted small">Convertidos del filtro</div>
+						<div class="text-muted small"><i class="bi bi-check2-square"></i> Convertidos del filtro</div>
 						<div class="display-6 mb-0"><?= e((string) (($metrics['convertidos'] ?? 0))) ?></div>
 					</div>
 				</div>
@@ -63,7 +63,7 @@
 			<div class="col-md-3">
 				<div class="card h-100 crm-kpi-card">
 					<div class="card-body">
-						<div class="text-muted small">Estudiantes (Superarse)</div>
+						<div class="text-muted small"><i class="bi bi-mortarboard"></i> Estudiantes (Superarse)</div>
 						<div class="display-6 mb-0"><?= e((string) (($metrics['estudiantes'] ?? 0))) ?></div>
 					</div>
 				</div>
@@ -74,7 +74,7 @@
 			<div class="col-md-4">
 				<div class="card h-100 crm-kpi-card accent-success">
 					<div class="card-body">
-						<div class="text-muted small">Tasa de conversion</div>
+						<div class="text-muted small"><i class="bi bi-percent"></i> Tasa de conversion</div>
 						<div class="display-6 mb-0"><?= e((string) (($metrics['tasa_conversion'] ?? 0))) ?>%</div>
 					</div>
 				</div>
@@ -82,7 +82,7 @@
 			<div class="col-md-8">
 				<div class="card h-100">
 					<div class="card-body">
-						<h2 class="h6 mb-2">Lectura gerencial</h2>
+						<h2 class="h6 mb-2"><i class="bi bi-lightbulb"></i> Lectura gerencial</h2>
 						<p class="text-muted mb-0">Usa el filtro por estado para evaluar cuellos de botella del pipeline y revisar si la conversion por fase mejora mes a mes.</p>
 					</div>
 				</div>
@@ -99,7 +99,7 @@
 		>
 			<div class="col-lg-6">
 				<div class="card h-100">
-					<div class="card-header">Interesados por estado</div>
+					<div class="card-header"><i class="bi bi-bar-chart-line"></i> Interesados por estado</div>
 					<div class="card-body">
 						<canvas id="crmPipelineChart" height="220" aria-label="Grafico de interesados por estado"></canvas>
 					</div>
@@ -107,7 +107,7 @@
 			</div>
 			<div class="col-lg-6">
 				<div class="card h-100">
-					<div class="card-header">Tendencia mensual de interesados</div>
+					<div class="card-header"><i class="bi bi-graph-up"></i> Tendencia mensual de interesados</div>
 					<div class="card-body">
 						<canvas id="crmMonthlyChart" height="220" aria-label="Grafico de tendencia mensual"></canvas>
 					</div>
@@ -116,7 +116,7 @@
 		</div>
 
 		<div class="card">
-			<div class="card-header">Ultima actividad de interesados</div>
+			<div class="card-header"><i class="bi bi-clock-history"></i> Ultima actividad de interesados</div>
 			<div class="table-responsive">
 				<table class="table table-hover mb-0">
 					<thead>

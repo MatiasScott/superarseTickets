@@ -60,7 +60,7 @@ class CorreoController extends Controller
 			'hasWhatsAppConnector' => $hasWhatsAppConnector,
 			'todaySeries' => $todaySeries,
 			'lastWeekSeries' => $lastWeekSeries,
-			'autoSyncEverySeconds' => 5,
+			'autoSyncEverySeconds' => max(5, (int) env('MAIL_AUTO_SYNC_SECONDS', 5)),
 		], [
 			'title' => 'Chat - Dashboard',
 		]);
@@ -1072,7 +1072,7 @@ class CorreoController extends Controller
 
 	private function markEmailProcessed(PDO $db, array $email, int $ticketId): void
 	{
-		$stmt = $db->prepare('INSERT INTO mail_ticket_sync (account_alias, email_uid, message_id, ticket_id) VALUES (:alias, :uid, :message_id, :ticket_id)');
+		$stmt = $db->prepare('INSERT INTO mail_ticket_sync (account_alias, email_uid, message_id, ticket_id, created_at) VALUES (:alias, :uid, :message_id, :ticket_id, NOW())');
 		$uid = trim((string) ($email['uid'] ?? ''));
 		$stmt->execute([
 			'alias' => (string) ($email['account_alias'] ?? ''),

@@ -1,69 +1,83 @@
 <div class="main-content">
-	<div class="container-fluid py-4">
-		<div class="row mb-4">
-			<div class="col">
-				<h3>Editar - <?= e($config['title']) ?></h3>
-				<small class="text-muted"><?= e($item['nombre']) ?></small>
+	<div class="admin-section">
+		<!-- Header -->
+		<div class="admin-header">
+			<div>
+				<h3><i class="bi bi-pencil-square"></i> Editar - <?= e($config['title']) ?></h3>
+				<p class="text-muted">Modificar registro: <strong><?= e($item['nombre']) ?></strong></p>
 			</div>
-			<div class="col-auto">
-				<a href="<?= base_url('admin/catalogo/' . $type) ?>" class="btn btn-secondary btn-sm">← Volver</a>
+			<div class="admin-actions">
+				<a href="<?= base_url('admin/catalogo/' . $type) ?>" class="btn btn-secondary btn-sm">
+					<i class="bi bi-arrow-left"></i> Volver
+				</a>
 			</div>
 		</div>
 
+		<!-- Alertas -->
 		<?php if ($error = get_flash('error')): ?>
-			<div class="alert alert-danger alert-dismissible fade show" role="alert">
-				<?= e($error) ?>
-				<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+			<div class="admin-alert admin-alert-error">
+				<i class="bi bi-exclamation-circle"></i> <?= e($error) ?>
 			</div>
 		<?php endif; ?>
 
-		<div class="card">
-			<div class="card-body">
-				<form method="POST" action="<?= base_url('admin/catalogo/' . $type . '/' . $item['id']) ?>">
-					<?= csrf_field() ?>
-					
-					<div class="mb-3">
-						<label for="nombre" class="form-label">Nombre *</label>
-						<input type="text" class="form-control" id="nombre" name="nombre" value="<?= e($item['nombre']) ?>" required>
+		<!-- Formulario -->
+		<div class="admin-form">
+			<form method="POST" action="<?= base_url('admin/catalogo/' . $type . '/' . $item['id']) ?>" data-validate>
+				<?= csrf_field() ?>
+				
+				<div class="form-group">
+					<label for="nombre"><i class="bi bi-bookmark"></i> Nombre *</label>
+					<input type="text" class="form-control" id="nombre" name="nombre" value="<?= e($item['nombre']) ?>" placeholder="Ingresa el nombre" required>
+					<small class="form-text text-muted">Campo requerido</small>
+				</div>
+
+				<?php if ($type === 'ticket-tipos'): ?>
+					<div class="form-group">
+						<label for="descripcion"><i class="bi bi-file-text"></i> Descripción</label>
+						<textarea class="form-control" id="descripcion" name="descripcion" rows="3" placeholder="Describe el tipo de ticket..."><?= e($item['descripcion'] ?? '') ?></textarea>
+						<small class="form-text text-muted">Información descriptiva</small>
 					</div>
+				<?php endif; ?>
 
-					<?php if ($type === 'ticket-tipos'): ?>
-						<div class="mb-3">
-							<label for="descripcion" class="form-label">Descripción</label>
-							<textarea class="form-control" id="descripcion" name="descripcion" rows="3"><?= e($item['descripcion'] ?? '') ?></textarea>
-						</div>
-					<?php endif; ?>
-
-					<?php if ($type === 'ticket-estados'): ?>
-						<div class="mb-3">
-							<label for="orden" class="form-label">Orden</label>
-							<input type="number" class="form-control" id="orden" name="orden" value="<?= e($item['orden']) ?>" min="1">
-						</div>
-						<div class="mb-3 form-check">
+				<?php if ($type === 'ticket-estados'): ?>
+					<div class="form-group">
+						<label for="orden"><i class="bi bi-sort-down"></i> Orden</label>
+						<input type="number" class="form-control" id="orden" name="orden" value="<?= e($item['orden']) ?>" min="1">
+						<small class="form-text text-muted">Posición en el flujo</small>
+					</div>
+					<div class="form-group">
+						<div class="form-check">
 							<input type="checkbox" class="form-check-input" id="es_final" name="es_final" <?= $item['es_final'] ? 'checked' : '' ?>>
 							<label class="form-check-label" for="es_final">
-								Es estado final
+								<i class="bi bi-check-circle"></i> Es estado final
 							</label>
 						</div>
-					<?php endif; ?>
-
-					<?php if ($type === 'pipeline-estados'): ?>
-						<div class="mb-3">
-							<label for="orden" class="form-label">Orden</label>
-							<input type="number" class="form-control" id="orden" name="orden" value="<?= e($item['orden']) ?>" min="1">
-						</div>
-						<div class="mb-3">
-							<label for="categoria" class="form-label">Categoría</label>
-							<input type="text" class="form-control" id="categoria" name="categoria" value="<?= e($item['categoria'] ?? '') ?>">
-						</div>
-					<?php endif; ?>
-
-					<div class="d-flex gap-2">
-						<button type="submit" class="btn btn-primary">Guardar Cambios</button>
-						<a href="<?= base_url('admin/catalogo/' . $type) ?>" class="btn btn-light">Cancelar</a>
+						<small class="form-text text-muted d-block">Marca si este es un estado de cierre</small>
 					</div>
-				</form>
-			</div>
+				<?php endif; ?>
+
+				<?php if ($type === 'pipeline-estados'): ?>
+					<div class="form-group">
+						<label for="orden"><i class="bi bi-sort-down"></i> Orden</label>
+						<input type="number" class="form-control" id="orden" name="orden" value="<?= e($item['orden']) ?>" min="1">
+						<small class="form-text text-muted">Posición en el pipeline</small>
+					</div>
+					<div class="form-group">
+						<label for="categoria"><i class="bi bi-tag"></i> Categoría</label>
+						<input type="text" class="form-control" id="categoria" name="categoria" value="<?= e($item['categoria'] ?? '') ?>" placeholder="Ej: Inicial, Desarrollo...">
+						<small class="form-text text-muted">Categorización del pipeline</small>
+					</div>
+				<?php endif; ?>
+
+				<div class="admin-form-actions">
+					<button type="submit" class="btn btn-primary">
+						<i class="bi bi-check-circle"></i> Guardar Cambios
+					</button>
+					<a href="<?= base_url('admin/catalogo/' . $type) ?>" class="btn btn-secondary">
+						<i class="bi bi-x-circle"></i> Cancelar
+					</a>
+				</div>
+			</form>
 		</div>
 	</div>
 </div>

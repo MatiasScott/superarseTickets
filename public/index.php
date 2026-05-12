@@ -35,6 +35,9 @@ require_once APP_PATH . '/core/Helpers.php';
 $appConfig = require APP_PATH . '/config/app.php';
 date_default_timezone_set($appConfig['timezone'] ?? 'UTC');
 
+// Inicializar scheduler de auto-sync
+require_once APP_PATH . '/core/AutoSyncScheduler.php';
+
 $router = new Router();
 $registerRoutes = require APP_PATH . '/config/routes.php';
 
@@ -56,4 +59,11 @@ try {
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $uri = $_SERVER['REQUEST_URI'] ?? '/';
 
+Auth::enforceRequestAccess($uri);
+
 $router->dispatch($method, $uri);
+
+// Ejecutar scheduler de auto-sync si el usuario está autenticado
+if (!empty($_SESSION['auth_user']['id'] ?? null)) {
+	AutoSyncScheduler::checkAndExecute();
+}

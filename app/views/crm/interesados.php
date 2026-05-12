@@ -1,14 +1,14 @@
-<section class="module-page">
+<section class="module-page crm-page">
 	<?php $estudiantesSuperarse = $estudiantesSuperarse ?? []; ?>
 	<?php $sourceLabel = $sourceLabel ?? 'No disponible'; ?>
 	<?php $sourceError = $sourceError ?? ''; ?>
 	<div class="container-fluid py-4">
 		<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
 			<div>
-				<h1 class="h3 mb-1">CRM - Ver todo CRM</h1>
+				<h1 class="h3 mb-1"><i class="bi bi-people-fill"></i> CRM - Ver todo CRM</h1>
 				<p class="text-muted mb-0">Listado de clientes/estudiantes conectado a la base de Superarse.</p>
 			</div>
-			<a class="btn btn-outline-secondary" href="<?= e(base_url('crm/dashboard')) ?>">Volver al dashboard</a>
+			<a class="btn btn-outline-secondary" href="<?= e(base_url('crm/dashboard')) ?>"><i class="bi bi-arrow-left"></i> Volver al dashboard</a>
 		</div>
 
 		<div class="alert alert-info py-2">
@@ -22,21 +22,21 @@
 			<div class="card-body py-3">
 				<div class="row g-2 align-items-end">
 					<div class="col-md-6">
-						<label for="crmFilterName" class="form-label mb-1">Buscar por nombre</label>
+						<label for="crmFilterName" class="form-label mb-1"><i class="bi bi-search"></i> Buscar por nombre</label>
 						<input type="text" id="crmFilterName" class="form-control" placeholder="Ej: Francisco Carpio">
 					</div>
 					<div class="col-md-4">
-						<label for="crmFilterCareer" class="form-label mb-1">Filtrar por carrera</label>
+						<label for="crmFilterCareer" class="form-label mb-1"><i class="bi bi-book"></i> Filtrar por carrera</label>
 						<input type="text" id="crmFilterCareer" class="form-control" placeholder="Ej: Seguridad y Riesgos">
 					</div>
 					<div class="col-md-2 d-grid">
-						<button type="button" id="crmFilterClear" class="btn btn-outline-secondary">Limpiar</button>
+						<button type="button" id="crmFilterClear" class="btn btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Limpiar</button>
 					</div>
 				</div>
 			</div>
 		</div>
 
-		<div class="table-responsive">
+		<div class="table-responsive" data-mobile-cards>
 			<table class="table table-hover align-middle" id="crmStudentsTable">
 				<thead>
 					<tr>
@@ -80,7 +80,7 @@
 									title="Editar pipeline"
 									aria-label="Editar pipeline"
 								>
-									✎
+									<i class="bi bi-pencil"></i>
 								</button>
 							</td>
 						</tr>

@@ -6,8 +6,8 @@
 	?>
 	<div class="container-fluid py-4">
 		<div class="d-flex justify-content-between align-items-center mb-3">
-			<h1 class="h4 m-0">Dashboard de Tickets</h1>
-			<a class="btn btn-sm btn-primary" href="<?= e(base_url('tickets')) ?>">Ver todos los tickets</a>
+			<h1 class="h4 m-0"><i class="bi bi-speedometer2"></i> Dashboard de Tickets</h1>
+			<a class="btn btn-sm btn-primary" href="<?= e(base_url('tickets')) ?>"><i class="bi bi-list-ul"></i> Ver todos los tickets</a>
 		</div>
 
 		<?php if ($success = get_flash('success')): ?>
@@ -18,20 +18,20 @@
 		<?php endif; ?>
 
 		<div class="ticket-block mb-3" data-ticket-dashboard-live="true" data-ticket-dashboard-url="<?= e(base_url('tickets/dashboard/data')) ?>">
-			<div class="ticket-block-head">Tendencias de hoy</div>
+			<div class="ticket-block-head"><i class="bi bi-graph-up-arrow"></i> Tendencias de hoy</div>
 			<div class="trend-grid">
 				<article class="trend-card">
-					<div class="trend-icon" aria-hidden="true">▣</div>
+					<div class="trend-icon" aria-hidden="true"><i class="bi bi-inbox"></i></div>
 					<div class="trend-value" data-ticket-stat="sin_resolver"><?= e((string) ($stats['sin_resolver'] ?? 0)) ?></div>
 					<div class="trend-label">Tickets sin resolver</div>
 				</article>
 				<article class="trend-card">
-					<div class="trend-icon" aria-hidden="true">◷</div>
+					<div class="trend-icon" aria-hidden="true"><i class="bi bi-alarm"></i></div>
 					<div class="trend-value" data-ticket-stat="vencidos"><?= e((string) ($stats['vencidos'] ?? 0)) ?></div>
 					<div class="trend-label">Tickets vencidos</div>
 				</article>
 				<article class="trend-card">
-					<div class="trend-icon" aria-hidden="true">◉</div>
+					<div class="trend-icon" aria-hidden="true"><i class="bi bi-calendar-check"></i></div>
 					<div class="trend-value" data-ticket-stat="vencen_hoy"><?= e((string) ($stats['vencen_hoy'] ?? 0)) ?></div>
 					<div class="trend-label">Vencen hoy</div>
 				</article>
@@ -42,7 +42,7 @@
 		<div class="ticket-block" id="conteo-grupos">
 			<div class="ticket-block-head split">
 				<span>Tickets activos por grupo</span>
-				<a href="<?= e(base_url('tickets/dashboard/grupos')) ?>">Ver detalles</a>
+				<a href="<?= e(base_url('tickets/dashboard/grupos')) ?>"><i class="bi bi-diagram-3"></i> Ver detalles</a>
 			</div>
 			<div class="summary-table" data-ticket-group-list>
 				<?php foreach ($porGrupo as $row): ?>

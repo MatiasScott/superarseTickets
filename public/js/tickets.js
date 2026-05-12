@@ -127,4 +127,87 @@ document.addEventListener('DOMContentLoaded', () => {
 			}
 		});
 	}
+
+	const ticketShow = document.querySelector('[data-ticket-show="true"]');
+	if (ticketShow) {
+		const composeReply = document.getElementById('compose-reply');
+		const composeNote = document.getElementById('compose-note');
+		const tabReply = document.getElementById('tab-reply');
+		const tabNote = document.getElementById('tab-note');
+
+		const setComposeMode = (mode) => {
+			const isReply = mode === 'reply';
+			if (composeReply) composeReply.style.display = isReply ? '' : 'none';
+			if (composeNote) composeNote.style.display = isReply ? 'none' : '';
+			if (tabReply) tabReply.classList.toggle('active', isReply);
+			if (tabNote) tabNote.classList.toggle('active', !isReply);
+		};
+
+		ticketShow.querySelectorAll('[data-compose-mode]').forEach((button) => {
+			button.addEventListener('click', () => {
+				setComposeMode(button.getAttribute('data-compose-mode') || 'reply');
+			});
+		});
+
+		ticketShow.querySelectorAll('[data-editor-cmd]').forEach((button) => {
+			button.addEventListener('click', () => {
+				const editorId = button.getAttribute('data-editor-target') || '';
+				const cmd = button.getAttribute('data-editor-cmd') || '';
+				const editor = document.getElementById(editorId);
+				if (!editor || !cmd) return;
+				editor.focus();
+				document.execCommand(cmd, false, null);
+			});
+		});
+
+		ticketShow.querySelectorAll('[data-editor-link="true"]').forEach((button) => {
+			button.addEventListener('click', () => {
+				const editorId = button.getAttribute('data-editor-target') || '';
+				const editor = document.getElementById(editorId);
+				if (!editor) return;
+				const url = window.prompt('URL del enlace:');
+				if (!url) return;
+				editor.focus();
+				document.execCommand('createLink', false, url);
+			});
+		});
+
+		ticketShow.querySelectorAll('[data-editor-clear="true"]').forEach((button) => {
+			button.addEventListener('click', () => {
+				const editorId = button.getAttribute('data-editor-target') || '';
+				const editor = document.getElementById(editorId);
+				if (editor) editor.innerHTML = '';
+			});
+		});
+
+		ticketShow.querySelectorAll('[data-editor-form]').forEach((form) => {
+			form.addEventListener('submit', (event) => {
+				const map = (form.getAttribute('data-editor-form') || '').split(':');
+				const editor = document.getElementById(map[0] || '');
+				const hidden = document.getElementById(map[1] || '');
+				if (!editor || !hidden) return;
+
+				const html = (editor.innerHTML || '').trim();
+				if (!html || html === '<br>') {
+					event.preventDefault();
+					showGlobalNotification('El contenido no puede estar vacio.', 'danger');
+					return;
+				}
+
+				hidden.value = html;
+			});
+		});
+
+		ticketShow.querySelectorAll('[data-toggle-panel]').forEach((button) => {
+			button.addEventListener('click', () => {
+				const key = button.getAttribute('data-toggle-panel') || '';
+				const body = document.getElementById(`panel-${key}-body`);
+				if (!body) return;
+				const collapsed = body.classList.toggle('panel-body-collapsed');
+				button.textContent = collapsed ? 'Expandir' : 'Contraer';
+			});
+		});
+
+		setComposeMode('reply');
+	}
 });

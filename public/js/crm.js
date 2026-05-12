@@ -5,6 +5,45 @@ if (typeof BASE_URL === 'undefined') {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+	const studentsBaseTable = document.getElementById('crmStudentsBaseTable');
+	if (studentsBaseTable) {
+		const filterName = document.getElementById('crmStudentsFilterName');
+		const filterCareer = document.getElementById('crmStudentsFilterCareer');
+		const filterClear = document.getElementById('crmStudentsFilterClear');
+		const counter = document.getElementById('crmStudentsCounter');
+		const rows = Array.from(studentsBaseTable.querySelectorAll('tbody tr[data-student-name]'));
+
+		const normalize = (value) => String(value || '').toLowerCase().trim();
+
+		const applyStudentsFilters = () => {
+			const qName = normalize(filterName?.value || '');
+			const qCareer = normalize(filterCareer?.value || '');
+			let visible = 0;
+
+			rows.forEach((row) => {
+				const rowName = normalize(row.getAttribute('data-student-name') || '');
+				const rowCareer = normalize(row.getAttribute('data-student-career') || '');
+				const match = (!qName || rowName.includes(qName)) && (!qCareer || rowCareer.includes(qCareer));
+				row.style.display = match ? '' : 'none';
+				if (match) visible += 1;
+			});
+
+			if (counter) {
+				counter.textContent = `Mostrando ${visible} de ${rows.length} registros`;
+			}
+		};
+
+		filterName?.addEventListener('input', applyStudentsFilters);
+		filterCareer?.addEventListener('input', applyStudentsFilters);
+		filterClear?.addEventListener('click', () => {
+			if (filterName) filterName.value = '';
+			if (filterCareer) filterCareer.value = '';
+			applyStudentsFilters();
+		});
+
+		applyStudentsFilters();
+	}
+
 	const root = document.querySelector('[data-crm-dashboard]');
 	if (!root) {
 		return;

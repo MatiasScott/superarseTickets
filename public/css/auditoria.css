@@ -1,3 +1,70 @@
 .module-page .table {
     font-size: .92rem;
 }
+
+.auditoria-page {
+    --audit-border: #dbe6f2;
+    --audit-bg: #ffffff;
+}
+
+.auditoria-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 14px 16px;
+    border: 1px solid var(--audit-border);
+    border-radius: 12px;
+    background: linear-gradient(180deg, #f7fbff 0%, #ffffff 100%);
+}
+
+.auditoria-header h1 i {
+    color: #1967d2;
+    margin-right: 6px;
+}
+
+.auditoria-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.auditoria-filters {
+    border: 1px solid var(--audit-border);
+    border-radius: 12px;
+    background: var(--audit-bg);
+}
+
+.auditoria-filters .form-label i {
+    color: #526b84;
+    margin-right: 4px;
+}
+
+.auditoria-table-shell {
+    border: 1px solid var(--audit-border);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--audit-bg);
+}
+
+.auditoria-table-shell thead th {
+    font-size: .75rem;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+}
+
+.auditoria-table-shell details summary {
+    cursor: pointer;
+    color: #1f5eae;
+    font-weight: 600;
+}
+
+.auditoria-table-shell pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: #f8fbff;
+    border: 1px solid #e3ebf5;
+    border-radius: 8px;
+    padding: 8px;
+}

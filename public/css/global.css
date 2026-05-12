@@ -155,6 +155,10 @@ body {
     background: linear-gradient(180deg, #10324e 0%, #0f2e47 100%);
     padding: 14px;
     overflow-y: auto;
+    position: sticky;
+    top: 62px;
+    height: calc(100vh - 62px);
+    align-self: start;
 }
 
 .sidebar-head {
@@ -318,6 +322,65 @@ body {
     border-radius: 10px;
 }
 
+.module-counter {
+    text-align: right;
+    color: #6b7f96;
+}
+
+@media (max-width: 768px) {
+    .table-responsive[data-mobile-cards] {
+        overflow: visible;
+        border: 0;
+        background: transparent;
+    }
+
+    .table-responsive[data-mobile-cards] table,
+    .table-responsive[data-mobile-cards] thead,
+    .table-responsive[data-mobile-cards] tbody,
+    .table-responsive[data-mobile-cards] tr,
+    .table-responsive[data-mobile-cards] th,
+    .table-responsive[data-mobile-cards] td {
+        display: block;
+        width: 100%;
+    }
+
+    .table-responsive[data-mobile-cards] thead {
+        display: none;
+    }
+
+    .table-responsive[data-mobile-cards] tbody tr {
+        border: 1px solid #dbe6f2;
+        border-radius: 10px;
+        margin-bottom: 10px;
+        background: #fff;
+        padding: 8px;
+    }
+
+    .table-responsive[data-mobile-cards] td {
+        border: 0;
+        border-bottom: 1px dashed #e6eef7;
+        padding: 8px 6px;
+        white-space: normal;
+        text-align: right;
+        position: relative;
+        min-height: 34px;
+    }
+
+    .table-responsive[data-mobile-cards] td:last-child {
+        border-bottom: 0;
+    }
+
+    .table-responsive[data-mobile-cards] td::before {
+        content: attr(data-label);
+        float: left;
+        color: #5f7690;
+        font-weight: 700;
+        font-size: .75rem;
+        text-transform: uppercase;
+        letter-spacing: .03em;
+    }
+}
+
 .form-control:focus,
 .form-select:focus {
     border-color: #a9c6f3;
@@ -349,6 +412,9 @@ body {
     }
 
     .sidebar {
+        position: static;
+        top: auto;
+        height: auto;
         border-right: 0;
         border-bottom: 1px solid var(--line);
         max-height: 44vh;

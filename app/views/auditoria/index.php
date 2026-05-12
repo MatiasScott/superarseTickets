@@ -1,18 +1,30 @@
-<section class="module-page">
+<section class="module-page auditoria-page">
     <?php $logs = $logs ?? []; ?>
     <?php $filters = $filters ?? []; ?>
     <div class="container-fluid py-4">
-        <h1 class="h3 mb-3">Auditoria del sistema</h1>
-        <p class="text-muted small">Filtra resultados y exporta en Excel o en vista imprimible PDF.</p>
+        <div class="auditoria-header mb-3">
+            <div>
+                <h1 class="h3 mb-1"><i class="bi bi-clipboard2-data"></i> Auditoria del sistema</h1>
+                <p class="text-muted small mb-0">Filtra resultados y exporta en Excel o en vista imprimible PDF.</p>
+            </div>
+            <div class="auditoria-actions">
+                <a class="btn btn-sm btn-outline-success" href="<?= base_url('auditoria/export/excel?' . http_build_query($filters)) ?>">
+                    <i class="bi bi-file-earmark-excel"></i> Exportar Excel
+                </a>
+                <a class="btn btn-sm btn-outline-secondary" target="_blank" href="<?= base_url('auditoria/export/pdf?' . http_build_query($filters)) ?>">
+                    <i class="bi bi-filetype-pdf"></i> Exportar PDF
+                </a>
+            </div>
+        </div>
 
-        <form method="GET" action="<?= base_url('auditoria') ?>" class="card card-body mb-3">
+        <form method="GET" action="<?= base_url('auditoria') ?>" class="card card-body mb-3 auditoria-filters" data-validate>
             <div class="row g-2">
                 <div class="col-md-2">
-                    <label class="form-label small">Tabla</label>
+                    <label class="form-label small"><i class="bi bi-table"></i> Tabla</label>
                     <input type="text" name="tabla" class="form-control form-control-sm" value="<?= e($filters['tabla'] ?? '') ?>" placeholder="usuarios">
                 </div>
                 <div class="col-md-2">
-                    <label class="form-label small">Accion</label>
+                    <label class="form-label small"><i class="bi bi-lightning"></i> Accion</label>
                     <select name="accion" class="form-select form-select-sm">
                         <?php $accion = strtoupper((string) ($filters['accion'] ?? '')); ?>
                         <option value="">Todas</option>
@@ -22,34 +34,26 @@
                     </select>
                 </div>
                 <div class="col-md-2">
-                    <label class="form-label small">Usuario ID</label>
+                    <label class="form-label small"><i class="bi bi-person"></i> Usuario ID</label>
                     <input type="number" name="usuario_id" class="form-control form-control-sm" value="<?= e($filters['usuario_id'] ?? '') ?>" min="1">
                 </div>
                 <div class="col-md-2">
-                    <label class="form-label small">Desde</label>
+                    <label class="form-label small"><i class="bi bi-calendar-event"></i> Desde</label>
                     <input type="date" name="fecha_desde" class="form-control form-control-sm" value="<?= e($filters['fecha_desde'] ?? '') ?>">
                 </div>
                 <div class="col-md-2">
-                    <label class="form-label small">Hasta</label>
+                    <label class="form-label small"><i class="bi bi-calendar2-check"></i> Hasta</label>
                     <input type="date" name="fecha_hasta" class="form-control form-control-sm" value="<?= e($filters['fecha_hasta'] ?? '') ?>">
                 </div>
                 <div class="col-md-2 d-flex align-items-end gap-2">
-                    <button type="submit" class="btn btn-sm btn-primary w-100">Filtrar</button>
-                    <a href="<?= base_url('auditoria') ?>" class="btn btn-sm btn-light w-100">Limpiar</a>
-                </div>
-            </div>
-            <div class="row g-2 mt-2">
-                <div class="col-md-3">
-                    <a class="btn btn-sm btn-outline-success w-100" href="<?= base_url('auditoria/export/excel?' . http_build_query($filters)) ?>">Exportar Excel</a>
-                </div>
-                <div class="col-md-3">
-                    <a class="btn btn-sm btn-outline-secondary w-100" target="_blank" href="<?= base_url('auditoria/export/pdf?' . http_build_query($filters)) ?>">Exportar PDF</a>
+                    <button type="submit" class="btn btn-sm btn-primary w-100"><i class="bi bi-funnel"></i> Filtrar</button>
+                    <a href="<?= base_url('auditoria') ?>" class="btn btn-sm btn-light w-100"><i class="bi bi-x-circle"></i> Limpiar</a>
                 </div>
             </div>
         </form>
 
-        <div class="table-responsive">
-            <table class="table table-striped align-middle">
+        <div class="table-responsive auditoria-table-shell">
+            <table class="table table-striped align-middle mb-0" data-filter-table>
                 <thead>
                     <tr>
                         <th>Fecha</th>
@@ -69,15 +73,17 @@
                     <?php else: ?>
                         <?php foreach ($logs as $log): ?>
                             <tr>
-                                <td><?= e($log['fecha'] ?? '-') ?></td>
-                                <td><?= e($log['tabla'] ?? '-') ?></td>
-                                <td><?= e($log['accion'] ?? '-') ?></td>
-                                <td><?= e($log['usuario_id'] ?? '-') ?></td>
-                                <td><?= e($log['ip'] ?? '-') ?></td>
-                                <td>#<?= e($log['registro_id'] ?? '-') ?></td>
+                                <td data-column="fecha"><?= e($log['fecha'] ?? '-') ?></td>
+                                <td data-column="tabla"><?= e($log['tabla'] ?? '-') ?></td>
+                                <td data-column="accion">
+                                    <span class="badge text-bg-light border"><?= e($log['accion'] ?? '-') ?></span>
+                                </td>
+                                <td data-column="usuario_id"><?= e($log['usuario_id'] ?? '-') ?></td>
+                                <td data-column="ip"><code><?= e($log['ip'] ?? '-') ?></code></td>
+                                <td data-column="registro_id">#<?= e($log['registro_id'] ?? '-') ?></td>
                                 <td>
                                     <details>
-                                        <summary>Ver</summary>
+                                        <summary><i class="bi bi-eye"></i> Ver</summary>
                                         <div class="small mt-2">
                                             <strong>Antes:</strong>
                                             <pre class="mb-2"><?= e((string) ($log['datos_anteriores'] ?? '-')) ?></pre>

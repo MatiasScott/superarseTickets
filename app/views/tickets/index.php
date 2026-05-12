@@ -61,12 +61,12 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 		<div class="tickets-list-hero d-flex flex-column flex-xl-row justify-content-between align-items-xl-center gap-3 mb-3">
 			<div>
 				<p class="tickets-list-eyebrow mb-1">Gestion operativa</p>
-				<h1 class="h3 m-0">Ver todos los tickets</h1>
+				<h1 class="h3 m-0"><i class="bi bi-ticket-perforated"></i> Ver todos los tickets</h1>
 				<p class="text-muted mb-0 mt-1 small">Vista central para seguimiento, asignacion y respuesta rapida.</p>
 			</div>
 			<div class="d-flex gap-2">
-				<a class="btn btn-outline-primary" href="<?= e(base_url('tickets/dashboard')) ?>">Dashboard</a>
-				<a class="btn btn-primary" href="<?= e(base_url('tickets/create')) ?>">Nuevo ticket</a>
+				<a class="btn btn-outline-primary" href="<?= e(base_url('tickets/dashboard')) ?>"><i class="bi bi-speedometer2"></i> Dashboard</a>
+				<a class="btn btn-primary" href="<?= e(base_url('tickets/create')) ?>"><i class="bi bi-plus-circle"></i> Nuevo ticket</a>
 			</div>
 		</div>
 
@@ -101,9 +101,9 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 		<?php endif; ?>
 
 		<!-- Panel de filtros -->
-		<form method="GET" action="<?= e(base_url('tickets')) ?>" class="card card-body mb-3 p-3 tickets-filter-card">
+		<form method="GET" action="<?= e(base_url('tickets')) ?>" class="card card-body mb-3 p-3 tickets-filter-card" data-validate>
 			<div class="d-flex align-items-center justify-content-between mb-2">
-				<h2 class="h6 m-0">Filtros de busqueda</h2>
+				<h2 class="h6 m-0"><i class="bi bi-funnel"></i> Filtros de busqueda</h2>
 				<?php if ($hayFiltros): ?>
 					<span class="badge text-bg-primary-subtle text-primary-emphasis border border-primary-subtle">Filtros activos</span>
 				<?php else: ?>
@@ -113,28 +113,28 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 			<div class="row g-2 align-items-end">
 
 				<div class="col-12 col-sm-6 col-md-4 col-lg-2">
-					<label class="form-label fw-semibold mb-1 small">Buscar</label>
+					<label class="form-label fw-semibold mb-1 small"><i class="bi bi-search"></i> Buscar</label>
 					<input type="text" name="buscar" class="form-control form-control-sm"
 						placeholder="Asunto, código o contacto…"
 						value="<?= e($filters['buscar'] ?? '') ?>">
 				</div>
 
 				<div class="col-12 col-sm-6 col-md-4 col-lg-2">
-					<label class="form-label fw-semibold mb-1 small">Estado</label>
+					<label class="form-label fw-semibold mb-1 small"><i class="bi bi-hourglass-split"></i> Estado</label>
 					<select name="estado_id" class="form-select form-select-sm">
 						<?= selOpt($estados, $filters['estado_id'] ?? '', 'nombre', 'estado_id', 'Cualquier estado') ?>
 					</select>
 				</div>
 
 				<div class="col-12 col-sm-6 col-md-4 col-lg-2">
-					<label class="form-label fw-semibold mb-1 small">Prioridad</label>
+					<label class="form-label fw-semibold mb-1 small"><i class="bi bi-flag"></i> Prioridad</label>
 					<select name="prioridad_id" class="form-select form-select-sm">
 						<?= selOpt($prioridades, $filters['prioridad_id'] ?? '', 'nombre', 'prioridad_id', 'Cualquier prioridad') ?>
 					</select>
 				</div>
 
 				<div class="col-12 col-sm-6 col-md-4 col-lg-2">
-					<label class="form-label fw-semibold mb-1 small">Grupo</label>
+					<label class="form-label fw-semibold mb-1 small"><i class="bi bi-diagram-2"></i> Grupo</label>
 					<select name="grupo_id" class="form-select form-select-sm">
 						<option value="">Cualquier grupo</option>
 						<option value="0" <?= (($filters['grupo_id'] ?? '') === '0') ? 'selected' : '' ?>>Sin asignar</option>
@@ -147,7 +147,7 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 				</div>
 
 				<div class="col-12 col-sm-6 col-md-4 col-lg-2">
-					<label class="form-label fw-semibold mb-1 small">Asignado</label>
+					<label class="form-label fw-semibold mb-1 small"><i class="bi bi-person-check"></i> Asignado</label>
 					<select name="asignado_id" class="form-select form-select-sm">
 						<option value="">Cualquier agente</option>
 						<option value="0" <?= (($filters['asignado_id'] ?? '') === '0') ? 'selected' : '' ?>>Sin asignar</option>
@@ -160,7 +160,7 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 				</div>
 
 				<div class="col-12 col-sm-6 col-md-4 col-lg-2">
-					<label class="form-label fw-semibold mb-1 small">Tipo</label>
+					<label class="form-label fw-semibold mb-1 small"><i class="bi bi-tag"></i> Tipo</label>
 					<select name="tipo_id" class="form-select form-select-sm">
 						<?= selOpt($tipos, $filters['tipo_id'] ?? '', 'nombre', 'tipo_id', 'Cualquier tipo') ?>
 					</select>
@@ -190,7 +190,7 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 		$qBase = $qBase !== '' ? $qBase . '&' : '';
 		?>
 		<div class="tickets-table-shell">
-			<div class="table-responsive">
+			<div class="table-responsive" data-mobile-cards>
 			<table class="table table-striped align-middle mb-0 tickets-table">
 				<thead class="table-light">
 					<tr>

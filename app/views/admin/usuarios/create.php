@@ -1,53 +1,62 @@
 <div class="main-content">
-	<div class="container-fluid py-4">
-		<div class="row mb-4">
-			<div class="col">
-				<h3>Crear Usuario</h3>
-				<small class="text-muted">Agregar nuevo usuario al sistema</small>
+	<div class="admin-section">
+		<!-- Header -->
+		<div class="admin-header">
+			<div>
+				<h3><i class="bi bi-person-plus"></i> Crear Usuario</h3>
+				<p class="text-muted">Agregar nuevo usuario al sistema</p>
 			</div>
-			<div class="col-auto">
-				<a href="<?= base_url('admin/usuarios') ?>" class="btn btn-secondary btn-sm">← Volver</a>
+			<div class="admin-actions">
+				<a href="<?= base_url('admin/usuarios') ?>" class="btn btn-secondary btn-sm">
+					<i class="bi bi-arrow-left"></i> Volver
+				</a>
 			</div>
 		</div>
 
+		<!-- Alertas -->
 		<?php if ($error = get_flash('error')): ?>
-			<div class="alert alert-danger alert-dismissible fade show" role="alert">
-				<?= e($error) ?>
-				<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+			<div class="admin-alert admin-alert-error">
+				<i class="bi bi-exclamation-circle"></i> <?= e($error) ?>
 			</div>
 		<?php endif; ?>
 
-		<div class="card">
-			<div class="card-body">
-				<form method="POST" action="<?= base_url('admin/usuarios') ?>">
-					<?= csrf_field() ?>
-					
-					<div class="mb-3">
-						<label for="nombre" class="form-label">Nombre *</label>
-						<input type="text" class="form-control" id="nombre" name="nombre" required>
-					</div>
+		<!-- Formulario -->
+		<div class="admin-form">
+			<form method="POST" action="<?= base_url('admin/usuarios') ?>" data-validate>
+				<?= csrf_field() ?>
+				
+				<div class="form-group">
+					<label for="nombre"><i class="bi bi-person"></i> Nombre completo</label>
+					<input type="text" class="form-control" id="nombre" name="nombre" placeholder="Ej: Juan Pérez" required>
+					<small class="form-text text-muted">El nombre completo del usuario</small>
+				</div>
 
-					<div class="mb-3">
-						<label for="email" class="form-label">Email *</label>
-						<input type="email" class="form-control" id="email" name="email" required>
-					</div>
+				<div class="form-group">
+					<label for="email"><i class="bi bi-envelope"></i> Email</label>
+					<input type="email" class="form-control" id="email" name="email" placeholder="usuario@ejemplo.com" required>
+					<small class="form-text text-muted">Email único del usuario</small>
+				</div>
 
-					<div class="mb-3">
-						<label for="rol_id" class="form-label">Rol *</label>
-						<select class="form-control" id="rol_id" name="rol_id" required>
-							<option value="">-- Seleccionar rol --</option>
-							<?php foreach ($roles as $rol): ?>
-								<option value="<?= e($rol['id']) ?>"><?= e($rol['nombre']) ?></option>
-							<?php endforeach; ?>
-						</select>
-					</div>
+				<div class="form-group">
+					<label for="rol_id"><i class="bi bi-shield"></i> Rol de usuario</label>
+					<select class="form-select" id="rol_id" name="rol_id" required>
+						<option value="" selected>-- Selecciona un rol --</option>
+						<?php foreach ($roles as $rol): ?>
+							<option value="<?= e($rol['id']) ?>"><?= e($rol['nombre']) ?></option>
+						<?php endforeach; ?>
+					</select>
+					<small class="form-text text-muted">Selecciona el rol que tendrá el usuario</small>
+				</div>
 
-					<div class="d-flex gap-2">
-						<button type="submit" class="btn btn-primary">Guardar Usuario</button>
-						<a href="<?= base_url('admin/usuarios') ?>" class="btn btn-light">Cancelar</a>
-					</div>
-				</form>
-			</div>
+				<div class="admin-form-actions">
+					<button type="submit" class="btn btn-primary">
+						<i class="bi bi-check-circle"></i> Guardar Usuario
+					</button>
+					<a href="<?= base_url('admin/usuarios') ?>" class="btn btn-secondary">
+						<i class="bi bi-x-circle"></i> Cancelar
+					</a>
+				</div>
+			</form>
 		</div>
 	</div>
 </div>

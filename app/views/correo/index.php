@@ -1,10 +1,10 @@
 <div class="container-fluid py-4">
 	<div class="d-flex justify-content-between align-items-center mb-3">
 		<div>
-			<h2 class="mb-1">Bandeja de Entrada del Equipo</h2>
+			<h2 class="mb-1"><i class="bi bi-chat-dots"></i> Bandeja de Entrada del Equipo</h2>
 			<p class="text-muted mb-0">Conversaciones del canal WhatsApp.</p>
 		</div>
-		<a class="btn btn-outline-secondary" href="<?= e(base_url('chat/dashboard')) ?>">Ir al panel</a>
+		<a class="btn btn-outline-secondary" href="<?= e(base_url('chat/dashboard')) ?>"><i class="bi bi-speedometer2"></i> Ir al panel</a>
 	</div>
 
 	<?php if ($msg = get_flash('success')): ?>
@@ -15,8 +15,8 @@
 	<?php endif; ?>
 
 	<div class="d-flex justify-content-end mb-2">
-		<form method="GET" action="<?= e(base_url('correo')) ?>" class="d-flex align-items-center gap-2">
-			<label class="form-label mb-0">Por pagina</label>
+		<form method="GET" action="<?= e(base_url('correo')) ?>" class="d-flex align-items-center gap-2" data-validate>
+			<label class="form-label mb-0"><i class="bi bi-list-ol"></i> Por pagina</label>
 			<select class="form-select" style="width: 110px;" name="per_page" onchange="this.form.submit()">
 				<?php foreach ([20, 50, 100, 200] as $opt): ?>
 					<option value="<?= e((string) $opt) ?>" <?= ((int) ($perPage ?? 20) === $opt) ? 'selected' : '' ?>><?= e((string) $opt) ?></option>
@@ -90,8 +90,8 @@
 							</div>
 						</div>
 						<div class="d-flex gap-2">
-							<a class="btn btn-sm btn-outline-secondary" href="<?= e(base_url('chat/dashboard')) ?>">Panel</a>
-							<a class="btn btn-sm btn-primary" href="<?= e(base_url('configuracion')) ?>">Configurar canal</a>
+							<a class="btn btn-sm btn-outline-secondary" href="<?= e(base_url('chat/dashboard')) ?>"><i class="bi bi-speedometer2"></i> Panel</a>
+							<a class="btn btn-sm btn-primary" href="<?= e(base_url('configuracion')) ?>"><i class="bi bi-sliders"></i> Configurar canal</a>
 						</div>
 					</div>
 
@@ -121,9 +121,9 @@
 		<div class="card-body d-flex justify-content-between">
 			<?php $prev = max(1, (int) ($inbox['page'] ?? 1) - 1); ?>
 			<?php $next = min((int) ($inbox['pages'] ?? 1), (int) ($inbox['page'] ?? 1) + 1); ?>
-			<a class="btn btn-outline-secondary <?= ((int) ($inbox['page'] ?? 1) <= 1) ? 'disabled' : '' ?>" href="<?= e(base_url('correo?page=' . $prev . '&per_page=' . (int) ($perPage ?? 20))) ?>">Anterior</a>
+			<a class="btn btn-outline-secondary <?= ((int) ($inbox['page'] ?? 1) <= 1) ? 'disabled' : '' ?>" href="<?= e(base_url('correo?page=' . $prev . '&per_page=' . (int) ($perPage ?? 20))) ?>"><i class="bi bi-chevron-left"></i> Anterior</a>
 			<span class="text-muted align-self-center">Pagina <?= e((string) ($inbox['page'] ?? 1)) ?> de <?= e((string) ($inbox['pages'] ?? 1)) ?></span>
-			<a class="btn btn-outline-secondary <?= ((int) ($inbox['page'] ?? 1) >= (int) ($inbox['pages'] ?? 1)) ? 'disabled' : '' ?>" href="<?= e(base_url('correo?page=' . $next . '&per_page=' . (int) ($perPage ?? 20))) ?>">Siguiente</a>
+			<a class="btn btn-outline-secondary <?= ((int) ($inbox['page'] ?? 1) >= (int) ($inbox['pages'] ?? 1)) ? 'disabled' : '' ?>" href="<?= e(base_url('correo?page=' . $next . '&per_page=' . (int) ($perPage ?? 20))) ?>">Siguiente <i class="bi bi-chevron-right"></i></a>
 		</div>
 	<?php endif; ?>
 </div>
