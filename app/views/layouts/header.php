@@ -23,12 +23,8 @@
 				</a>
 			</div>
 			<div class="topbar-right">
-				<div class="search-wrap d-none d-md-flex">
-					<span class="search-icon">⌕</span>
-					<input type="search" class="search-input" placeholder="Buscar">
-				</div>
-
-				<button type="button" class="topbar-icon-btn" title="Aplicaciones" aria-label="Aplicaciones">⌗</button>
+				<!-- Notificaciones funcionales -->
+				<div id="globalNotifications" class="position-relative"></div>
 				<button type="button" class="topbar-icon-btn" title="Notificaciones" aria-label="Notificaciones">◉</button>
 
 				<?php if (Auth::check()): ?>

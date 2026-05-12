@@ -1,0 +1,530 @@
+<?php
+
+class AdminController extends Controller
+{
+	private function audit(string $action, string $table, ?int $recordId, mixed $before, mixed $after): void
+	{
+		AuditLogger::log($action, $table, $recordId, $before, $after);
+	}
+
+	public function dashboard(): void
+	{
+		Auth::requireAuth();
+		$this->view('admin/dashboard', [], ['title' => 'Panel de Administración']);
+	}
+
+	// ============ USUARIOS ============
+	public function usuariosIndex(): void
+	{
+		Auth::requireAuth();
+		$db = Database::getInstance()->connection();
+		$sql = "SELECT u.*, r.nombre as rol_nombre FROM usuarios u LEFT JOIN roles r ON u.rol_id = r.id WHERE u.estado = 'activo' ORDER BY u.id DESC";
+		$usuarios = $db->query($sql)->fetchAll() ?: [];
+		$this->view('admin/usuarios/index', compact('usuarios'), ['title' => 'Gestión de Usuarios']);
+	}
+
+	public function usuariosCreate(): void
+	{
+		Auth::requireAuth();
+		$db = Database::getInstance()->connection();
+		$roles = $db->query("SELECT id, nombre FROM roles WHERE estado = 'activo' ORDER BY nombre")->fetchAll() ?: [];
+		$this->view('admin/usuarios/create', compact('roles'), ['title' => 'Crear Usuario']);
+	}
+
+	public function usuariosStore(): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) redirect('admin/usuarios');
+
+		$db = Database::getInstance()->connection();
+		$email = trim($_POST['email'] ?? '');
+		$nombre = trim($_POST['nombre'] ?? '');
+		$rol_id = (int)($_POST['rol_id'] ?? 0);
+
+		if (empty($email) || empty($nombre) || $rol_id <= 0) {
+			set_flash('error', 'Todos los campos son obligatorios.');
+			redirect('admin/usuarios/create');
+		}
+
+		try {
+			$stmt = $db->prepare("INSERT INTO usuarios (email, nombre, rol_id, estado) VALUES (:email, :nombre, :rol_id, 'activo')");
+			$stmt->execute(['email' => $email, 'nombre' => $nombre, 'rol_id' => $rol_id]);
+			$id = (int) $db->lastInsertId();
+			$this->audit('CREATE', 'usuarios', $id, null, ['email' => $email, 'nombre' => $nombre, 'rol_id' => $rol_id, 'estado' => 'activo']);
+			set_flash('success', 'Usuario creado correctamente.');
+		} catch (Throwable $e) {
+			set_flash('error', 'Error al crear usuario: ' . $e->getMessage());
+		}
+		redirect('admin/usuarios');
+	}
+
+	public function usuariosEdit(int $id): void
+	{
+		Auth::requireAuth();
+		$db = Database::getInstance()->connection();
+		$stmt = $db->prepare("SELECT * FROM usuarios WHERE id = :id");
+		$stmt->execute(['id' => $id]);
+		$usuario = $stmt->fetch();
+		if (!$usuario) {
+			set_flash('error', 'Usuario no encontrado.');
+			redirect('admin/usuarios');
+		}
+		$roles = $db->query("SELECT id, nombre FROM roles WHERE estado = 'activo' ORDER BY nombre")->fetchAll() ?: [];
+		$this->view('admin/usuarios/edit', compact('usuario', 'roles'), ['title' => 'Editar Usuario']);
+	}
+
+	public function usuariosUpdate(int $id): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) redirect('admin/usuarios');
+
+		$db = Database::getInstance()->connection();
+		$nombre = trim($_POST['nombre'] ?? '');
+		$rol_id = (int)($_POST['rol_id'] ?? 0);
+
+		if (empty($nombre) || $rol_id <= 0) {
+			set_flash('error', 'Todos los campos son obligatorios.');
+			redirect('admin/usuarios/edit/' . $id);
+		}
+
+		try {
+			$beforeStmt = $db->prepare("SELECT id, nombre, rol_id, estado FROM usuarios WHERE id = :id");
+			$beforeStmt->execute(['id' => $id]);
+			$before = $beforeStmt->fetch();
+
+			$stmt = $db->prepare("UPDATE usuarios SET nombre = :nombre, rol_id = :rol_id WHERE id = :id");
+			$stmt->execute(['nombre' => $nombre, 'rol_id' => $rol_id, 'id' => $id]);
+
+			$afterStmt = $db->prepare("SELECT id, nombre, rol_id, estado FROM usuarios WHERE id = :id");
+			$afterStmt->execute(['id' => $id]);
+			$after = $afterStmt->fetch();
+			$this->audit('UPDATE', 'usuarios', $id, $before, $after);
+
+			set_flash('success', 'Usuario actualizado correctamente.');
+		} catch (Throwable $e) {
+			set_flash('error', 'Error al actualizar: ' . $e->getMessage());
+		}
+		redirect('admin/usuarios');
+	}
+
+	public function usuariosDelete(int $id): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) redirect('admin/usuarios');
+
+		try {
+			$db = Database::getInstance()->connection();
+			$beforeStmt = $db->prepare("SELECT id, nombre, rol_id, estado FROM usuarios WHERE id = :id");
+			$beforeStmt->execute(['id' => $id]);
+			$before = $beforeStmt->fetch();
+
+			$db->prepare("UPDATE usuarios SET estado = 'inactivo' WHERE id = :id")->execute(['id' => $id]);
+
+			$afterStmt = $db->prepare("SELECT id, nombre, rol_id, estado FROM usuarios WHERE id = :id");
+			$afterStmt->execute(['id' => $id]);
+			$after = $afterStmt->fetch();
+			$this->audit('UPDATE', 'usuarios', $id, $before, $after);
+
+			set_flash('success', 'Usuario desactivado correctamente.');
+		} catch (Throwable $e) {
+			set_flash('error', 'Error al desactivar: ' . $e->getMessage());
+		}
+		redirect('admin/usuarios');
+	}
+
+	// ============ ROLES ============
+	public function rolesIndex(): void
+	{
+		Auth::requireAuth();
+		$db = Database::getInstance()->connection();
+		$roles = $db->query("SELECT * FROM roles WHERE estado = 'activo' ORDER BY id DESC")->fetchAll() ?: [];
+		$this->view('admin/roles/index', compact('roles'), ['title' => 'Gestión de Roles']);
+	}
+
+	public function rolesCreate(): void
+	{
+		Auth::requireAuth();
+		$this->view('admin/roles/create', [], ['title' => 'Crear Rol']);
+	}
+
+	public function rolesStore(): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) redirect('admin/roles');
+
+		$nombre = trim($_POST['nombre'] ?? '');
+		$descripcion = trim($_POST['descripcion'] ?? '');
+
+		if (empty($nombre)) {
+			set_flash('error', 'El nombre es obligatorio.');
+			redirect('admin/roles/create');
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+			$stmt = $db->prepare("INSERT INTO roles (nombre, descripcion, estado) VALUES (:nombre, :descripcion, 'activo')");
+			$stmt->execute(['nombre' => $nombre, 'descripcion' => $descripcion]);
+			$id = (int) $db->lastInsertId();
+			$this->audit('CREATE', 'roles', $id, null, ['nombre' => $nombre, 'descripcion' => $descripcion, 'estado' => 'activo']);
+			set_flash('success', 'Rol creado correctamente.');
+		} catch (Throwable $e) {
+			set_flash('error', 'Error al crear rol: ' . $e->getMessage());
+		}
+		redirect('admin/roles');
+	}
+
+	public function rolesEdit(int $id): void
+	{
+		Auth::requireAuth();
+		$db = Database::getInstance()->connection();
+		$stmt = $db->prepare("SELECT * FROM roles WHERE id = :id");
+		$stmt->execute(['id' => $id]);
+		$rol = $stmt->fetch();
+		if (!$rol) {
+			set_flash('error', 'Rol no encontrado.');
+			redirect('admin/roles');
+		}
+		$this->view('admin/roles/edit', compact('rol'), ['title' => 'Editar Rol']);
+	}
+
+	public function rolesUpdate(int $id): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) redirect('admin/roles');
+
+		$nombre = trim($_POST['nombre'] ?? '');
+		$descripcion = trim($_POST['descripcion'] ?? '');
+
+		if (empty($nombre)) {
+			set_flash('error', 'El nombre es obligatorio.');
+			redirect('admin/roles/edit/' . $id);
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+			$beforeStmt = $db->prepare("SELECT id, nombre, descripcion, estado FROM roles WHERE id = :id");
+			$beforeStmt->execute(['id' => $id]);
+			$before = $beforeStmt->fetch();
+
+			$stmt = $db->prepare("UPDATE roles SET nombre = :nombre, descripcion = :descripcion WHERE id = :id");
+			$stmt->execute(['nombre' => $nombre, 'descripcion' => $descripcion, 'id' => $id]);
+
+			$afterStmt = $db->prepare("SELECT id, nombre, descripcion, estado FROM roles WHERE id = :id");
+			$afterStmt->execute(['id' => $id]);
+			$after = $afterStmt->fetch();
+			$this->audit('UPDATE', 'roles', $id, $before, $after);
+
+			set_flash('success', 'Rol actualizado correctamente.');
+		} catch (Throwable $e) {
+			set_flash('error', 'Error al actualizar: ' . $e->getMessage());
+		}
+		redirect('admin/roles');
+	}
+
+	public function rolesDelete(int $id): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) redirect('admin/roles');
+
+		try {
+			$db = Database::getInstance()->connection();
+			// Verificar si hay usuarios con este rol
+			$stmt = $db->prepare("SELECT COUNT(*) FROM usuarios WHERE rol_id = :id");
+			$stmt->execute(['id' => $id]);
+			$check = $stmt->fetchColumn();
+			if ($check > 0) {
+				set_flash('error', 'No puedes eliminar un rol que está asignado a usuarios.');
+				redirect('admin/roles');
+			}
+
+			$beforeStmt = $db->prepare("SELECT id, nombre, descripcion, estado FROM roles WHERE id = :id");
+			$beforeStmt->execute(['id' => $id]);
+			$before = $beforeStmt->fetch();
+
+			$db->prepare("UPDATE roles SET estado = 'inactivo' WHERE id = :id")->execute(['id' => $id]);
+
+			$afterStmt = $db->prepare("SELECT id, nombre, descripcion, estado FROM roles WHERE id = :id");
+			$afterStmt->execute(['id' => $id]);
+			$after = $afterStmt->fetch();
+			$this->audit('UPDATE', 'roles', $id, $before, $after);
+
+			set_flash('success', 'Rol desactivado correctamente.');
+		} catch (Throwable $e) {
+			set_flash('error', 'Error al desactivar: ' . $e->getMessage());
+		}
+		redirect('admin/roles');
+	}
+
+	// ============ GRUPOS ============
+	public function gruposIndex(): void
+	{
+		Auth::requireAuth();
+		$db = Database::getInstance()->connection();
+		$grupos = $db->query("SELECT * FROM ticket_grupos ORDER BY id DESC")->fetchAll() ?: [];
+		$this->view('admin/grupos/index', compact('grupos'), ['title' => 'Gestión de Grupos']);
+	}
+
+	public function gruposCreate(): void
+	{
+		Auth::requireAuth();
+		$this->view('admin/grupos/create', [], ['title' => 'Crear Grupo']);
+	}
+
+	public function gruposStore(): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) redirect('admin/grupos');
+
+		$nombre = trim($_POST['nombre'] ?? '');
+
+		if (empty($nombre)) {
+			set_flash('error', 'El nombre es obligatorio.');
+			redirect('admin/grupos/create');
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+			$stmt = $db->prepare("INSERT INTO ticket_grupos (nombre, estado) VALUES (:nombre, 'activo')");
+			$stmt->execute(['nombre' => $nombre]);
+			$id = (int) $db->lastInsertId();
+			$this->audit('CREATE', 'ticket_grupos', $id, null, ['nombre' => $nombre, 'estado' => 'activo']);
+			set_flash('success', 'Grupo creado correctamente.');
+		} catch (Throwable $e) {
+			set_flash('error', 'Error al crear grupo: ' . $e->getMessage());
+		}
+		redirect('admin/grupos');
+	}
+
+	public function gruposEdit(int $id): void
+	{
+		Auth::requireAuth();
+		$db = Database::getInstance()->connection();
+		$stmt = $db->prepare("SELECT * FROM ticket_grupos WHERE id = :id");
+		$stmt->execute(['id' => $id]);
+		$grupo = $stmt->fetch();
+		if (!$grupo) {
+			set_flash('error', 'Grupo no encontrado.');
+			redirect('admin/grupos');
+		}
+		$this->view('admin/grupos/edit', compact('grupo'), ['title' => 'Editar Grupo']);
+	}
+
+	public function gruposUpdate(int $id): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) redirect('admin/grupos');
+
+		$nombre = trim($_POST['nombre'] ?? '');
+
+		if (empty($nombre)) {
+			set_flash('error', 'El nombre es obligatorio.');
+			redirect('admin/grupos/edit/' . $id);
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+			$beforeStmt = $db->prepare("SELECT id, nombre, estado FROM ticket_grupos WHERE id = :id");
+			$beforeStmt->execute(['id' => $id]);
+			$before = $beforeStmt->fetch();
+
+			$stmt = $db->prepare("UPDATE ticket_grupos SET nombre = :nombre WHERE id = :id");
+			$stmt->execute(['nombre' => $nombre, 'id' => $id]);
+
+			$afterStmt = $db->prepare("SELECT id, nombre, estado FROM ticket_grupos WHERE id = :id");
+			$afterStmt->execute(['id' => $id]);
+			$after = $afterStmt->fetch();
+			$this->audit('UPDATE', 'ticket_grupos', $id, $before, $after);
+
+			set_flash('success', 'Grupo actualizado correctamente.');
+		} catch (Throwable $e) {
+			set_flash('error', 'Error al actualizar: ' . $e->getMessage());
+		}
+		redirect('admin/grupos');
+	}
+
+	// ============ CATÁLOGOS OPERATIVOS ============
+	private function getCatalogConfig(string $type): ?array
+	{
+		$catalogs = [
+			'ticket-estados' => ['title' => 'Estados de Ticket/Chat', 'table' => 'ticket_estados', 'columns' => ['id', 'nombre', 'orden', 'es_final']],
+			'ticket-prioridades' => ['title' => 'Prioridades de Ticket', 'table' => 'ticket_prioridades', 'columns' => ['id', 'nombre']],
+			'ticket-tipos' => ['title' => 'Tipos de Ticket', 'table' => 'ticket_tipos', 'columns' => ['id', 'nombre', 'descripcion']],
+			'pipeline-estados' => ['title' => 'Estados CRM', 'table' => 'pipeline_estados', 'columns' => ['id', 'nombre', 'orden', 'categoria']],
+		];
+		return $catalogs[$type] ?? null;
+	}
+
+	public function catalogIndex(string $type): void
+	{
+		Auth::requireAuth();
+		$config = $this->getCatalogConfig($type);
+		if (!$config) {
+			set_flash('error', 'Catálogo no encontrado.');
+			redirect('admin/dashboard');
+		}
+
+		$db = Database::getInstance()->connection();
+		$items = $db->query("SELECT * FROM {$config['table']} WHERE estado = 'activo' ORDER BY id DESC")->fetchAll() ?: [];
+		$this->view('admin/catalogos/index', compact('type', 'config', 'items'), ['title' => $config['title']]);
+	}
+
+	public function catalogCreate(string $type): void
+	{
+		Auth::requireAuth();
+		$config = $this->getCatalogConfig($type);
+		if (!$config) {
+			set_flash('error', 'Catálogo no encontrado.');
+			redirect('admin/dashboard');
+		}
+		$this->view('admin/catalogos/create', compact('type', 'config'), ['title' => 'Crear - ' . $config['title']]);
+	}
+
+	public function catalogStore(string $type): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) redirect('admin/catalogo/' . $type);
+
+		$config = $this->getCatalogConfig($type);
+		if (!$config) {
+			set_flash('error', 'Catálogo no encontrado.');
+			redirect('admin/dashboard');
+		}
+
+		$nombre = trim($_POST['nombre'] ?? '');
+		if (empty($nombre)) {
+			set_flash('error', 'El nombre es obligatorio.');
+			redirect('admin/catalogo/' . $type . '/create');
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+			$data = ['nombre' => $nombre, 'estado' => 'activo'];
+
+			if ($type === 'ticket-estados') {
+				$data['orden'] = (int)($_POST['orden'] ?? 1);
+				$data['es_final'] = isset($_POST['es_final']) ? 1 : 0;
+			} elseif ($type === 'pipeline-estados') {
+				$data['orden'] = (int)($_POST['orden'] ?? 1);
+				$data['categoria'] = trim($_POST['categoria'] ?? '');
+			} elseif ($type === 'ticket-tipos') {
+				$data['descripcion'] = trim($_POST['descripcion'] ?? '');
+			}
+
+			$columns = implode(', ', array_keys($data));
+			$placeholders = implode(', ', array_map(fn($k) => ':' . $k, array_keys($data)));
+			$sql = "INSERT INTO {$config['table']} ({$columns}) VALUES ({$placeholders})";
+			$db->prepare($sql)->execute($data);
+			$id = (int) $db->lastInsertId();
+			$this->audit('CREATE', $config['table'], $id, null, $data);
+			set_flash('success', 'Registro creado correctamente.');
+		} catch (Throwable $e) {
+			set_flash('error', 'Error al crear: ' . $e->getMessage());
+		}
+		redirect('admin/catalogo/' . $type);
+	}
+
+	public function catalogEdit(string $type, int $id): void
+	{
+		Auth::requireAuth();
+		$config = $this->getCatalogConfig($type);
+		if (!$config) {
+			set_flash('error', 'Catálogo no encontrado.');
+			redirect('admin/dashboard');
+		}
+
+		$db = Database::getInstance()->connection();
+		$stmt = $db->prepare("SELECT * FROM {$config['table']} WHERE id = :id");
+		$stmt->execute(['id' => $id]);
+		$item = $stmt->fetch();
+		if (!$item) {
+			set_flash('error', 'Registro no encontrado.');
+			redirect('admin/catalogo/' . $type);
+		}
+		$this->view('admin/catalogos/edit', compact('type', 'config', 'item'), ['title' => 'Editar - ' . $config['title']]);
+	}
+
+	public function catalogUpdate(string $type, int $id): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) redirect('admin/catalogo/' . $type . '/' . $id . '/edit');
+
+		$config = $this->getCatalogConfig($type);
+		if (!$config) {
+			set_flash('error', 'Catálogo no encontrado.');
+			redirect('admin/dashboard');
+		}
+
+		$nombre = trim($_POST['nombre'] ?? '');
+		if (empty($nombre)) {
+			set_flash('error', 'El nombre es obligatorio.');
+			redirect('admin/catalogo/' . $type . '/' . $id . '/edit');
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+			$beforeStmt = $db->prepare("SELECT * FROM {$config['table']} WHERE id = :id");
+			$beforeStmt->execute(['id' => $id]);
+			$before = $beforeStmt->fetch();
+
+			$data = ['nombre' => $nombre, 'id' => $id];
+
+			if ($type === 'ticket-estados') {
+				$data['orden'] = (int)($_POST['orden'] ?? 1);
+				$data['es_final'] = isset($_POST['es_final']) ? 1 : 0;
+				$sql = "UPDATE {$config['table']} SET nombre = :nombre, orden = :orden, es_final = :es_final WHERE id = :id";
+			} elseif ($type === 'pipeline-estados') {
+				$data['orden'] = (int)($_POST['orden'] ?? 1);
+				$data['categoria'] = trim($_POST['categoria'] ?? '');
+				$sql = "UPDATE {$config['table']} SET nombre = :nombre, orden = :orden, categoria = :categoria WHERE id = :id";
+			} elseif ($type === 'ticket-tipos') {
+				$data['descripcion'] = trim($_POST['descripcion'] ?? '');
+				$sql = "UPDATE {$config['table']} SET nombre = :nombre, descripcion = :descripcion WHERE id = :id";
+			} else {
+				$sql = "UPDATE {$config['table']} SET nombre = :nombre WHERE id = :id";
+			}
+
+			$db->prepare($sql)->execute($data);
+
+			$afterStmt = $db->prepare("SELECT * FROM {$config['table']} WHERE id = :id");
+			$afterStmt->execute(['id' => $id]);
+			$after = $afterStmt->fetch();
+			$this->audit('UPDATE', $config['table'], $id, $before, $after);
+
+			set_flash('success', 'Registro actualizado correctamente.');
+		} catch (Throwable $e) {
+			set_flash('error', 'Error al actualizar: ' . $e->getMessage());
+		}
+		redirect('admin/catalogo/' . $type);
+	}
+
+	public function catalogDelete(string $type, int $id): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) redirect('admin/catalogo/' . $type);
+
+		$config = $this->getCatalogConfig($type);
+		if (!$config) {
+			set_flash('error', 'Catálogo no encontrado.');
+			redirect('admin/dashboard');
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+			$beforeStmt = $db->prepare("SELECT * FROM {$config['table']} WHERE id = :id");
+			$beforeStmt->execute(['id' => $id]);
+			$before = $beforeStmt->fetch();
+
+			$db->prepare("UPDATE {$config['table']} SET estado = 'inactivo' WHERE id = :id")->execute(['id' => $id]);
+
+			$afterStmt = $db->prepare("SELECT * FROM {$config['table']} WHERE id = :id");
+			$afterStmt->execute(['id' => $id]);
+			$after = $afterStmt->fetch();
+			$this->audit('UPDATE', $config['table'], $id, $before, $after);
+
+			set_flash('success', 'Registro desactivado correctamente.');
+		} catch (Throwable $e) {
+			set_flash('error', 'Error al desactivar: ' . $e->getMessage());
+		}
+		redirect('admin/catalogo/' . $type);
+	}
+}

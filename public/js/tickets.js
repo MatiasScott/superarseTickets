@@ -87,7 +87,7 @@ document.addEventListener('DOMContentLoaded', () => {
 				const file = imageFileInput.files && imageFileInput.files[0] ? imageFileInput.files[0] : null;
 				if (!file) return;
 				if (!file.type.startsWith('image/')) {
-					window.alert('Selecciona un archivo de imagen valido.');
+					showGlobalNotification('Selecciona un archivo de imagen válido.', 'danger');
 					imageFileInput.value = '';
 					return;
 				}
@@ -123,7 +123,7 @@ document.addEventListener('DOMContentLoaded', () => {
 			const plain = (editor?.textContent || '').trim();
 			if (plain === '') {
 				event.preventDefault();
-				window.alert('Debes ingresar una descripcion del ticket.');
+				showGlobalNotification('Debes ingresar una descripción del ticket.', 'danger');
 			}
 		});
 	}

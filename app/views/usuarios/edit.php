@@ -47,14 +47,37 @@
 										<?php endforeach; ?>
 									</select>
 								</div>
+
+								<div class="col-md-6 mb-3">
+								<label class="form-label">Estado</label>
+								<div class="form-check">
+									<input class="form-check-input" type="radio" id="estado_activo" name="estado" value="activo" <?= (($usuario['estado'] ?? 'activo') === 'activo') ? 'checked' : '' ?>>
+									<label class="form-check-label" for="estado_activo">Activo</label>
+								</div>
+								<div class="form-check">
+									<input class="form-check-input" type="radio" id="estado_inactivo" name="estado" value="inactivo" <?= (($usuario['estado'] ?? '') === 'inactivo') ? 'checked' : '' ?>>
+									<label class="form-check-label" for="estado_inactivo">Inactivo</label>
+								</div>
+								</div>
 							</div>
 
 							<div class="mb-3">
-								<label for="estado" class="form-label">Estado</label>
-								<select class="form-select" id="estado" name="estado">
-									<option value="activo" <?= (($usuario['estado'] ?? 'activo') === 'activo') ? 'selected' : '' ?>>Activo</option>
-									<option value="inactivo" <?= (($usuario['estado'] ?? '') === 'inactivo') ? 'selected' : '' ?>>Inactivo</option>
-								</select>
+						<label class="form-label">Grupos</label>
+						<div class="border rounded p-3 bg-light">
+							<?php
+							$idsUsuarioGrupos = array_map(fn($g) => $g['id'], $usuarioGrupos ?? []);
+							?>
+							<?php if (!empty($grupos)): ?>
+								<?php foreach (($grupos ?? []) as $grupo): ?>
+									<div class="form-check mb-2">
+										<input class="form-check-input" type="checkbox" id="grupo_<?= e($grupo['id']) ?>" name="grupos[]" value="<?= e($grupo['id']) ?>" <?= in_array($grupo['id'], $idsUsuarioGrupos) ? 'checked' : '' ?>>
+										<label class="form-check-label" for="grupo_<?= e($grupo['id']) ?>"><?= e($grupo['nombre']) ?></label>
+									</div>
+								<?php endforeach; ?>
+							<?php else: ?>
+								<p class="text-muted mb-0">No hay grupos disponibles</p>
+							<?php endif; ?>
+						</div>
 							</div>
 
 							<div class="alert alert-info mb-3">

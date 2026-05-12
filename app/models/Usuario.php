@@ -41,4 +41,33 @@ class Usuario extends Model
 		$row = $stmt->fetch();
 		return $row === false ? null : $row;
 	}
+
+	// Obtiene los grupos a los que pertenece el usuario
+	public function getGrupos(int $usuarioId): array
+	{
+		$sql = "SELECT g.* FROM ticket_grupos g
+				INNER JOIN usuario_grupos ug ON ug.grupo_id = g.id
+				WHERE ug.usuario_id = :usuario_id";
+		$stmt = $this->db->prepare($sql);
+		$stmt->execute(['usuario_id' => $usuarioId]);
+		return $stmt->fetchAll() ?: [];
+	}
+
+	// Asigna los grupos a un usuario (sobrescribe los existentes)
+	public function setGrupos(int $usuarioId, array $grupoIds): void
+	{
+		// Elimina los grupos actuales
+		$this->db->prepare("DELETE FROM usuario_grupos WHERE usuario_id = :usuario_id")
+			->execute(['usuario_id' => $usuarioId]);
+		// Inserta los nuevos
+		if (!empty($grupoIds)) {
+			$stmt = $this->db->prepare("INSERT INTO usuario_grupos (usuario_id, grupo_id) VALUES (:usuario_id, :grupo_id)");
+			foreach ($grupoIds as $gid) {
+				$stmt->execute([
+					'usuario_id' => $usuarioId,
+					'grupo_id' => (int) $gid
+				]);
+			}
+		}
+	}
 }

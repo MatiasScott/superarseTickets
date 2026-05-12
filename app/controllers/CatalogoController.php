@@ -131,6 +131,10 @@ class CatalogoController extends Controller
 
 	public function index(): void
 	{
+		set_flash('error', 'La gestión por catálogos fue deshabilitada. Usa las ventanas de administración activas.');
+		redirect('admin/dashboard');
+		return;
+
 		Auth::requireAuth();
 		$modules = $this->modules();
 		$this->view('catalogos/index', compact('modules'), [
@@ -140,6 +144,10 @@ class CatalogoController extends Controller
 
 	public function list(string $module): void
 	{
+		set_flash('error', 'La gestión por catálogos fue deshabilitada. Usa las ventanas de administración activas.');
+		redirect('admin/dashboard');
+		return;
+
 		Auth::requireAuth();
 		[$module, $config] = $this->resolveModule($module);
 
@@ -166,6 +174,10 @@ class CatalogoController extends Controller
 
 	public function create(string $module): void
 	{
+		set_flash('error', 'La gestión por catálogos fue deshabilitada. Usa las ventanas de administración activas.');
+		redirect('admin/dashboard');
+		return;
+
 		Auth::requireAuth();
 		[$module, $config] = $this->resolveModule($module);
 
@@ -183,6 +195,10 @@ class CatalogoController extends Controller
 
 	public function store(string $module): void
 	{
+		set_flash('error', 'La gestión por catálogos fue deshabilitada. Usa las ventanas de administración activas.');
+		redirect('admin/dashboard');
+		return;
+
 		Auth::requireAuth();
 		[$module, $config] = $this->resolveModule($module);
 
@@ -221,6 +237,10 @@ class CatalogoController extends Controller
 
 	public function edit(string $module, int $id): void
 	{
+		set_flash('error', 'La gestión por catálogos fue deshabilitada. Usa las ventanas de administración activas.');
+		redirect('admin/dashboard');
+		return;
+
 		Auth::requireAuth();
 		[$module, $config] = $this->resolveModule($module);
 
@@ -253,6 +273,10 @@ class CatalogoController extends Controller
 
 	public function update(string $module, int $id): void
 	{
+		set_flash('error', 'La gestión por catálogos fue deshabilitada. Usa las ventanas de administración activas.');
+		redirect('admin/dashboard');
+		return;
+
 		Auth::requireAuth();
 		[$module, $config] = $this->resolveModule($module);
 
@@ -294,6 +318,10 @@ class CatalogoController extends Controller
 
 	public function delete(string $module, int $id): void
 	{
+		set_flash('error', 'La gestión por catálogos fue deshabilitada. Usa las ventanas de administración activas.');
+		redirect('admin/dashboard');
+		return;
+
 		Auth::requireAuth();
 		[$module, $config] = $this->resolveModule($module);
 

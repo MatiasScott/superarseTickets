@@ -320,4 +320,12 @@ class ConfiguracionController extends Controller
 
 		return $warnings;
 	}
+
+	public function general(): void
+	{
+		Auth::requireAuth();
+		$this->view('configuracion/general', [], [
+			'title' => 'Configuración General del Sistema',
+		]);
+	}
 }

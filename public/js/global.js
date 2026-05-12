@@ -1,4 +1,37 @@
 document.addEventListener('DOMContentLoaded', () => {
+            // Botón de notificaciones funcional
+            const notifBtn = document.querySelector('.topbar-icon-btn[title="Notificaciones"]');
+            if (notifBtn) {
+                notifBtn.addEventListener('click', () => {
+                    showGlobalNotification('No tienes notificaciones nuevas.', 'info');
+                });
+            }
+        // --- Notificaciones globales tipo toast ---
+        window.showGlobalNotification = function(message, type = 'success', timeout = 3500) {
+            let container = document.getElementById('globalNotifications');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'globalNotifications';
+                container.className = 'position-fixed top-0 end-0 p-3';
+                document.body.appendChild(container);
+            }
+            const toast = document.createElement('div');
+            toast.className = `toast align-items-center text-bg-${type} show fade global-toast`;
+            toast.setAttribute('role', 'alert');
+            toast.setAttribute('aria-live', 'assertive');
+            toast.setAttribute('aria-atomic', 'true');
+            toast.innerHTML = `
+                <div class="d-flex">
+                    <div class="toast-body">${message}</div>
+                    <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Cerrar"></button>
+                </div>
+            `;
+            container.appendChild(toast);
+            // Cerrar al hacer click en la X
+            toast.querySelector('.btn-close').onclick = () => toast.remove();
+            // Auto-cerrar
+            setTimeout(() => { toast.remove(); }, timeout);
+        };
     const rows = document.querySelectorAll('table tbody tr');
     rows.forEach((row, index) => {
         row.style.animation = `fadeInUp .25s ease ${index * 0.02}s both`;

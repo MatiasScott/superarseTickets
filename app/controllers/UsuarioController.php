@@ -23,15 +23,18 @@ class UsuarioController extends Controller
 		Auth::requireAuth();
 
 		$roles = [];
+		$grupos = [];
 		try {
 			$db = Database::getInstance()->connection();
 			$stmt = $db->query("SELECT id, nombre FROM roles ORDER BY nombre");
 			$roles = $stmt->fetchAll() ?: [];
+			$grupos = (new Grupo())->allGrupos();
 		} catch (Throwable $e) {
 			$roles = [];
+			$grupos = [];
 		}
 
-		$this->view('usuarios/create', compact('roles'), [
+		$this->view('usuarios/create', compact('roles', 'grupos'), [
 			'title' => 'Crear Cuenta',
 		]);
 	}
@@ -95,12 +98,14 @@ class UsuarioController extends Controller
 				'rol_id' => $rol_id > 0 ? $rol_id : null,
 				'estado' => $estado,
 			]);
-
+			// Guardar grupos
+			if ($usuario_id && isset($_POST['grupos']) && is_array($_POST['grupos'])) {
+				$usuario->setGrupos($usuario_id, array_map('intval', $_POST['grupos']));
+			}
 			if ($usuario_id) {
 				set_flash('success', 'Cuenta creada exitosamente.');
 				redirect('usuarios');
 			}
-
 			set_flash('error', 'Error al crear la cuenta.');
 			redirect('usuarios/create');
 		} catch (Throwable $e) {
@@ -135,23 +140,25 @@ class UsuarioController extends Controller
 
 		$usuario = null;
 		$roles = [];
-
+		$grupos = [];
+		$usuarioGrupos = [];
 		try {
-			$usuario = (new Usuario())->findWithRole($id);
+			$usuarioModel = new Usuario();
+			$usuario = $usuarioModel->findWithRole($id);
 			if (!$usuario) {
 				set_flash('error', 'Usuario no encontrado.');
 				redirect('usuarios');
 			}
-
 			$db = Database::getInstance()->connection();
 			$stmt = $db->query("SELECT id, nombre FROM roles ORDER BY nombre");
 			$roles = $stmt->fetchAll() ?: [];
+			$grupos = (new Grupo())->allGrupos();
+			$usuarioGrupos = $usuarioModel->getGrupos($id);
 		} catch (Throwable $e) {
 			set_flash('error', 'Error al cargar el usuario.');
 			redirect('usuarios');
 		}
-
-		$this->view('usuarios/edit', compact('usuario', 'roles'), [
+		$this->view('usuarios/edit', compact('usuario', 'roles', 'grupos', 'usuarioGrupos'), [
 			'title' => 'Editar Usuario: ' . e($usuario['nombre']),
 		]);
 	}
@@ -199,12 +206,14 @@ class UsuarioController extends Controller
 				'rol_id' => $rol_id > 0 ? $rol_id : null,
 				'estado' => $estado,
 			]);
-
+			// Guardar grupos
+			if ($result && isset($_POST['grupos']) && is_array($_POST['grupos'])) {
+				$usuario->setGrupos($id, array_map('intval', $_POST['grupos']));
+			}
 			if ($result) {
 				set_flash('success', 'Usuario actualizado correctamente.');
 				redirect('usuarios');
 			}
-
 			set_flash('error', 'Error al actualizar el usuario.');
 			redirect('usuarios/' . $id . '/edit');
 		} catch (Throwable $e) {

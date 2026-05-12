@@ -3,6 +3,42 @@
 return static function (Router $router): void {
 	$router->get('/', 'DashboardController@index');
 
+	// Admin Panel
+	$router->get('/admin/dashboard', 'AdminController@dashboard');
+
+	// Admin - Usuarios
+	$router->get('/admin/usuarios', 'AdminController@usuariosIndex');
+	$router->get('/admin/usuarios/create', 'AdminController@usuariosCreate');
+	$router->post('/admin/usuarios', 'AdminController@usuariosStore');
+	$router->get('/admin/usuarios/{id}/edit', 'AdminController@usuariosEdit');
+	$router->post('/admin/usuarios/{id}', 'AdminController@usuariosUpdate');
+	$router->post('/admin/usuarios/{id}/delete', 'AdminController@usuariosDelete');
+
+	// Admin - Roles
+	$router->get('/admin/roles', 'AdminController@rolesIndex');
+	$router->get('/admin/roles/create', 'AdminController@rolesCreate');
+	$router->post('/admin/roles', 'AdminController@rolesStore');
+	$router->get('/admin/roles/{id}/edit', 'AdminController@rolesEdit');
+	$router->post('/admin/roles/{id}', 'AdminController@rolesUpdate');
+	$router->post('/admin/roles/{id}/delete', 'AdminController@rolesDelete');
+
+	// Admin - Grupos
+	$router->get('/admin/grupos', 'AdminController@gruposIndex');
+	$router->get('/admin/grupos/create', 'AdminController@gruposCreate');
+	$router->post('/admin/grupos', 'AdminController@gruposStore');
+	$router->get('/admin/grupos/{id}/edit', 'AdminController@gruposEdit');
+	$router->post('/admin/grupos/{id}', 'AdminController@gruposUpdate');
+
+	// Admin - Catálogos
+	$router->get('/admin/catalogo/{type}', 'AdminController@catalogIndex');
+	$router->get('/admin/catalogo/{type}/create', 'AdminController@catalogCreate');
+	$router->post('/admin/catalogo/{type}', 'AdminController@catalogStore');
+	$router->get('/admin/catalogo/{type}/{id}/edit', 'AdminController@catalogEdit');
+	$router->post('/admin/catalogo/{type}/{id}', 'AdminController@catalogUpdate');
+	$router->post('/admin/catalogo/{type}/{id}/delete', 'AdminController@catalogDelete');
+
+	$router->get('/configuracion/general', 'ConfiguracionController@general');
+
 	$router->get('/login', 'AuthController@showLogin');
 	$router->post('/login', 'AuthController@login');
 	$router->post('/logout', 'AuthController@logout');
@@ -72,5 +108,7 @@ return static function (Router $router): void {
 	$router->get('/bot', 'BotController@index');
 	$router->get('/relaciones', 'RelacionesController@index');
 	$router->get('/academico', 'ControlAcademicoController@index');
+	$router->get('/auditoria/export/excel', 'AuditoriaController@exportExcel');
+	$router->get('/auditoria/export/pdf', 'AuditoriaController@exportPdf');
 	$router->get('/auditoria', 'AuditoriaController@index');
 };

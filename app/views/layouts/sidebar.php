@@ -54,17 +54,8 @@
 		<!-- Administración -->
 		<div class="sidebar-section">
 			<h3 class="sidebar-title">ADMINISTRACIÓN</h3>
-			<a href="<?= e(base_url('usuarios')) ?>" class="sidebar-link">
-				<span class="icon">👥</span> Gestión de Cuentas
-			</a>
-			<a href="<?= e(base_url('catalogos/roles')) ?>" class="sidebar-link">
-				<span class="icon">🛡️</span> Roles
-			</a>
-			<a href="<?= e(base_url('catalogos')) ?>" class="sidebar-link">
-				<span class="icon">🗂️</span> Catálogos
-			</a>
-			<a href="<?= e(base_url('auditoria')) ?>" class="sidebar-link">
-				<span class="icon">📋</span> Auditoría
+			<a href="<?= e(base_url('admin/dashboard')) ?>" class="sidebar-link">
+				<span class="icon">⚙️</span> Panel de Admin
 			</a>
 		</div>
 
@@ -77,24 +68,9 @@
 			<a href="<?= e(base_url('crm/estudiantes')) ?>" class="sidebar-link">
 				<span class="icon">🎓</span> Estudiantes
 			</a>
-			<a href="<?= e(base_url('relaciones')) ?>" class="sidebar-link">
-				<span class="icon">🔗</span> Relaciones
-			</a>
-			<a href="<?= e(base_url('campanas')) ?>" class="sidebar-link">
-				<span class="icon">📢</span> Comunicaciones
-			</a>
-			<a href="<?= e(base_url('academico')) ?>" class="sidebar-link">
-				<span class="icon">📚</span> Control Académico
-			</a>
-			<a href="<?= e(base_url('bot')) ?>" class="sidebar-link">
-				<span class="icon">🤖</span> Bot & Automatización
-			</a>
 		</div>
 
 		<div class="sidebar-section sidebar-bottom-links">
-			<a href="<?= e(base_url('dashboard')) ?>" class="sidebar-link muted-link">
-				<span class="icon">▣</span> Panel
-			</a>
 			<a href="<?= e(base_url('configuracion')) ?>" class="sidebar-link muted-link">
 				<span class="icon">⚙</span> Preferencias
 			</a>

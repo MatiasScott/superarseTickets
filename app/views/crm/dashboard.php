@@ -7,7 +7,7 @@
 			</div>
 			<div class="d-flex gap-2">
 				<a class="btn btn-outline-secondary" href="<?= e(base_url('crm/interesados')) ?>">Ver todo CRM</a>
-				<a class="btn btn-primary" href="<?= e(base_url('catalogos/pipeline-estados')) ?>">Configuracion</a>
+				<a class="btn btn-primary" href="<?= e(base_url('configuracion')) ?>">Configuración</a>
 			</div>
 		</div>
 
