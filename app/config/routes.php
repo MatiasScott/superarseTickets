@@ -120,4 +120,8 @@ return static function (Router $router): void {
 	$router->get('/auditoria/export/excel', 'AuditoriaController@exportExcel');
 	$router->get('/auditoria/export/pdf', 'AuditoriaController@exportPdf');
 	$router->get('/auditoria', 'AuditoriaController@index');
+
+	// Mantenimiento y herramientas (solo super admin)
+	$router->get('/admin/analyze-tables', 'AdminController@analyzeTables');
+	$router->get('/admin/fix-permissions', 'AdminController@fixPermissions');
 };

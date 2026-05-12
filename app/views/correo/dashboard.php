@@ -13,7 +13,6 @@ $noRate = max(0, 100 - $yesRate);
 $todaySeriesSafe = (isset($todaySeries) && is_array($todaySeries)) ? $todaySeries : [];
 $lastWeekSeriesSafe = (isset($lastWeekSeries) && is_array($lastWeekSeries)) ? $lastWeekSeries : [];
 $whatsAppPrimarySafe = isset($whatsAppPrimary) ? (string) $whatsAppPrimary : '';
-$autoSyncEverySecondsSafe = max(5, (int) ($autoSyncEverySeconds ?? 5));
 
 $whatsAppConnected = !empty($whatsAppEnabled) && !empty($hasWhatsAppConnector) && !empty($whatsAppPrimary);
 $whatsAppState = $whatsAppConnected ? 'Conectado' : 'Pendiente de conexion';
@@ -45,53 +44,6 @@ $whatsAppBadgeClass = $whatsAppConnected ? 'success' : 'warning';
 			<div class="chat-whatsapp-number"><?= e($whatsAppPrimarySafe !== '' ? $whatsAppPrimarySafe : 'Sin numero definido') ?></div>
 			<span class="badge text-bg-<?= e($whatsAppBadgeClass) ?>"><?= e($whatsAppState) ?></span>
 			<div class="chat-whatsapp-hint">Este dashboard queda listo para operar directamente con el numero de WhatsApp configurado.</div>
-		</div>
-
-		<div
-			id="correoAutoSyncStatus"
-			class="alert alert-secondary d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"
-			data-auto-sync-interval-ms="<?= e((string) ($autoSyncEverySecondsSafe * 1000)) ?>"
-			data-auto-sync-url="<?= e(base_url('correo/sync-tickets/auto')) ?>"
-		>
-			<div>
-				<strong><i class="bi bi-arrow-repeat"></i> Auto-sync:</strong>
-				<span data-sync-status-text>Activo</span>
-				<span class="text-muted">(cada <?= e((string) $autoSyncEverySecondsSafe) ?> segundos)</span>
-			</div>
-			<div class="small text-muted" data-sync-last-run>Esperando primera ejecucion...</div>
-		</div>
-
-		<div class="card mb-3">
-			<div class="card-body">
-				<div class="row g-2 align-items-end">
-					<form method="GET" action="<?= e(base_url('chat/dashboard')) ?>" class="col-md-8 row g-2 align-items-end m-0 p-0">
-						<div class="col-md-6">
-							<label class="form-label"><i class="bi bi-envelope"></i> Cuenta de correo para sync</label>
-							<select class="form-select" name="account">
-								<option value="">Default</option>
-								<?php foreach (($accounts ?? []) as $acc): ?>
-									<option value="<?= e($acc['alias']) ?>" <?= (($accountAlias ?? '') === $acc['alias']) ? 'selected' : '' ?>>
-										<?= e($acc['name'] . ' (' . $acc['email'] . ')') ?>
-									</option>
-								<?php endforeach; ?>
-							</select>
-						</div>
-						<div class="col-md-3">
-							<button class="btn btn-outline-secondary w-100" type="submit"><i class="bi bi-arrow-clockwise"></i> Actualizar</button>
-						</div>
-						<div class="col-md-3">
-							<a class="btn btn-outline-primary w-100" href="<?= e(base_url('correo/verify?account=' . urlencode($accountAlias ?? '') . '&force=1')) ?>"><i class="bi bi-shield-check"></i> Verificar Cuenta</a>
-						</div>
-					</form>
-
-					<form method="POST" action="<?= e(base_url('correo/sync-tickets')) ?>" class="col-md-4 m-0 p-0" id="correoSyncForm">
-						<?= csrf_field() ?>
-						<input type="hidden" name="account_alias" value="<?= e($accountAlias ?? '') ?>">
-						<button class="btn btn-success w-100" type="submit"><i class="bi bi-ticket-detailed"></i> Crear Tickets de Correos No Leidos</button>
-						<small class="text-muted d-block mt-1">Estos controles quedan en el panel, no en Ver todos los chats.</small>
-					</form>
-				</div>
-			</div>
 		</div>
 
 		<div class="chat-grid-top mb-3">

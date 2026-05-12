@@ -361,7 +361,7 @@ class Auth
 		}
 	}
 
-	private static function isSuperAdmin(array $user): bool
+	public static function isSuperAdmin(array $user): bool
 	{
 		$role = strtolower((string) ($user['rol'] ?? ''));
 		return str_contains($role, 'super') && str_contains($role, 'admin');

@@ -745,4 +745,137 @@ class AdminController extends Controller
 		}
 		redirect('admin/catalogo/' . $type);
 	}
+
+	// ============ HERRAMIENTAS DE MANTENIMIENTO ============
+	public function analyzeTables(): void
+	{
+		Auth::requireAuth();
+		// Solo super admin
+		if (!Auth::isSuperAdmin(Auth::user())) {
+			set_flash('error', 'No tienes permiso para acceder a esta herramienta.');
+			redirect('dashboard');
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+			
+			// Obtener nombre de la base de datos actual
+			$dbName = $db->query("SELECT DATABASE()")->fetchColumn();
+			
+			// Obtener todas las tablas
+			$tablesResult = $db->query("SHOW TABLES FROM `$dbName`")->fetchAll(PDO::FETCH_COLUMN);
+			sort($tablesResult);
+			
+			// Archivos para buscar referencias de tablas
+			$codeDir = __DIR__ . '/../';
+			$files = new RecursiveIteratorIterator(
+				new RecursiveDirectoryIterator($codeDir, RecursiveDirectoryIterator::SKIP_DOTS),
+				RecursiveIteratorIterator::LEAVES_ONLY
+			);
+			
+			// Leer todo el código PHP
+			$allCode = '';
+			foreach ($files as $file) {
+				if ($file->getExtension() === 'php' && strpos($file->getPath(), 'vendor') === false) {
+					$allCode .= file_get_contents($file) . "\n";
+				}
+			}
+			
+			// Analizar cada tabla
+			$used = [];
+			$unused = [];
+			
+			foreach ($tablesResult as $table) {
+				// Búsquedas en el código
+				$patterns = [
+					"FROM $table",
+					"JOIN $table",
+					"INSERT INTO $table",
+					"UPDATE $table",
+					"DELETE FROM $table",
+					"'$table'",
+					"\"$table\"",
+				];
+				
+				$found = false;
+				foreach ($patterns as $pattern) {
+					if (stripos($allCode, $pattern) !== false) {
+						$found = true;
+						break;
+					}
+				}
+				
+				if ($found) {
+					$used[] = $table;
+				} else {
+					$unused[] = $table;
+				}
+			}
+			
+			// Pasar datos a la vista
+			$data = [
+				'used' => $used,
+				'unused' => $unused,
+				'totalTables' => count($tablesResult),
+			];
+			
+			// Si hay tablas no usadas, obtener el conteo de filas
+			if (!empty($unused)) {
+				$tableStats = [];
+				foreach ($unused as $table) {
+					try {
+						$count = $db->query("SELECT COUNT(*) FROM $table")->fetchColumn();
+						$tableStats[$table] = $count;
+					} catch (Exception $e) {
+						$tableStats[$table] = 0;
+					}
+				}
+				$data['tableStats'] = $tableStats;
+			}
+			
+			$this->view('admin/analyze-tables', $data, ['title' => 'Análisis de Tablas']);
+		} catch (Throwable $e) {
+			set_flash('error', 'Error en análisis: ' . $e->getMessage());
+			redirect('admin/dashboard');
+		}
+	}
+
+	public function fixPermissions(): void
+	{
+		Auth::requireAuth();
+		// Solo super admin
+		if (!Auth::isSuperAdmin(Auth::user())) {
+			set_flash('error', 'No tienes permiso para acceder a esta herramienta.');
+			redirect('dashboard');
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+			
+			// Leer el archivo SQL
+			$sqlFile = __DIR__ . '/../../storage/sql/06_role_action_permissions.sql';
+			$sql = file_get_contents($sqlFile);
+			
+			if (!$sql) {
+				throw new Exception('No se pudo leer el archivo SQL');
+			}
+			
+			// Ejecutar cada statement
+			$statements = array_filter(array_map('trim', explode(';', $sql)));
+			$executed = 0;
+			
+			foreach ($statements as $statement) {
+				if (!empty($statement)) {
+					$db->exec($statement);
+					$executed++;
+				}
+			}
+			
+			set_flash('success', 'Tabla de permisos actualizada correctamente. Se ejecutaron ' . $executed . ' sentencias SQL.');
+			redirect('admin/roles');
+		} catch (Throwable $e) {
+			set_flash('error', 'Error al actualizar permisos: ' . $e->getMessage());
+			redirect('admin/dashboard');
+		}
+	}
 }
