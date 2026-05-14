@@ -404,13 +404,19 @@ class CorreoController extends Controller
 
 	public function syncTicketsAuto(): void
 	{
-		Auth::requireAuth();
+		$internalToken = trim((string) ($_POST['_internal_token'] ?? ''));
+		$expectedInternalToken = trim((string) env('MAIL_AUTO_SYNC_INTERNAL_TOKEN', ''));
+		$isInternalRequest = $expectedInternalToken !== '' && $internalToken !== '' && hash_equals($expectedInternalToken, $internalToken);
 
-		if (!verify_csrf($_POST['_token'] ?? null)) {
-			http_response_code(403);
-			header('Content-Type: application/json; charset=UTF-8');
-			echo json_encode(['ok' => false, 'error' => 'Token CSRF invalido.']);
-			return;
+		if (!$isInternalRequest) {
+			Auth::requireAuth();
+
+			if (!verify_csrf($_POST['_token'] ?? null)) {
+				http_response_code(403);
+				header('Content-Type: application/json; charset=UTF-8');
+				echo json_encode(['ok' => false, 'error' => 'Token CSRF invalido.']);
+				return;
+			}
 		}
 
 		$accountAlias = trim((string) ($_POST['account_alias'] ?? ''));

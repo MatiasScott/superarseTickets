@@ -58,6 +58,13 @@ class AutoSyncScheduler
 			// Actualizar lock file primero para evitar ejecuciones concurrentes
 			self::updateLockFile();
 
+			// Sin token interno configurado, ejecutar directamente para evitar bloqueo por Auth/CSRF.
+			$internalToken = trim((string) env('MAIL_AUTO_SYNC_INTERNAL_TOKEN', ''));
+			if ($internalToken === '') {
+				self::executeDirectly();
+				return;
+			}
+
 			// Obtener configuración de la aplicación
 			$host = $_SERVER['HTTP_HOST'] ?? 'localhost';
 			$path = (string) app_config('url', '/istsTicket/public');
@@ -70,6 +77,10 @@ class AutoSyncScheduler
 			$hostname = $hostParts[0];
 			$port = $hostParts[1] ?? 80;
 
+			$payload = http_build_query([
+				'_internal_token' => $internalToken,
+			]);
+
 			// Intenta usar fsockopen para request sin esperar (no bloqueante)
 			$fp = @fsockopen($hostname, $port, $errno, $errstr, 2);
 			if ($fp) {
@@ -77,7 +88,8 @@ class AutoSyncScheduler
 				$out .= "Host: $host\r\n";
 				$out .= "Connection: Close\r\n";
 				$out .= "Content-Type: application/x-www-form-urlencoded\r\n";
-				$out .= "Content-Length: 0\r\n\r\n";
+				$out .= "Content-Length: " . strlen($payload) . "\r\n\r\n";
+				$out .= $payload;
 
 				fwrite($fp, $out);
 				fclose($fp);

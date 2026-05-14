@@ -1,5 +1,3 @@
-<?php include APP_PATH . '/views/layouts/header.php'; ?>
-
 <div class="container-fluid my-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h1 class="h3"><i class="bi bi-envelope-open"></i> Campañas de Correo</h1>
@@ -49,15 +47,15 @@
                                 <span class="badge bg-info"><?= $campana['total_destinatarios'] ?></span>
                             </td>
                             <td data-label="Estado">
-                                <?php 
-                                    $statuses = [
-                                        'borrador' => ['badge-secondary', 'Borrador'],
-                                        'programada' => ['badge-warning', 'Programada'],
-                                        'enviando' => ['badge-primary', 'Enviando'],
-                                        'completada' => ['badge-success', 'Completada'],
-                                        'cancelada' => ['badge-danger', 'Cancelada']
-                                    ];
-                                    [$badgeClass, $label] = $statuses[$campana['estado']] ?? ['badge-secondary', $campana['estado']];
+                                <?php
+                                $statuses = [
+                                    'borrador' => ['badge-secondary', 'Borrador'],
+                                    'programada' => ['badge-warning', 'Programada'],
+                                    'enviando' => ['badge-primary', 'Enviando'],
+                                    'completada' => ['badge-success', 'Completada'],
+                                    'cancelada' => ['badge-danger', 'Cancelada']
+                                ];
+                                [$badgeClass, $label] = $statuses[$campana['estado']] ?? ['badge-secondary', $campana['estado']];
                                 ?>
                                 <span class="badge <?= $badgeClass ?>"><?= $label ?></span>
                             </td>
@@ -103,5 +101,3 @@
         </div>
     <?php endif; ?>
 </div>
-
-<?php include APP_PATH . '/views/layouts/footer.php'; ?>
