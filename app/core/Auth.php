@@ -70,6 +70,12 @@ class Auth
 				'default_path' => 'campanas',
 				'actions' => ['ver', 'listar', 'crear', 'editar', 'eliminar', 'enviar']
 			],
+			'convenios' => [
+				'label' => 'Convenios',
+				'description' => 'Gestión de convenios institucionales, notas y tareas de seguimiento',
+				'default_path' => 'convenios',
+				'actions' => ['ver', 'listar', 'crear', 'editar', 'eliminar', 'configurar']
+			],
 			'bot' => [
 				'label' => 'Bot/IA',
 				'description' => 'Chatbot y automación de respuestas (WhatsApp, Web, Facebook)',
@@ -193,7 +199,7 @@ class Auth
 		}
 
 		$catalog = self::moduleCatalog();
-		$order = ['tickets', 'chat', 'crm', 'contactos', 'academico', 'campanas', 'bot', 'relaciones', 'auditoria', 'admin', 'configuracion'];
+		$order = ['tickets', 'chat', 'crm', 'contactos', 'academico', 'campanas', 'convenios', 'bot', 'relaciones', 'auditoria', 'admin', 'configuracion'];
 
 		foreach ($order as $moduleKey) {
 			if (!isset($catalog[$moduleKey])) {
@@ -434,6 +440,7 @@ class Auth
 			'/contactos' => 'contactos',
 			'/academico' => 'academico',
 			'/campanas' => 'campanas',
+			'/convenios' => 'convenios',
 			'/bot' => 'bot',
 			'/relaciones' => 'relaciones',
 			'/auditoria' => 'auditoria',

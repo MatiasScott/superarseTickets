@@ -373,6 +373,18 @@ class CRMController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
+			$activeEstados = $db->query("SELECT id, nombre FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC")->fetchAll() ?: [];
+			$stateIds = [];
+			$stateNames = [];
+			foreach ($activeEstados as $estado) {
+				$estadoId = (int) ($estado['id'] ?? 0);
+				if ($estadoId <= 0) {
+					continue;
+				}
+				$stateIds[] = $estadoId;
+				$stateNames[$estadoId] = (string) ($estado['nombre'] ?? ('Estado ' . $estadoId));
+			}
+
 			$ids = array_values(array_filter(array_map(
 				static function (array $row): int {
 					return (int) ($row['id'] ?? 0);
@@ -399,6 +411,38 @@ class CRMController extends Controller
 					'estado_id' => (int) ($pipelineRow['estado_id'] ?? 0),
 					'pipeline_nombre' => (string) ($pipelineRow['pipeline_nombre'] ?? 'Sin asignar'),
 				];
+			}
+
+			// Asignar pipeline aleatorio persistente a estudiantes sin estado.
+			if (!empty($stateIds)) {
+				$missingStudentIds = [];
+				foreach ($ids as $studentId) {
+					if (!isset($pipelineMap[$studentId])) {
+						$missingStudentIds[] = (int) $studentId;
+					}
+				}
+
+				if (!empty($missingStudentIds)) {
+					$insertSql = "INSERT INTO crm_student_pipeline (student_id, estado_id, updated_by, updated_at)
+						VALUES (:student_id, :estado_id, NULL, NOW())
+						ON DUPLICATE KEY UPDATE
+						estado_id = VALUES(estado_id),
+						updated_at = NOW()";
+					$insertStmt = $db->prepare($insertSql);
+
+					foreach ($missingStudentIds as $studentId) {
+						$randomEstadoId = (int) $stateIds[array_rand($stateIds)];
+						$insertStmt->execute([
+							':student_id' => $studentId,
+							':estado_id' => $randomEstadoId,
+						]);
+
+						$pipelineMap[$studentId] = [
+							'estado_id' => $randomEstadoId,
+							'pipeline_nombre' => (string) ($stateNames[$randomEstadoId] ?? 'Sin asignar'),
+						];
+					}
+				}
 			}
 
 			foreach ($rows as &$row) {

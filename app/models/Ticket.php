@@ -32,6 +32,7 @@ class Ticket extends Model
 	public function getFiltered(array $filters = [], int $limit = 200, int $offset = 0): array
 	{
 		[$whereSql, $params] = $this->buildFilterWhere($filters);
+		$orderSql = $this->resolveOrderClause($filters);
 
 		$sql = "SELECT t.*, 
 				te.nombre AS estado_ticket,
@@ -48,7 +49,7 @@ class Ticket extends Model
 			LEFT JOIN contactos c ON c.id = t.contacto_id
 			LEFT JOIN usuarios u ON u.id = t.asignado_a
 			{$whereSql}
-			ORDER BY t.id DESC
+			{$orderSql}
 			LIMIT :limit OFFSET :offset";
 
 		$stmt = $this->db->prepare($sql);
@@ -59,6 +60,27 @@ class Ticket extends Model
 		$stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
 		$stmt->execute();
 		return $stmt->fetchAll() ?: [];
+	}
+
+	private function resolveOrderClause(array $filters): string
+	{
+		$sort = strtolower(trim((string) ($filters['sort'] ?? 'id')));
+		$direction = strtolower(trim((string) ($filters['direction'] ?? 'desc')));
+
+		$allowedSorts = [
+			'id' => 't.id',
+			'codigo' => 't.codigo',
+			'prioridad' => 'tp.nombre',
+			'estado' => 'te.nombre',
+			'grupo' => 'tg.nombre',
+			'asignado' => 'u.nombre',
+			'fecha' => 't.created_at',
+		];
+
+		$column = $allowedSorts[$sort] ?? 't.id';
+		$direction = $direction === 'asc' ? 'ASC' : 'DESC';
+
+		return "ORDER BY {$column} {$direction}, t.id DESC";
 	}
 
 	public function countFiltered(array $filters = []): int

@@ -1,7 +1,9 @@
 <section class="module-page tickets-dashboard">
 	<?php
 	$stats = $stats ?? ['sin_resolver' => 0, 'vencidos' => 0, 'vencen_hoy' => 0];
-	$porGrupo = $porGrupo ?? [];
+	$tickets = $tickets ?? [];
+	$groupKpis = $groupKpis ?? [];
+	$selectedGroupLabel = $selectedGroupLabel ?? 'Todos los grupos';
 	$actualizado = $actualizado ?? date('H:i:s');
 	?>
 	<div class="container-fluid py-4">
@@ -41,16 +43,40 @@
 
 		<div class="ticket-block" id="conteo-grupos">
 			<div class="ticket-block-head split">
-				<span>Tickets activos por grupo</span>
-				<a href="<?= e(base_url('tickets/dashboard/grupos')) ?>"><i class="bi bi-diagram-3"></i> Ver detalles</a>
+				<span>KPI por grupo de tickets</span>
+				<small class="text-muted">Haz clic en el total para abrir la lista de tickets filtrada por grupo</small>
 			</div>
-			<div class="summary-table" data-ticket-group-list>
-				<?php foreach ($porGrupo as $row): ?>
-					<div><span><?= e($row['grupo'] ?? 'Sin asignar') ?></span><strong><?= e((string) ($row['total'] ?? 0)) ?></strong></div>
-				<?php endforeach; ?>
-				<?php if (empty($porGrupo)): ?>
-					<p class="empty-copy">No hay datos para mostrar.</p>
-				<?php endif; ?>
+			<div class="table-responsive">
+				<table class="table table-sm align-middle mb-0">
+					<thead class="table-light">
+						<tr>
+							<th>Grupo</th>
+							<th class="text-end">Abiertos</th>
+							<th class="text-end">Vencidos</th>
+							<th class="text-end">Por vencer</th>
+							<th class="text-end">Total</th>
+						</tr>
+					</thead>
+					<tbody data-ticket-group-list>
+						<?php if (empty($groupKpis)): ?>
+							<tr><td colspan="5" class="text-center text-muted py-4">No hay datos para mostrar.</td></tr>
+						<?php else: ?>
+							<?php foreach ($groupKpis as $row): ?>
+								<tr>
+									<td><?= e((string) ($row['grupo'] ?? 'Sin asignar')) ?></td>
+									<td class="text-end"><?= (int) ($row['abiertos'] ?? 0) ?></td>
+									<td class="text-end text-danger"><?= (int) ($row['vencidos'] ?? 0) ?></td>
+									<td class="text-end text-warning"><?= (int) ($row['por_vencer'] ?? 0) ?></td>
+									<td class="text-end">
+										<a href="<?= e((string) ($row['url'] ?? base_url('tickets'))) ?>" class="fw-semibold">
+											<?= (int) ($row['total'] ?? 0) ?>
+										</a>
+									</td>
+								</tr>
+							<?php endforeach; ?>
+						<?php endif; ?>
+					</tbody>
+				</table>
 			</div>
 		</div>
 	</div>

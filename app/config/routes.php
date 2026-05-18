@@ -118,6 +118,18 @@ return static function (Router $router): void {
 	$router->post('/campanas/delete/{id}', 'CampanaController@delete');
 	$router->get('/campanas/preview/{id}', 'CampanaController@preview');
 
+	// Convenios
+	$router->get('/convenios', 'ConvenioController@index');
+	$router->get('/convenios/create', 'ConvenioController@create');
+	$router->post('/convenios', 'ConvenioController@store');
+	$router->get('/convenios/{id}', 'ConvenioController@show');
+	$router->post('/convenios/{id}/datos', 'ConvenioController@updateDatos');
+	$router->post('/convenios/{id}/notas', 'ConvenioController@storeNota');
+	$router->post('/convenios/{id}/tareas', 'ConvenioController@storeTarea');
+	$router->post('/convenios/{id}/tareas/{tareaId}/estado', 'ConvenioController@updateTareaEstado');
+	$router->post('/convenios/{id}/tareas/{tareaId}/participantes', 'ConvenioController@updateTareaParticipantes');
+	$router->post('/convenios/{id}/tareas/{tareaId}/resultado', 'ConvenioController@updateTareaResultado');
+
 	$router->get('/bot', 'BotController@index');
 	$router->get('/relaciones', 'RelacionesController@index');
 	$router->get('/academico', 'ControlAcademicoController@index');

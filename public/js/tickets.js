@@ -4,6 +4,12 @@ document.addEventListener('DOMContentLoaded', () => {
 	const dashboardRoot = document.querySelector('[data-ticket-dashboard-live="true"]');
 	if (dashboardRoot) {
 		const endpoint = dashboardRoot.getAttribute('data-ticket-dashboard-url') || '';
+		const escapeHtml = (value) => String(value)
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#39;');
 		const statNodes = {
 			sin_resolver: dashboardRoot.querySelector('[data-ticket-stat="sin_resolver"]'),
 			vencidos: dashboardRoot.querySelector('[data-ticket-stat="vencidos"]'),
@@ -15,12 +21,20 @@ document.addEventListener('DOMContentLoaded', () => {
 		const renderGroups = (groups) => {
 			if (!groupList) return;
 			if (!Array.isArray(groups) || groups.length === 0) {
-				groupList.innerHTML = '<p class="empty-copy">No hay datos para mostrar.</p>';
+				groupList.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No hay datos para mostrar.</td></tr>';
 				return;
 			}
 
 			groupList.innerHTML = groups
-				.map((row) => `<div><span>${String(row.grupo ?? 'Sin asignar')}</span><strong>${String(row.total ?? 0)}</strong></div>`)
+				.map((row) => {
+					const url = String(row.url ?? '');
+					const total = String(row.total ?? 0);
+					const grupo = escapeHtml(row.grupo ?? 'Sin asignar');
+					const abiertos = String(row.abiertos ?? 0);
+					const vencidos = String(row.vencidos ?? 0);
+					const porVencer = String(row.por_vencer ?? 0);
+					return `<tr><td>${grupo}</td><td class="text-end">${abiertos}</td><td class="text-end text-danger">${vencidos}</td><td class="text-end text-warning">${porVencer}</td><td class="text-end"><a href="${url}" class="fw-semibold">${total}</a></td></tr>`;
+				})
 				.join('');
 		};
 
@@ -37,7 +51,7 @@ document.addEventListener('DOMContentLoaded', () => {
 				if (statNodes.sin_resolver) statNodes.sin_resolver.textContent = String(stats.sin_resolver ?? 0);
 				if (statNodes.vencidos) statNodes.vencidos.textContent = String(stats.vencidos ?? 0);
 				if (statNodes.vencen_hoy) statNodes.vencen_hoy.textContent = String(stats.vencen_hoy ?? 0);
-				renderGroups(data.porGrupo || []);
+				renderGroups(data.groupKpis || []);
 				if (updatedAt) updatedAt.textContent = String(data.actualizado || '');
 			} catch (error) {
 				console.debug('No se pudo actualizar dashboard de tickets en tiempo real.', error);

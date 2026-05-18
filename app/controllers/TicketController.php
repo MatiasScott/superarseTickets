@@ -10,7 +10,10 @@ class TicketController extends Controller
 
 		$this->view('tickets/dashboard', [
 			'stats' => $data['stats'],
-			'porGrupo' => $data['porGrupo'],
+			'tickets' => $data['tickets'],
+			'groupKpis' => $data['groupKpis'],
+			'selectedGroupId' => $data['selectedGroupId'],
+			'selectedGroupLabel' => $data['selectedGroupLabel'],
 			'actualizado' => $data['actualizado'],
 		], [
 			'title' => 'Dashboard Tickets',
@@ -75,6 +78,8 @@ class TicketController extends Controller
 			'grupo_id'     => trim((string) ($_GET['grupo_id']     ?? '')),
 			'asignado_id'  => trim((string) ($_GET['asignado_id']  ?? '')),
 			'buscar'       => trim((string) ($_GET['buscar']       ?? '')),
+			'sort'         => trim((string) ($_GET['sort']         ?? 'id')),
+			'direction'    => trim((string) ($_GET['direction']    ?? 'desc')),
 		];
 		$activeFilters = array_filter($filters, function($v) { return $v !== ''; });
 
@@ -109,7 +114,7 @@ class TicketController extends Controller
 			$pages  = max(1, (int) ceil($total / $perPage));
 			$page   = min($page, $pages);
 			$offset = ($page - 1) * $perPage;
-			$tickets = $ticketModel->getFiltered($activeFilters, $perPage, $offset);
+			$tickets = $this->enrichTicketsWithSla($ticketModel->getFiltered($activeFilters, $perPage, $offset));
 		} catch (Throwable $e) {
 			$tickets = [];
 			set_flash('error', 'No se pudieron cargar los tickets.');
@@ -567,134 +572,179 @@ class TicketController extends Controller
 	private function buildDashboardData(): array
 	{
 		$db = Database::getInstance()->connection();
-		$ticketColumns = $this->getTableColumns($db, 'tickets');
 		$catalog = $this->resolveTicketDefaults($db);
-		$estadoAbiertoId = $catalog['estado_abierto_id'] ?? null;
+		$grupoId = isset($_GET['grupo_id']) && $_GET['grupo_id'] !== '' ? (int) $_GET['grupo_id'] : null;
+		$slaMap = $this->getTicketSlaMap($db);
 
-		// Obtener SLA por prioridad
-		require_once __DIR__ . '/../models/TicketSLA.php';
-		$slaModel = new \TicketSLA();
-		$slaList = $slaModel->getAll();
-		$slaPorPrioridad = [];
-		foreach ($slaList as $sla) {
-			$slaPorPrioridad[strtolower($sla['prioridad'])] = $sla;
-		}
-
-		$whereBase = "t.estado = 'activo'";
-		$params = [];
+		$allTickets = $this->fetchDashboardTickets($db, null, 0);
+		$allTickets = $this->enrichTicketsWithSla($allTickets, $slaMap);
 
 		$stats = [
-			'sin_resolver' => 0,
+			'sin_resolver' => count($allTickets),
 			'vencidos' => 0,
 			'vencen_hoy' => 0,
 		];
 
-		// Tickets sin resolver
-		$sqlSinResolver = "SELECT COUNT(*) FROM tickets t WHERE {$whereBase}";
-		$stmt = $db->prepare($sqlSinResolver);
-		$stmt->execute($params);
-		$stats['sin_resolver'] = (int) $stmt->fetchColumn();
-
-		// Tickets vencidos y que vencen hoy según SLA
-		if (in_array('created_at', $ticketColumns, true) && in_array('prioridad_id', $ticketColumns, true)) {
-			// Obtener todos los tickets activos con prioridad y fecha
-			$sqlTickets = "SELECT t.id, t.created_at, tp.nombre AS prioridad
-				FROM tickets t
-				LEFT JOIN ticket_prioridades tp ON tp.id = t.prioridad_id
-				WHERE {$whereBase}";
-			$stmt = $db->prepare($sqlTickets);
-			$stmt->execute($params);
-			$tickets = $stmt->fetchAll() ?: [];
-
-			$hoy = date('Y-m-d');
-			foreach ($tickets as $tk) {
-				$prioridad = strtolower(trim($tk['prioridad'] ?? ''));
-				$sla = $slaPorPrioridad[$prioridad] ?? null;
-				if (!$sla) continue;
-				$horasResol = (int) $sla['resolucion_horas'];
-				$fechaLimite = date('Y-m-d', strtotime($tk['created_at'] . "+$horasResol hours"));
-				if ($fechaLimite < $hoy) {
-					$stats['vencidos']++;
-				} elseif ($fechaLimite === $hoy) {
-					$stats['vencen_hoy']++;
-				}
+		foreach ($allTickets as $ticket) {
+			if (!empty($ticket['vencido'])) {
+				$stats['vencidos']++;
+			}
+			if (!empty($ticket['por_vencer'])) {
+				$stats['vencen_hoy']++;
 			}
 		}
 
+		$groupKpis = $this->buildGroupBreakdownData($allTickets, $slaMap);
 
-		$breakdown = $this->buildGroupBreakdownData();
-		$porGrupo = array_map(static function (array $row): array {
-			return [
-				'grupo' => (string) ($row['grupo'] ?? 'Sin asignar'),
-				'total' => (int) ($row['abiertos'] ?? 0),
-			];
-		}, $breakdown);
+		$detailTickets = $this->fetchDashboardTickets($db, $grupoId, 12);
+		$detailTickets = $this->enrichTicketsWithSla($detailTickets, $slaMap);
+
+		$selectedGroupLabel = 'Todos los grupos';
+		if ($grupoId !== null) {
+			$stmt = $db->prepare("SELECT nombre FROM ticket_grupos WHERE id = :id LIMIT 1");
+			$stmt->execute(['id' => $grupoId]);
+			$groupName = (string) $stmt->fetchColumn();
+			if ($groupName !== '') {
+				$selectedGroupLabel = $groupName;
+			}
+		}
 
 		return [
 			'stats' => $stats,
-			'porGrupo' => $porGrupo,
+			'tickets' => $detailTickets,
+			'groupKpis' => $groupKpis,
+			'selectedGroupId' => $grupoId,
+			'selectedGroupLabel' => $selectedGroupLabel,
 			'actualizado' => date('H:i:s'),
 		];
 	}
 
-	private function buildGroupBreakdownData(): array
+	private function fetchDashboardTickets(PDO $db, ?int $groupId, int $limit = 12): array
 	{
-		$db = Database::getInstance()->connection();
-		$sql = "
-			SELECT
-				tg.nombre AS grupo,
-				COUNT(t.id) AS abiertos,
-				0 AS vencidos,
-				0 AS vencen_hoy
-			FROM ticket_grupos tg
-			LEFT JOIN tickets t ON t.grupo_id = tg.id
-				AND t.estado = 'activo'
-			WHERE tg.estado = 'activo'
-			GROUP BY tg.id, tg.nombre
-			ORDER BY abiertos DESC, tg.nombre ASC
-		";
+		$sql = "SELECT t.id, t.codigo, t.asunto, t.created_at, t.estado_id, t.prioridad_id, t.grupo_id,
+				te.nombre AS estado_ticket,
+				tp.nombre AS prioridad_ticket,
+				tg.nombre AS grupo_ticket,
+				CONCAT(c.nombre, ' ', c.apellido) AS contacto_nombre,
+				u.nombre AS asignado_nombre
+			FROM tickets t
+			LEFT JOIN ticket_estados te ON te.id = t.estado_id
+			LEFT JOIN ticket_prioridades tp ON tp.id = t.prioridad_id
+			LEFT JOIN ticket_grupos tg ON tg.id = t.grupo_id
+			LEFT JOIN contactos c ON c.id = t.contacto_id
+			LEFT JOIN usuarios u ON u.id = t.asignado_a
+			WHERE t.estado = 'activo'";
+
+		$params = [];
+		if ($groupId !== null) {
+			$sql .= " AND t.grupo_id = :grupo_id";
+			$params['grupo_id'] = $groupId;
+		}
+
+		$sql .= " ORDER BY t.created_at DESC, t.id DESC";
+		if ($limit > 0) {
+			$sql .= " LIMIT :limit";
+		}
 
 		$stmt = $db->prepare($sql);
+		foreach ($params as $key => $value) {
+			$placeholder = str_starts_with($key, ':') ? $key : ':' . $key;
+			$stmt->bindValue($placeholder, $value, PDO::PARAM_INT);
+		}
+		if ($limit > 0) {
+			$stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+		}
 		$stmt->execute();
-		$rows = $stmt->fetchAll() ?: [];
+		return $stmt->fetchAll() ?: [];
+	}
 
-		$sqlSinAsignar = "
-			SELECT COUNT(*) AS abiertos
-			FROM tickets t
-			WHERE t.estado = 'activo'
-			  AND (t.grupo_id IS NULL OR t.grupo_id = 0)
-		";
+	private function buildGroupBreakdownData(array $tickets = [], array $slaMap = []): array
+	{
+		$db = Database::getInstance()->connection();
+		$rows = [];
+		$groups = [];
+		try {
+			$stmt = $db->query("SELECT id, nombre FROM ticket_grupos WHERE estado = 'activo' ORDER BY nombre ASC");
+			$groups = $stmt ? ($stmt->fetchAll() ?: []) : [];
+		} catch (Throwable $e) {
+			$groups = [];
+		}
 
-		$stmt = $db->prepare($sqlSinAsignar);
-		$stmt->execute();
-		$sinAsignar = $stmt->fetch() ?: null;
-		if (is_array($sinAsignar)) {
-			$sinAsignarAbiertos = (int) ($sinAsignar['abiertos'] ?? 0);
-			if ($sinAsignarAbiertos > 0) {
-				$merged = false;
-				foreach ($rows as &$row) {
-					$groupName = strtolower(trim((string) ($row['grupo'] ?? '')));
-					if ($groupName === 'sin asignar' || $groupName === 'no asignado') {
-						$row['abiertos'] = (int) ($row['abiertos'] ?? 0) + $sinAsignarAbiertos;
-						$merged = true;
-						break;
-					}
-				}
-				unset($row);
+		$unassignedKey = 'sin_asignar';
+		foreach ($groups as $group) {
+			$groupId = (int) ($group['id'] ?? 0);
+			$groupName = trim((string) ($group['nombre'] ?? 'Sin asignar'));
+			$key = 'g_' . $groupId;
+			$rows[$key] = [
+				'grupo_id' => $groupId,
+				'grupo' => $groupName !== '' ? $groupName : 'Sin asignar',
+				'abiertos' => 0,
+				'vencidos' => 0,
+				'por_vencer' => 0,
+				'vencen_hoy' => 0,
+				'total' => 0,
+				'url' => base_url('tickets?grupo_id=' . $groupId),
+			];
 
-				if (!$merged) {
-					$rows[] = [
-						'grupo' => 'Sin Asignar',
-						'abiertos' => $sinAsignarAbiertos,
-						'vencidos' => 0,
-						'vencen_hoy' => 0,
-					];
-				}
+			$nameNorm = mb_strtolower(trim((string) ($rows[$key]['grupo'] ?? '')), 'UTF-8');
+			if ($nameNorm === 'sin asignar' || $nameNorm === 'no asignado') {
+				$unassignedKey = $key;
 			}
 		}
 
+		if (!isset($rows[$unassignedKey])) {
+			$rows[$unassignedKey] = [
+				'grupo_id' => 0,
+				'grupo' => 'Sin asignar',
+				'abiertos' => 0,
+				'vencidos' => 0,
+				'por_vencer' => 0,
+				'vencen_hoy' => 0,
+				'total' => 0,
+				'url' => base_url('tickets'),
+			];
+		}
+
+		if (empty($tickets)) {
+			$tickets = $this->fetchDashboardTickets($db, null, 0);
+			$tickets = $this->enrichTicketsWithSla($tickets, $slaMap);
+		}
+
+		foreach ($tickets as $ticket) {
+			$groupId = (int) ($ticket['grupo_id'] ?? 0);
+			$groupName = trim((string) ($ticket['grupo_ticket'] ?? 'Sin asignar'));
+			if ($groupName === '') {
+				$groupName = 'Sin asignar';
+			}
+
+			$key = $groupId > 0 ? 'g_' . $groupId : $unassignedKey;
+			if (!isset($rows[$key])) {
+				$rows[$key] = [
+					'grupo_id' => $groupId,
+					'grupo' => $groupName,
+					'abiertos' => 0,
+					'vencidos' => 0,
+					'por_vencer' => 0,
+					'vencen_hoy' => 0,
+					'total' => 0,
+					'url' => $groupId > 0 ? base_url('tickets?grupo_id=' . $groupId) : base_url('tickets'),
+				];
+			}
+
+			$state = $this->calculateTicketSlaState($ticket, $slaMap);
+			if ($state['vencido']) {
+				$rows[$key]['vencidos']++;
+			} elseif ($state['por_vencer']) {
+				$rows[$key]['por_vencer']++;
+				$rows[$key]['vencen_hoy']++;
+			} else {
+				$rows[$key]['abiertos']++;
+			}
+			$rows[$key]['total']++;
+		}
+
 		usort($rows, static function (array $a, array $b): int {
-			$diff = (int) ($b['abiertos'] ?? 0) <=> (int) ($a['abiertos'] ?? 0);
+			$diff = (int) ($b['total'] ?? 0) <=> (int) ($a['total'] ?? 0);
 			if ($diff !== 0) {
 				return $diff;
 			}
@@ -702,6 +752,88 @@ class TicketController extends Controller
 		});
 
 		return $rows;
+	}
+
+	private function getTicketSlaMap(PDO $db): array
+	{
+		require_once __DIR__ . '/../models/TicketSLA.php';
+		$slaModel = new \TicketSLA();
+		$rows = $slaModel->getAll();
+		$map = [];
+
+		foreach ($rows as $row) {
+			$priority = strtolower(trim((string) ($row['prioridad'] ?? '')));
+			if ($priority !== '') {
+				$map[$priority] = $row;
+			}
+		}
+
+		return $map;
+	}
+
+	private function enrichTicketsWithSla(array $tickets, array $slaMap = []): array
+	{
+		if (empty($tickets)) {
+			return [];
+		}
+
+		if (empty($slaMap)) {
+			$slaMap = $this->getTicketSlaMap(Database::getInstance()->connection());
+		}
+
+		foreach ($tickets as &$ticket) {
+			$state = $this->calculateTicketSlaState($ticket, $slaMap);
+			$ticket['vencido'] = $state['vencido'] ? 1 : 0;
+			$ticket['por_vencer'] = $state['por_vencer'] ? 1 : 0;
+			$ticket['fecha_vencimiento'] = $state['fecha_vencimiento'] ?? '';
+			$ticket['sla_estado'] = $state['estado'] ?? 'sin_sla';
+		}
+		unset($ticket);
+
+		return $tickets;
+	}
+
+	private function calculateTicketSlaState(array $ticket, array $slaMap): array
+	{
+		$priority = strtolower(trim((string) ($ticket['prioridad_ticket'] ?? '')));
+		$sla = $slaMap[$priority] ?? null;
+		$createdAt = trim((string) ($ticket['created_at'] ?? ''));
+		$state = [
+			'vencido' => false,
+			'por_vencer' => false,
+			'fecha_vencimiento' => '',
+			'estado' => 'sin_sla',
+		];
+
+		if ($sla === null || $createdAt === '') {
+			return $state;
+		}
+
+		$resolutionHours = (int) ($sla['resolucion_horas'] ?? 0);
+		if ($resolutionHours <= 0) {
+			return $state;
+		}
+
+		$deadline = strtotime($createdAt . ' +' . $resolutionHours . ' hours');
+		if ($deadline === false) {
+			return $state;
+		}
+
+		$today = date('Y-m-d');
+		$deadlineDate = date('Y-m-d', $deadline);
+		$state['fecha_vencimiento'] = date('d/m/Y H:i', $deadline);
+
+		if ($deadlineDate < $today) {
+			$state['vencido'] = true;
+			$state['estado'] = 'vencido';
+		} elseif ($deadlineDate === $today) {
+			$state['por_vencer'] = true;
+			$state['estado'] = 'por_vencer';
+		} else {
+			$state['estado'] = 'abierto';
+		}
+
+		return $state;
 	}
 
 	private function resolveTicketDefaults(PDO $db): array

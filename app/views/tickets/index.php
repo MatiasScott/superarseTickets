@@ -12,6 +12,32 @@ $hayFiltros = array_filter($filters, fn($v) => $v !== '');
 $page  = (int) ($page  ?? 1);
 $pages = (int) ($pages ?? 1);
 $total = (int) ($total ?? count($tickets));
+$sortField = (string) ($filters['sort'] ?? 'id');
+$sortDirection = strtolower((string) ($filters['direction'] ?? 'desc'));
+
+if (!function_exists('ticketSortUrl')) {
+	function ticketSortUrl(array $filters, string $field): string {
+		$currentField = (string) ($filters['sort'] ?? 'id');
+		$currentDirection = strtolower((string) ($filters['direction'] ?? 'desc'));
+		$nextDirection = ($currentField === $field && $currentDirection === 'asc') ? 'desc' : 'asc';
+		$params = $filters;
+		$params['sort'] = $field;
+		$params['direction'] = $nextDirection;
+		$params = array_filter($params, function ($value) { return $value !== ''; });
+		return base_url('tickets?' . http_build_query($params));
+	}
+}
+
+if (!function_exists('ticketSortIndicator')) {
+	function ticketSortIndicator(array $filters, string $field): string {
+		$currentField = (string) ($filters['sort'] ?? 'id');
+		$currentDirection = strtolower((string) ($filters['direction'] ?? 'desc'));
+		if ($currentField !== $field) {
+			return '';
+		}
+		return $currentDirection === 'asc' ? ' <i class="bi bi-sort-up"></i>' : ' <i class="bi bi-sort-down"></i>';
+	}
+}
 
 $counts = [
 	'total_pagina' => count($tickets),
@@ -194,21 +220,22 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 			<table class="table table-striped align-middle mb-0 tickets-table">
 				<thead class="table-light">
 					<tr>
-						<th class="text-nowrap">Código</th>
+							<th class="text-nowrap"><a href="<?= e(ticketSortUrl($filters, 'codigo')) ?>">Código<?= ticketSortIndicator($filters, 'codigo') ?></a></th>
 						<th>Contacto</th>
 						<th>Asunto</th>
-						<th class="text-nowrap">Prioridad</th>
-						<th class="text-nowrap">Estado</th>
+							<th class="text-nowrap"><a href="<?= e(ticketSortUrl($filters, 'prioridad')) ?>">Prioridad<?= ticketSortIndicator($filters, 'prioridad') ?></a></th>
+							<th class="text-nowrap"><a href="<?= e(ticketSortUrl($filters, 'estado')) ?>">Estado<?= ticketSortIndicator($filters, 'estado') ?></a></th>
+							<th class="text-nowrap">Vencido</th>
 						<th>Tipo</th>
 						<th>Grupo</th>
 						<th>Asignado</th>
-						<th class="text-nowrap">Est. Registro</th>
+							<th class="text-nowrap"><a href="<?= e(ticketSortUrl($filters, 'fecha')) ?>">Est. Registro<?= ticketSortIndicator($filters, 'fecha') ?></a></th>
 					</tr>
 				</thead>
 				<tbody>
 					<?php if (empty($tickets)): ?>
 						<tr>
-							<td colspan="9" class="text-center text-muted py-5">
+								<td colspan="10" class="text-center text-muted py-5">
 								No hay tickets que coincidan con los filtros aplicados.
 							</td>
 						</tr>
@@ -232,6 +259,8 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 							} elseif (str_contains($estadoNorm, 'resuelto') || str_contains($estadoNorm, 'cerrado')) {
 								$estadoClass = 'tickets-badge-state is-closed';
 							}
+								$vencido = !empty($ticket['vencido']);
+								$vencidoClass = $vencido ? 'badge text-bg-danger' : 'badge text-bg-success';
 							?>
 							<tr>
 								<td class="text-nowrap">
@@ -243,6 +272,7 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 								<td class="ticket-subject-cell"><?= e($ticket['asunto'] ?? '-') ?></td>
 								<td><span class="<?= e($prioridadClass) ?>"><?= e($prioridadRaw !== '' ? $prioridadRaw : '-') ?></span></td>
 								<td><span class="<?= e($estadoClass) ?>"><?= e($estadoRaw !== '' ? $estadoRaw : '-') ?></span></td>
+								<td><span class="<?= e($vencidoClass) ?>"><?= $vencido ? 'Sí' : 'No' ?></span></td>
 								<td><?= e($ticket['tipo_ticket'] ?? '-') ?></td>
 								<td><span class="badge text-bg-light border"><?= e($ticket['grupo_ticket'] ?? 'Sin asignar') ?></span></td>
 								<td><span class="badge text-bg-light border"><?= e($ticket['asignado_nombre'] ?? 'Sin asignar') ?></span></td>
