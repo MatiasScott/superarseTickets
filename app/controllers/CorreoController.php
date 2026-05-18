@@ -579,6 +579,12 @@ class CorreoController extends Controller
 					'estado' => 'activo',
 				]);
 
+				$db->prepare('UPDATE tickets SET codigo = :codigo WHERE id = :id')
+					->execute([
+						'codigo' => 'TCK-' . (int) $ticketId,
+						'id' => $ticketId,
+					]);
+
 				$grupoNombre = $this->resolveGroupNameByTicketId($db, $ticketId);
 				$groupKey = $grupoNombre !== '' ? $grupoNombre : 'Sin asignar';
 				$createdByGroup[$groupKey] = (int) ($createdByGroup[$groupKey] ?? 0) + 1;
@@ -833,37 +839,29 @@ class CorreoController extends Controller
 
 	private function resolveGroupByDirectEmailMap(array $groups, string $accountEmail): ?int
 	{
-		$local = strtolower(trim((string) strstr($accountEmail, '@', true) ?: $accountEmail));
-		$local = preg_replace('/[^a-z0-9]/', '', $local) ?? $local; // quitar puntos, guiones
+		$localPart = trim((string) (strstr($accountEmail, '@', true) ?: $accountEmail));
+		$local = $this->normalizeCatalogText($localPart);
+		$local = preg_replace('/[^a-z0-9]/', '', $local) ?? $local; // quitar puntos, guiones y espacios
 
 		// Mapeo local-de-email -> nombre(s) de grupo (en orden de preferencia)
 		$map = [
-			'matriculas'          => ['admisiones'],
-			'admisiones'          => ['admisiones'],
-			'proveedores'         => ['facturacion', 'contabildiad'],
-			'facturacion'         => ['facturacion', 'contabildiad'],
-			'contabilidad'        => ['facturacion', 'contabildiad'],
-			'soporte'             => ['soporte'],
-			'mesadeayuda'         => ['soporte'],
-			'helpdesk'            => ['soporte'],
-			'info'                => [], // sin grupo fijo: depende de contenido
-			'ptitulacion'         => ['titulacion'],
-			'titulacion'          => ['titulacion'],
-			'investigacion'       => ['investigacion'],
-			'rectorado'           => ['rectorado'],
-			'practicas'           => ['practicas pre profesionales'],
-			'vinculacion'         => ['vinculacion con la sociedad'],
-			'direcciondocencia'   => ['docencia'],
-			'docencia'            => ['docencia'],
-			'ingles'              => ['docencia'],
-			'becas'               => ['bienestar institucional'],
-			'bienestar'           => ['bienestar institucional'],
-			'secretariageneral'   => ['secretaria general'],
-			'secretaria'          => ['secretaria general'],
-			'relacionesinternacionales' => ['relaciones interinstitucionales'],
-			'relaciones'          => ['relaciones interinstitucionales'],
-			'administrativo'      => ['administrativo'],
-			'administracion'      => ['administrativo'],
+			'becas' => ['bienestar institucional'],
+			'matriculas' => ['contabilidad y facturacion'],
+			'direcciondocencia' => ['docencia'],
+			'docencia' => ['docencia'],
+			'ingles' => ['educacion continua e idiomas'],
+			'investigacion' => ['investigacion e innovacion'],
+			'practicas' => ['practicas pre pro y vinculacion'],
+			'vinculacion' => ['practicas pre pro y vinculacion'],
+			'proveedores' => ['proveedores y pagos'],
+			'rectorado' => ['rectorado'],
+			'info' => ['secretaria general'],
+			'ptitulacion' => ['titulacion'],
+			'titulacion' => ['titulacion'],
+			'soporte' => ['soporte tecnico'],
+			'mesadeayuda' => ['soporte tecnico'],
+			'helpdesk' => ['soporte tecnico'],
+			'admisiones' => ['admisiones'],
 		];
 
 		$candidates = $map[$local] ?? null;
@@ -890,19 +888,18 @@ class CorreoController extends Controller
 		$searchText = $this->normalizeCatalogText($searchText);
 
 		$rules = [
-			'admisiones' => ['matricula', 'matriculas', 'inscripcion', 'admis', 'postulacion'],
-			'facturacion' => ['factura', 'facturacion', 'contabil', 'contabildiad', 'proveedor', 'proveedores', 'orden de compra', 'retencion', 'pago', 'pagos', 'comprobante', 'cuotas', 'cuota'],
-			'soporte' => ['soporte', 'mesa de ayuda', 'helpdesk', 'error', 'falla', 'incidencia', 'no puedo', 'problema', 'contrasena', 'clave', 'acceso', 'sistema', 'plataforma'],
-			'administrativo' => ['administrativo', 'administracion', 'tesoreria'],
+			'admisiones' => ['admisiones', 'admision', 'matricula', 'matriculas', 'inscripcion', 'postulacion', 'reingreso'],
+			'contabilidad_facturacion' => ['factura', 'facturacion', 'contabilidad', 'contable', 'retencion', 'comprobante', 'cuota', 'cuotas'],
+			'proveedores_pagos' => ['proveedor', 'proveedores', 'orden de compra', 'ordenes de compra', 'pago', 'pagos'],
+			'soporte_tecnico' => ['soporte', 'mesa de ayuda', 'helpdesk', 'error', 'falla', 'incidencia', 'no puedo', 'problema', 'contrasena', 'clave', 'acceso', 'sistema', 'plataforma'],
 			'titulacion' => ['titulacion', 'tesis', 'sustentacion'],
-			'investigacion' => ['investigacion', 'innovacion', 'proyecto'],
+			'investigacion_innovacion' => ['investigacion', 'innovacion', 'proyecto'],
 			'rectorado' => ['rectorado', 'rector', 'rectora'],
-			'practicas' => ['practicas', 'pre profesionales', 'pasantias'],
-			'vinculacion' => ['vinculacion', 'comunidad', 'sociedad', 'vinculo', 'vincular'],
+			'practicas_vinculacion' => ['practicas', 'pre profesionales', 'pasantias', 'vinculacion', 'comunidad', 'sociedad', 'vinculo', 'vincular'],
 			'docencia' => ['docencia', 'docente', 'materia', 'asignatura', 'curso', 'carrera'],
-			'bienestar' => ['bienestar', 'psicologia', 'trabajo social', 'deportes', 'cultural', 'salud', 'becas','beca'],
-			'relaciones' => ['relaciones interinstitucionales', 'convenio', 'relacion'],
-			'secretaria' => ['secretaria general', 'certificado', 'tramite', 'constancia', 'legalizacion', 'legalizar', 'documento', 'homologacion'],
+			'educacion_continua_idiomas' => ['educacion continua', 'idiomas', 'ingles'],
+			'bienestar_institucional' => ['bienestar', 'psicologia', 'trabajo social', 'deportes', 'cultural', 'salud', 'becas', 'beca'],
+			'secretaria_general' => ['secretaria general', 'secretaria', 'certificado', 'tramite', 'constancia', 'legalizacion', 'legalizar', 'documento', 'homologacion', 'reingreso'],
 		];
 
 		$intent = null;
@@ -927,20 +924,18 @@ class CorreoController extends Controller
 	private function resolveGroupIdByIntent(array $groups, string $intent): ?int
 	{
 		$intentToGroupNames = [
-			'admisiones' => ['admisiones', 'admisión', 'inscripcion', 'postulacion'],
-			'matriculas' => ['matriculas'],
-			'facturacion' => ['facturacion', 'contabilidad', 'contabildiad', 'proveedores'],
-			'soporte' => ['soporte', 'mesa de ayuda'],
-			'administrativo' => ['administrativo'],
+			'admisiones' => ['admisiones'],
+			'contabilidad_facturacion' => ['contabilidad y facturacion', 'contabilidad', 'facturacion'],
+			'proveedores_pagos' => ['proveedores y pagos'],
+			'soporte_tecnico' => ['soporte tecnico', 'soporte', 'mesa de ayuda'],
 			'titulacion' => ['titulacion'],
-			'investigacion' => ['investigacion'],
+			'investigacion_innovacion' => ['investigacion e innovacion', 'investigacion'],
 			'rectorado' => ['rectorado'],
-			'practicas' => ['practicas pre profesionales', 'practicas'],
-			'vinculacion' => ['vinculacion con la sociedad', 'vinculacion'],
+			'practicas_vinculacion' => ['practicas pre pro y vinculacion', 'practicas pre profesionales', 'vinculacion con la sociedad', 'practicas', 'vinculacion'],
 			'docencia' => ['docencia'],
-			'bienestar' => ['bienestar institucional'],
-			'relaciones' => ['relaciones interinstitucionales'],
-			'secretaria' => ['secretaria general'],
+			'educacion_continua_idiomas' => ['educacion continua e idiomas', 'idiomas', 'ingles'],
+			'bienestar_institucional' => ['bienestar institucional'],
+			'secretaria_general' => ['secretaria general'],
 		];
 
 		$candidates = $intentToGroupNames[$intent] ?? [];
@@ -1206,7 +1201,7 @@ class CorreoController extends Controller
 
 	private function generateTicketCode(): string
 	{
-		return 'TCK-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
+		return 'TMP-' . strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
 	}
 
 	private function buildTicketSubject(array $email): string

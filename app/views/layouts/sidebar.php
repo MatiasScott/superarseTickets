@@ -6,6 +6,7 @@ $canAdmin = Auth::canAccessModule('admin');
 $canContactos = Auth::canAccessModule('contactos');
 $canConfig = Auth::canAccessModule('configuracion');
 $canCampanas = Auth::canAccessModule('campanas');
+$canConvenios = Auth::canAccessModule('convenios');
 ?>
 
 <aside class="sidebar">
@@ -62,6 +63,20 @@ $canCampanas = Auth::canAccessModule('campanas');
 				</a>
 				<a href="<?= e(base_url('crm/interesados')) ?>" class="sidebar-link">
 					<span class="icon">📇</span> Ver todo CRM
+				</a>
+			</div>
+		</div>
+		<?php endif; ?>
+		<!-- Convenios -->
+		<?php if ($canConvenios): ?>
+		<div class="sidebar-section sidebar-group" data-sidebar-group="convenios">
+			<button type="button" class="sidebar-toggle" aria-expanded="false" aria-controls="submenu-convenios">
+				<span class="sidebar-title">CONVENIOS</span>
+				<span class="toggle-caret">▾</span>
+			</button>
+			<div class="sidebar-submenu" id="submenu-convenios">
+				<a href="<?= e(base_url('convenios')) ?>" class="sidebar-link">
+					<span class="icon">🎫</span> Ver todos los convenios
 				</a>
 			</div>
 		</div>

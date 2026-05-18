@@ -3,6 +3,7 @@
 class Auth
 {
 	private static array $rolePermissionCache = [];
+	private static ?bool $hasMustChangePasswordColumn = null;
 
 	public static function check(): bool
 	{
@@ -214,6 +215,21 @@ class Auth
 		}
 
 		$path = self::normalizeRequestPath($uri);
+
+		if (self::mustChangePassword()) {
+			$allowedDuringPasswordChange = [
+				'/change-password',
+				'/logout',
+			];
+
+			if (!in_array($path, $allowedDuringPasswordChange, true)) {
+				set_flash('warning', 'Debes cambiar tu contraseña temporal para continuar.');
+				redirect('change-password');
+			}
+
+			return;
+		}
+
 		if (self::isAlwaysAllowedPath($path)) {
 			return;
 		}
@@ -278,6 +294,7 @@ class Auth
 			'email' => $user['email'] ?? $credential,
 			'rol' => $user['rol_nombre'] ?? 'sin_rol',
 			'rol_id' => isset($user['rol_id']) ? (int) $user['rol_id'] : null,
+			'must_change_password' => ((int) ($user['must_change_password'] ?? 0)) === 1,
 		]);
 
 		self::$rolePermissionCache = [];
@@ -311,7 +328,11 @@ class Auth
 		$hashed = password_hash($new_password, PASSWORD_BCRYPT, ['cost' => 10]);
 
 		try {
-			$stmt = $db->prepare("UPDATE usuarios SET password = :password, updated_at = NOW() WHERE id = :id");
+			if (self::hasMustChangePasswordColumn($db)) {
+				$stmt = $db->prepare("UPDATE usuarios SET password = :password, must_change_password = 0, updated_at = NOW() WHERE id = :id");
+			} else {
+				$stmt = $db->prepare("UPDATE usuarios SET password = :password, updated_at = NOW() WHERE id = :id");
+			}
 			$result = $stmt->execute([
 				'password' => $hashed,
 				'id' => $user_id,
@@ -319,6 +340,7 @@ class Auth
 
 			if ($result && isset($_SESSION['auth_user'])) {
 				$_SESSION['auth_user']['password_updated'] = date('Y-m-d H:i:s');
+				$_SESSION['auth_user']['must_change_password'] = false;
 			}
 
 			return $result;
@@ -432,5 +454,30 @@ class Auth
 		}
 
 		return null;
+	}
+
+	private static function mustChangePassword(): bool
+	{
+		if (!self::check()) {
+			return false;
+		}
+
+		return !empty($_SESSION['auth_user']['must_change_password']);
+	}
+
+	private static function hasMustChangePasswordColumn(PDO $db): bool
+	{
+		if (self::$hasMustChangePasswordColumn !== null) {
+			return self::$hasMustChangePasswordColumn;
+		}
+
+		try {
+			$stmt = $db->query("SHOW COLUMNS FROM usuarios LIKE 'must_change_password'");
+			self::$hasMustChangePasswordColumn = $stmt !== false && $stmt->fetch() !== false;
+		} catch (Throwable $e) {
+			self::$hasMustChangePasswordColumn = false;
+		}
+
+		return self::$hasMustChangePasswordColumn;
 	}
 }

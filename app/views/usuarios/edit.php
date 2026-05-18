@@ -63,6 +63,7 @@
 
 							<div class="mb-3">
 						<label class="form-label">Grupos</label>
+						<small class="text-muted">(Opcional) Puedes dejar sin seleccionar si no deseas asignar grupo(s) ahora.</small>
 						<div class="border rounded p-3 bg-light">
 							<?php
 							$idsUsuarioGrupos = array_map(fn($g) => $g['id'], $usuarioGrupos ?? []);

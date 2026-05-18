@@ -128,7 +128,7 @@ class TicketController extends Controller
 		$defaultAccountAlias = '';
 		$defaults = [
 			'estado_label' => 'Pendiente',
-			'prioridad_label' => 'Media',
+			'prioridad_label' => 'Baja',
 			'grupo_label' => 'Sin asignar',
 		];
 
@@ -167,7 +167,6 @@ class TicketController extends Controller
 			set_flash('error', 'Token CSRF invalido.');
 			redirect('tickets/create');
 		}
-
 		$contactoId = (int) ($_POST['contacto_id'] ?? 0);
 		$asunto = trim((string) ($_POST['asunto'] ?? ''));
 		$accountAlias = trim((string) ($_POST['account_alias'] ?? ''));
@@ -199,7 +198,7 @@ class TicketController extends Controller
 			}
 
 			$payload = [
-				'codigo' => 'TCK-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 6)),
+				'codigo' => 'TMP-' . strtoupper(substr(bin2hex(random_bytes(4)), 0, 8)),
 				'contacto_id' => $contactoId,
 				'asunto' => $asunto,
 				'estado_id' => $estadoId,
@@ -231,8 +230,14 @@ class TicketController extends Controller
 			}
 
 			$ticketId = (new Ticket())->create($payload);
+			$codigoFinal = 'TCK-' . (int) $ticketId;
+			$db->prepare('UPDATE tickets SET codigo = :codigo WHERE id = :id')
+				->execute([
+					'codigo' => $codigoFinal,
+					'id' => $ticketId,
+				]);
 
-			$mailStatus = $this->sendTicketEmail($db, $contactoId, $asunto, $descripcionHtml, $accountAlias, $payload['codigo']);
+			$mailStatus = $this->sendTicketEmail($db, $contactoId, $asunto, $descripcionHtml, $accountAlias, $codigoFinal);
 
 			if ($mailStatus) {
 				set_flash('success', 'Ticket creado y correo enviado correctamente.');
