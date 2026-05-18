@@ -94,7 +94,7 @@ class AdminController extends Controller
 			// Tabla no existe, crearla - usar exec FUERA de transacción si es posible
 			// Si estamos en transacción, no usar exec() porque interfiere
 			$inTransaction = $db->inTransaction();
-			
+
 			if ($inTransaction) {
 				// Dentro de transacción: usar preparado en lugar de exec
 				$sql = "CREATE TABLE IF NOT EXISTS role_action_permissions (
@@ -328,14 +328,14 @@ class AdminController extends Controller
 		Auth::requireAuth();
 		$permissionModules = $this->permissionModules();
 		$selectedActions = [];
-		
+
 		// Para nuevo rol, preseleccionar todas las acciones
 		foreach ($permissionModules as $moduleKey => $module) {
 			foreach (($module['actions'] ?? []) as $action) {
 				$selectedActions[] = $moduleKey . '|' . $action;
 			}
 		}
-		
+
 		$this->view('admin/roles/create', compact('permissionModules', 'selectedActions'), ['title' => 'Crear Rol']);
 	}
 
@@ -368,7 +368,7 @@ class AdminController extends Controller
 			$this->saveRoleActionPermissions($db, $id, $actions);
 
 			$this->audit('CREATE', 'roles', $id, null, ['nombre' => $nombre, 'descripcion' => $descripcion, 'estado' => 'activo']);
-			
+
 			$db->commit();
 			set_flash('success', 'Rol creado correctamente.');
 		} catch (Throwable $e) {
@@ -758,21 +758,21 @@ class AdminController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
-			
+
 			// Obtener nombre de la base de datos actual
 			$dbName = $db->query("SELECT DATABASE()")->fetchColumn();
-			
+
 			// Obtener todas las tablas
 			$tablesResult = $db->query("SHOW TABLES FROM `$dbName`")->fetchAll(PDO::FETCH_COLUMN);
 			sort($tablesResult);
-			
+
 			// Archivos para buscar referencias de tablas
 			$codeDir = __DIR__ . '/../';
 			$files = new RecursiveIteratorIterator(
 				new RecursiveDirectoryIterator($codeDir, RecursiveDirectoryIterator::SKIP_DOTS),
 				RecursiveIteratorIterator::LEAVES_ONLY
 			);
-			
+
 			// Leer todo el código PHP
 			$allCode = '';
 			foreach ($files as $file) {
@@ -780,11 +780,11 @@ class AdminController extends Controller
 					$allCode .= file_get_contents($file) . "\n";
 				}
 			}
-			
+
 			// Analizar cada tabla
 			$used = [];
 			$unused = [];
-			
+
 			foreach ($tablesResult as $table) {
 				// Búsquedas en el código
 				$patterns = [
@@ -796,7 +796,7 @@ class AdminController extends Controller
 					"'$table'",
 					"\"$table\"",
 				];
-				
+
 				$found = false;
 				foreach ($patterns as $pattern) {
 					if (stripos($allCode, $pattern) !== false) {
@@ -804,21 +804,21 @@ class AdminController extends Controller
 						break;
 					}
 				}
-				
+
 				if ($found) {
 					$used[] = $table;
 				} else {
 					$unused[] = $table;
 				}
 			}
-			
+
 			// Pasar datos a la vista
 			$data = [
 				'used' => $used,
 				'unused' => $unused,
 				'totalTables' => count($tablesResult),
 			];
-			
+
 			// Si hay tablas no usadas, obtener el conteo de filas
 			if (!empty($unused)) {
 				$tableStats = [];
@@ -832,7 +832,7 @@ class AdminController extends Controller
 				}
 				$data['tableStats'] = $tableStats;
 			}
-			
+
 			$this->view('admin/analyze-tables', $data, ['title' => 'Análisis de Tablas']);
 		} catch (Throwable $e) {
 			set_flash('error', 'Error en análisis: ' . $e->getMessage());
@@ -851,31 +851,67 @@ class AdminController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
-			
+
 			// Leer el archivo SQL
 			$sqlFile = __DIR__ . '/../../storage/sql/06_role_action_permissions.sql';
 			$sql = file_get_contents($sqlFile);
-			
+
 			if (!$sql) {
 				throw new Exception('No se pudo leer el archivo SQL');
 			}
-			
+
 			// Ejecutar cada statement
 			$statements = array_filter(array_map('trim', explode(';', $sql)));
 			$executed = 0;
-			
+
 			foreach ($statements as $statement) {
 				if (!empty($statement)) {
 					$db->exec($statement);
 					$executed++;
 				}
 			}
-			
+
 			set_flash('success', 'Tabla de permisos actualizada correctamente. Se ejecutaron ' . $executed . ' sentencias SQL.');
 			redirect('admin/roles');
 		} catch (Throwable $e) {
 			set_flash('error', 'Error al actualizar permisos: ' . $e->getMessage());
 			redirect('admin/dashboard');
 		}
+	}
+
+	// ============ SLA DE TICKETS ============
+	public function slaIndex(): void
+	{
+		Auth::requireAuth();
+		require_once __DIR__ . '/../models/TicketSLA.php';
+		$slaModel = new \TicketSLA();
+		$slaList = $slaModel->getAll();
+		$this->view('admin/catalogos/sla', compact('slaList'), ['title' => 'SLA por Prioridad']);
+	}
+
+	public function slaUpdate(): void
+	{
+		Auth::requireAuth();
+		require_once __DIR__ . '/../models/TicketSLA.php';
+		$slaModel = new \TicketSLA();
+		$db = Database::getInstance()->connection();
+		$ok = true;
+		$slaData = $_POST['sla'] ?? [];
+		try {
+			foreach ($slaData as $id => $row) {
+				$id = (int)$id;
+				$primera = (int)($row['primera_respuesta_horas'] ?? 0);
+				$resol = (int)($row['resolucion_horas'] ?? 0);
+				if ($id > 0 && $primera > 0 && $resol > 0) {
+					$stmt = $db->prepare("UPDATE ticket_sla SET primera_respuesta_horas = :primera, resolucion_horas = :resol WHERE id = :id");
+					$stmt->execute(['primera' => $primera, 'resol' => $resol, 'id' => $id]);
+				}
+			}
+			set_flash('success', 'SLA actualizado correctamente.');
+		} catch (Throwable $e) {
+			set_flash('error', 'Error al actualizar SLA: ' . $e->getMessage());
+			$ok = false;
+		}
+		redirect('admin/sla');
 	}
 }

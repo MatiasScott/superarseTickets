@@ -14,6 +14,9 @@
                 <a class="btn btn-sm btn-outline-secondary" target="_blank" href="<?= base_url('auditoria/export/pdf?' . http_build_query($filters)) ?>">
                     <i class="bi bi-filetype-pdf"></i> Exportar PDF
                 </a>
+                <a href="<?= base_url('admin/dashboard') ?>" class="btn btn-secondary btn-sm">
+                    <i class="bi bi-arrow-left"></i> Volver
+                </a>
             </div>
         </div>
 

@@ -7,6 +7,9 @@
 				<p class="text-muted">Equipos que atienden tickets</p>
 			</div>
 			<div class="admin-actions">
+				<a href="<?= base_url('admin/dashboard') ?>" class="btn btn-secondary btn-sm">
+					<i class="bi bi-arrow-left"></i> Volver
+				</a>
 				<a href="<?= base_url('admin/grupos/create') ?>" class="btn btn-primary btn-sm">
 					<i class="bi bi-plus-circle"></i> Crear Grupo
 				</a>
@@ -44,40 +47,40 @@
 
 		<!-- Tabla -->
 		<div class="table-responsive" data-mobile-cards>
-		<table class="admin-table" data-filter-table>
-			<thead>
-				<tr>
-					<th data-sortable="id">ID</th>
-					<th data-sortable="nombre">Nombre</th>
-					<th data-sortable="estado">Estado</th>
-					<th>Acciones</th>
-				</tr>
-			</thead>
-			<tbody>
-				<?php if (!empty($grupos)): ?>
-					<?php foreach ($grupos as $grupo): ?>
-						<tr>
-							<td data-column="id" class="fw-bold"><?= e($grupo['id']) ?></td>
-							<td data-column="nombre"><?= e($grupo['nombre']) ?></td>
-							<td data-column="estado">
-								<span class="status-badge <?= ($grupo['estado'] === 'activo') ? 'status-activo' : 'status-inactivo' ?>">
-									<i class="bi bi-<?= ($grupo['estado'] === 'activo') ? 'check-circle' : 'x-circle' ?>"></i> <?= e(ucfirst($grupo['estado'])) ?>
-								</span>
-							</td>
-							<td class="action-cell">
-								<a href="<?= base_url('admin/grupos/' . $grupo['id'] . '/edit') ?>" class="btn btn-sm btn-outline-primary" title="Editar">
-									<i class="bi bi-pencil"></i> Editar
-								</a>
-							</td>
-						</tr>
-					<?php endforeach; ?>
-				<?php else: ?>
+			<table class="admin-table" data-filter-table>
+				<thead>
 					<tr>
-						<td colspan="4" class="text-center text-muted py-4">No hay grupos disponibles</td>
+						<th data-sortable="id">ID</th>
+						<th data-sortable="nombre">Nombre</th>
+						<th data-sortable="estado">Estado</th>
+						<th>Acciones</th>
 					</tr>
-				<?php endif; ?>
-			</tbody>
-		</table>
+				</thead>
+				<tbody>
+					<?php if (!empty($grupos)): ?>
+						<?php foreach ($grupos as $grupo): ?>
+							<tr>
+								<td data-column="id" class="fw-bold"><?= e($grupo['id']) ?></td>
+								<td data-column="nombre"><?= e($grupo['nombre']) ?></td>
+								<td data-column="estado">
+									<span class="status-badge <?= ($grupo['estado'] === 'activo') ? 'status-activo' : 'status-inactivo' ?>">
+										<i class="bi bi-<?= ($grupo['estado'] === 'activo') ? 'check-circle' : 'x-circle' ?>"></i> <?= e(ucfirst($grupo['estado'])) ?>
+									</span>
+								</td>
+								<td class="action-cell">
+									<a href="<?= base_url('admin/grupos/' . $grupo['id'] . '/edit') ?>" class="btn btn-sm btn-outline-primary" title="Editar">
+										<i class="bi bi-pencil"></i> Editar
+									</a>
+								</td>
+							</tr>
+						<?php endforeach; ?>
+					<?php else: ?>
+						<tr>
+							<td colspan="4" class="text-center text-muted py-4">No hay grupos disponibles</td>
+						</tr>
+					<?php endif; ?>
+				</tbody>
+			</table>
 		</div>
 		<div class="admin-footer module-counter">
 			<small class="text-muted"><span data-row-counter="0">0</span> grupos mostrados</small>

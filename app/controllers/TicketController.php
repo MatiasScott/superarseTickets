@@ -569,20 +569,19 @@ class TicketController extends Controller
 		$db = Database::getInstance()->connection();
 		$ticketColumns = $this->getTableColumns($db, 'tickets');
 		$catalog = $this->resolveTicketDefaults($db);
-
 		$estadoAbiertoId = $catalog['estado_abierto_id'] ?? null;
 
-		$whereBase = "
-			t.estado = 'activo'
-			AND (
-				(:estado_abierto_id IS NOT NULL AND t.estado_id = :estado_abierto_id)
-				OR (:estado_abierto_id IS NULL AND LOWER(COALESCE(te.nombre, '')) LIKE '%abierto%')
-			)
-		";
+		// Obtener SLA por prioridad
+		require_once __DIR__ . '/../models/TicketSLA.php';
+		$slaModel = new \TicketSLA();
+		$slaList = $slaModel->getAll();
+		$slaPorPrioridad = [];
+		foreach ($slaList as $sla) {
+			$slaPorPrioridad[strtolower($sla['prioridad'])] = $sla;
+		}
 
-		$params = [
-			'estado_abierto_id' => $estadoAbiertoId,
-		];
+		$whereBase = "t.estado = 'activo'";
+		$params = [];
 
 		$stats = [
 			'sin_resolver' => 0,
@@ -590,21 +589,36 @@ class TicketController extends Controller
 			'vencen_hoy' => 0,
 		];
 
-		$sqlSinResolver = "SELECT COUNT(*) FROM tickets t LEFT JOIN ticket_estados te ON te.id = t.estado_id WHERE {$whereBase}";
+		// Tickets sin resolver
+		$sqlSinResolver = "SELECT COUNT(*) FROM tickets t WHERE {$whereBase}";
 		$stmt = $db->prepare($sqlSinResolver);
 		$stmt->execute($params);
 		$stats['sin_resolver'] = (int) $stmt->fetchColumn();
 
-		if (in_array('created_at', $ticketColumns, true)) {
-			$sqlVencidos = "SELECT COUNT(*) FROM tickets t LEFT JOIN ticket_estados te ON te.id = t.estado_id WHERE {$whereBase} AND DATE(DATE_ADD(t.created_at, INTERVAL 3 DAY)) < CURDATE()";
-			$stmt = $db->prepare($sqlVencidos);
+		// Tickets vencidos y que vencen hoy según SLA
+		if (in_array('created_at', $ticketColumns, true) && in_array('prioridad_id', $ticketColumns, true)) {
+			// Obtener todos los tickets activos con prioridad y fecha
+			$sqlTickets = "SELECT t.id, t.created_at, tp.nombre AS prioridad
+				FROM tickets t
+				LEFT JOIN ticket_prioridades tp ON tp.id = t.prioridad_id
+				WHERE {$whereBase}";
+			$stmt = $db->prepare($sqlTickets);
 			$stmt->execute($params);
-			$stats['vencidos'] = (int) $stmt->fetchColumn();
+			$tickets = $stmt->fetchAll() ?: [];
 
-			$sqlVencenHoy = "SELECT COUNT(*) FROM tickets t LEFT JOIN ticket_estados te ON te.id = t.estado_id WHERE {$whereBase} AND DATE(DATE_ADD(t.created_at, INTERVAL 3 DAY)) = CURDATE()";
-			$stmt = $db->prepare($sqlVencenHoy);
-			$stmt->execute($params);
-			$stats['vencen_hoy'] = (int) $stmt->fetchColumn();
+			$hoy = date('Y-m-d');
+			foreach ($tickets as $tk) {
+				$prioridad = strtolower(trim($tk['prioridad'] ?? ''));
+				$sla = $slaPorPrioridad[$prioridad] ?? null;
+				if (!$sla) continue;
+				$horasResol = (int) $sla['resolucion_horas'];
+				$fechaLimite = date('Y-m-d', strtotime($tk['created_at'] . "+$horasResol hours"));
+				if ($fechaLimite < $hoy) {
+					$stats['vencidos']++;
+				} elseif ($fechaLimite === $hoy) {
+					$stats['vencen_hoy']++;
+				}
+			}
 		}
 
 
