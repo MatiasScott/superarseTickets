@@ -1,5 +1,7 @@
 <section class="module-page crm-page">
 	<?php $estudiantesSuperarse = $estudiantesSuperarse ?? []; ?>
+	<?php $periodos = $periodos ?? []; ?>
+	<?php $periodoSeleccionado = $periodoSeleccionado ?? ''; ?>
 	<?php $sourceLabel = $sourceLabel ?? 'No disponible'; ?>
 	<?php $sourceError = $sourceError ?? ''; ?>
 	<div class="container-fluid py-4">
@@ -21,16 +23,27 @@
 		<div class="card border-0 shadow-sm mb-3">
 			<div class="card-body py-3">
 				<div class="row g-2 align-items-end">
-					<div class="col-md-6">
+					<div class="col-md-4">
+						<label for="crmFilterPeriodo" class="form-label mb-1"><i class="bi bi-calendar3"></i> Periodo</label>
+						<select id="crmFilterPeriodo" name="periodo" class="form-select">
+							<option value="">Todos los periodos</option>
+							<?php foreach ($periodos as $periodo): ?>
+								<option value="<?= e((string) $periodo) ?>" <?= (string) $periodoSeleccionado === (string) $periodo ? 'selected' : '' ?>>
+									<?= e((string) $periodo) ?>
+								</option>
+							<?php endforeach; ?>
+						</select>
+					</div>
+					<div class="col-md-4">
 						<label for="crmFilterName" class="form-label mb-1"><i class="bi bi-search"></i> Buscar por nombre</label>
 						<input type="text" id="crmFilterName" class="form-control" placeholder="Ej: Francisco Carpio">
 					</div>
-					<div class="col-md-4">
+					<div class="col-md-2">
 						<label for="crmFilterCareer" class="form-label mb-1"><i class="bi bi-book"></i> Filtrar por carrera</label>
 						<input type="text" id="crmFilterCareer" class="form-control" placeholder="Ej: Seguridad y Riesgos">
 					</div>
 					<div class="col-md-2 d-grid">
-						<button type="button" id="crmFilterClear" class="btn btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Limpiar</button>
+						<button type="button" id="crmFilterClear" class="btn btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Limpiar filtros</button>
 					</div>
 				</div>
 			</div>
@@ -45,8 +58,10 @@
 						<th>Nombre</th>
 						<th>Email</th>
 						<th>Carrera</th>
+						<th>Periodo</th>
+						<th>Nivel</th>
 						<th>Estado</th>
-						<th>Pipeline</th>
+						<th>Etapa</th>
 						<th class="text-end">Acciones</th>
 					</tr>
 				</thead>
@@ -66,6 +81,8 @@
 							</td>
 							<td class="email-col"><?= e($item['email'] ?? '-') ?></td>
 							<td class="career-col"><?= e($item['carrera'] ?? '-') ?></td>
+							<td><?= e($item['periodo'] ?? '-') ?></td>
+							<td><?= e($item['nivel'] ?? '-') ?></td>
 							<td><?= e($item['estado'] ?? '-') ?></td>
 							<td class="pipeline-col">
 								<span class="badge text-bg-light border"><?= e($item['pipeline_nombre'] ?? 'Sin asignar') ?></span>
@@ -87,7 +104,7 @@
 					<?php endforeach; ?>
 					<?php if (empty($estudiantesSuperarse)): ?>
 						<tr>
-							<td colspan="8" class="text-center text-muted py-4">No hay estudiantes para mostrar.</td>
+							<td colspan="10" class="text-center text-muted py-4">No hay estudiantes para mostrar.</td>
 						</tr>
 					<?php endif; ?>
 				</tbody>

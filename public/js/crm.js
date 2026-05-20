@@ -322,6 +322,7 @@ document.addEventListener('DOMContentLoaded', () => {
 	const filterNameInput = document.getElementById('crmFilterName');
 	const filterCareerInput = document.getElementById('crmFilterCareer');
 	const filterClearBtn = document.getElementById('crmFilterClear');
+	const filterPeriodSelect = document.getElementById('crmFilterPeriodo');
 
 	const applyTableFilters = () => {
 		if (!studentsTable) {
@@ -341,6 +342,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
 	filterNameInput?.addEventListener('input', applyTableFilters);
 	filterCareerInput?.addEventListener('input', applyTableFilters);
+	filterPeriodSelect?.addEventListener('change', () => {
+		const selected = String(filterPeriodSelect.value || '').trim();
+		const url = new URL(window.location.href);
+		if (selected === '') {
+			url.searchParams.delete('periodo');
+		} else {
+			url.searchParams.set('periodo', selected);
+		}
+		window.location.href = url.pathname + (url.search ? url.search : '');
+	});
 	filterClearBtn?.addEventListener('click', () => {
 		if (filterNameInput) {
 			filterNameInput.value = '';
@@ -348,6 +359,15 @@ document.addEventListener('DOMContentLoaded', () => {
 		if (filterCareerInput) {
 			filterCareerInput.value = '';
 		}
+		if (filterPeriodSelect) filterPeriodSelect.value = '';
+
+		const url = new URL(window.location.href);
+		if (url.searchParams.has('periodo')) {
+			url.searchParams.delete('periodo');
+			window.location.href = url.pathname + (url.search ? url.search : '');
+			return;
+		}
+
 		applyTableFilters();
 	});
 
@@ -516,7 +536,10 @@ document.addEventListener('DOMContentLoaded', () => {
 						<button class="nav-link active" id="detallesTabBtn" data-bs-toggle="tab" data-bs-target="#detallesPane" type="button" role="tab">Detalles de cliente potencial</button>
 					</li>
 					<li class="nav-item" role="presentation">
-						<button class="nav-link" id="actividadesTabBtn" data-bs-toggle="tab" data-bs-target="#actividadesPane" type="button" role="tab">Actividades</button>
+						<button class="nav-link" id="historicoTabBtn" data-bs-toggle="tab" data-bs-target="#historicoPane" type="button" role="tab">Historico</button>
+					</li>
+					<li class="nav-item" role="presentation">
+						<button class="nav-link" id="tareasTabBtn" data-bs-toggle="tab" data-bs-target="#tareasPane" type="button" role="tab">Tareas</button>
 					</li>
 					<li class="nav-item" role="presentation">
 						<button class="nav-link" id="ticketsTabBtn" data-bs-toggle="tab" data-bs-target="#ticketsPane" type="button" role="tab">Tickets</button>
@@ -563,9 +586,9 @@ document.addEventListener('DOMContentLoaded', () => {
 						</div>
 					</div>
 
-					<!-- Tab 2: Actividades -->
-					<div class="tab-pane fade" id="actividadesPane" role="tabpanel">
-						<div id="actividadesList" style="max-height: 350px; overflow-y: auto;">
+					<!-- Tab 2: Historico -->
+					<div class="tab-pane fade" id="historicoPane" role="tabpanel">
+						<div id="historicoList" style="max-height: 350px; overflow-y: auto;">
 							<div class="text-center text-muted small py-3">
 								<div class="spinner-border spinner-border-sm" role="status">
 									<span class="visually-hidden">Cargando...</span>
@@ -574,7 +597,16 @@ document.addEventListener('DOMContentLoaded', () => {
 						</div>
 					</div>
 
-					<!-- Tab 3: Tickets -->
+					<!-- Tab 3: Tareas -->
+					<div class="tab-pane fade" id="tareasPane" role="tabpanel">
+						<div id="tareasList" style="max-height: 350px; overflow-y: auto;">
+							<div class="text-center text-muted small py-3">
+								No hay tareas registradas para este estudiante todavía.
+							</div>
+						</div>
+					</div>
+
+					<!-- Tab 4: Tickets -->
 					<div class="tab-pane fade" id="ticketsPane" role="tabpanel">
 						<div id="ticketsList" style="max-height: 350px; overflow-y: auto;">
 							<div class="text-center text-muted small py-3">
@@ -612,6 +644,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 		// Cargar datos en tabs
 		loadStudentHistory(studentId);
+		loadStudentTasks(studentId);
 		loadStudentTickets(studentId);
 	};
 
@@ -626,7 +659,7 @@ document.addEventListener('DOMContentLoaded', () => {
 			renderHistorial(data.historial || []);
 		} catch (error) {
 			console.error('Error:', error);
-			const container = document.getElementById('actividadesList');
+			const container = document.getElementById('historicoList');
 			if (container) {
 				container.innerHTML = `<div class="alert alert-danger alert-sm">${escapeHtml(error.message)}</div>`;
 			}
@@ -634,7 +667,7 @@ document.addEventListener('DOMContentLoaded', () => {
 	};
 
 	const renderHistorial = (historial) => {
-		const container = document.getElementById('actividadesList');
+		const container = document.getElementById('historicoList');
 		if (!container) return;
 
 		if (!Array.isArray(historial) || historial.length === 0) {
@@ -657,6 +690,428 @@ document.addEventListener('DOMContentLoaded', () => {
 		});
 
 		container.innerHTML = html;
+	};
+
+	const parseTaskIds = (raw) => String(raw || '')
+		.split(',')
+		.map((value) => Number(String(value || '').trim()))
+		.filter((value) => Number.isFinite(value) && value > 0);
+
+	const pluralTask = (value, singular, pluralForm) => (value === 1 ? singular : pluralForm);
+
+	const formatTaskDuration = (totalMinutes) => {
+		const minutesSafe = Math.max(0, totalMinutes);
+		const days = Math.floor(minutesSafe / 1440);
+		const hours = Math.floor((minutesSafe % 1440) / 60);
+		const minutes = minutesSafe % 60;
+
+		if (days > 0) {
+			return `${days} ${pluralTask(days, 'dia', 'dias')} ${hours} ${pluralTask(hours, 'hora', 'horas')}`;
+		}
+
+		if (hours > 0) {
+			return `${hours} ${pluralTask(hours, 'hora', 'horas')} ${minutes} min`;
+		}
+
+		return `${minutes} min`;
+	};
+
+	const parseTaskDeadline = (dateValue, timeValue) => {
+		const dateText = String(dateValue || '').trim();
+		if (!dateText) return null;
+
+		const timeText = String(timeValue || '').trim() || '23:59';
+		const composed = `${dateText}T${timeText.length === 5 ? `${timeText}:00` : timeText}`;
+		const parsed = new Date(composed);
+		return Number.isNaN(parsed.getTime()) ? null : parsed;
+	};
+
+	const renderCrmTaskCountdowns = (scope) => {
+		const nodes = Array.from((scope || document).querySelectorAll('[data-crm-task-countdown]'));
+		const now = new Date();
+
+		nodes.forEach((node) => {
+			const status = String(node.getAttribute('data-status') || '').trim().toLowerCase();
+			const completed = String(node.getAttribute('data-completed') || '0') === '1';
+			const deadline = parseTaskDeadline(node.getAttribute('data-date'), node.getAttribute('data-time'));
+
+			node.className = 'crm-deadline-pill';
+			if (status === 'completada' || completed) {
+				node.classList.add('crm-deadline-complete');
+				node.textContent = 'Completada';
+				return;
+			}
+
+			if (!deadline) {
+				node.classList.add('crm-deadline-none');
+				node.textContent = 'Sin fecha limite';
+				return;
+			}
+
+			const diffMs = deadline.getTime() - now.getTime();
+			const absMinutes = Math.floor(Math.abs(diffMs) / 60000);
+
+			if (diffMs < 0) {
+				node.classList.add('crm-deadline-overdue');
+				node.textContent = `Vencida hace ${formatTaskDuration(absMinutes)}`;
+				return;
+			}
+
+			const hoursLeft = diffMs / 3600000;
+			if (hoursLeft <= 24) {
+				node.classList.add('crm-deadline-critical');
+			} else if (hoursLeft <= 72) {
+				node.classList.add('crm-deadline-warning');
+			} else {
+				node.classList.add('crm-deadline-ok');
+			}
+
+			node.textContent = `Faltan ${formatTaskDuration(absMinutes)}`;
+		});
+	};
+
+	const buildOptions = (items, selectedValue, placeholder) => {
+		const buffer = [`<option value="">${escapeHtml(placeholder)}</option>`];
+		items.forEach((item) => {
+			const value = String(item.id ?? '');
+			const selected = String(selectedValue ?? '') === value ? ' selected' : '';
+			buffer.push(`<option value="${escapeHtml(value)}"${selected}>${escapeHtml(item.nombre || '')}</option>`);
+		});
+		return buffer.join('');
+	};
+
+	const buildUserMultiOptions = (usuarios, selectedIds) => usuarios.map((user) => {
+		const value = Number(user.id || 0);
+		const selected = selectedIds.includes(value) ? ' selected' : '';
+		return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(user.nombre || '')}</option>`;
+	}).join('');
+
+	const setTaskRowStatus = (row, status, message) => {
+		const target = row.querySelector('[data-task-save-status]');
+		if (!target) return;
+		target.setAttribute('data-save-status', status);
+		target.textContent = message;
+	};
+
+	const flashTaskRow = (row, className) => {
+		if (!row) return;
+		row.classList.remove('crm-task-row-saved', 'crm-task-row-error');
+		row.classList.add(className);
+		setTimeout(() => row.classList.remove(className), 1100);
+	};
+
+	const renderTaskPreview = (preview, options) => {
+		if (!preview) return;
+		const selected = options.filter((option) => option.selected);
+		preview.innerHTML = '';
+		if (!selected.length) {
+			preview.classList.add('empty');
+			preview.innerHTML = '<span class="crm-task-empty-text">Sin seleccionados</span>';
+			return;
+		}
+
+		preview.classList.remove('empty');
+		selected.forEach((option) => {
+			const pill = document.createElement('span');
+			pill.className = 'crm-task-pill';
+			pill.innerHTML = '<span class="crm-task-check">✓</span>';
+			pill.appendChild(document.createTextNode(option.textContent || ''));
+			preview.appendChild(pill);
+		});
+	};
+
+	const bindTaskSelectBlock = (scope, searchSelector, selectSelector, previewSelector) => {
+		const search = scope.querySelector(searchSelector);
+		const select = scope.querySelector(selectSelector);
+		const preview = scope.querySelector(previewSelector);
+		if (!select) return null;
+
+		const options = Array.from(select.options || []);
+		const applySearch = () => {
+			const expected = normalizeText(search?.value || '');
+			options.forEach((option) => {
+				const actual = normalizeText(option.textContent || '');
+				option.hidden = expected !== '' && !actual.includes(expected);
+			});
+		};
+
+		if (search) {
+			search.addEventListener('input', applySearch);
+		}
+
+		select.addEventListener('change', () => renderTaskPreview(preview, options));
+		applySearch();
+		renderTaskPreview(preview, options);
+		return select;
+	};
+
+	const renderStudentTasks = (payload, studentId) => {
+		const container = document.getElementById('tareasList');
+		if (!container) return;
+
+		const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+		const tipos = Array.isArray(payload.tipos_tarea) ? payload.tipos_tarea : [];
+		const resultados = Array.isArray(payload.resultados) ? payload.resultados : [];
+		const usuarios = Array.isArray(payload.usuarios) ? payload.usuarios : [];
+
+		const taskRowsHtml = tasks.map((task) => {
+			const taskId = Number(task.id || 0);
+			const locked = Number(task.completado || 0) === 1 || String(task.estado || '').toLowerCase() === 'completada';
+			const relIds = parseTaskIds(task.relacionados_ids);
+			const colIds = parseTaskIds(task.colaboradores_ids);
+
+			return `
+				<tr data-task-row data-task-id="${escapeHtml(taskId)}" data-locked="${locked ? '1' : '0'}">
+					<td class="crm-task-col-title">
+						<div class="fw-semibold">${escapeHtml(task.titulo || '-')}</div>
+						<small class="text-muted">${escapeHtml(task.descripcion || '')}</small>
+					</td>
+					<td>${escapeHtml(task.tipo_tarea_nombre || '-')}</td>
+					<td>${escapeHtml(task.propietario_nombre || '-')}</td>
+					<td>
+						<div class="crm-task-deadline-date">${escapeHtml(task.fecha_vencimiento || '-')} ${escapeHtml(task.hora_vencimiento || '')}</div>
+						<span class="crm-deadline-pill" data-crm-task-countdown data-date="${escapeHtml(task.fecha_vencimiento || '')}" data-time="${escapeHtml(task.hora_vencimiento || '')}" data-status="${escapeHtml(task.estado || '')}" data-completed="${locked ? '1' : '0'}">Calculando...</span>
+					</td>
+					<td>
+						<input type="text" class="form-control form-control-sm mb-1" data-task-rel-search placeholder="Buscar por nombre..." ${locked ? 'disabled' : ''}>
+						<select class="form-select form-select-sm" data-task-rel-select multiple size="4" ${locked ? 'disabled' : ''}>${buildUserMultiOptions(usuarios, relIds)}</select>
+						<div class="crm-task-preview empty" data-task-rel-preview><span class="crm-task-empty-text">Sin seleccionados</span></div>
+					</td>
+					<td>
+						<input type="text" class="form-control form-control-sm mb-1" data-task-col-search placeholder="Buscar por nombre..." ${locked ? 'disabled' : ''}>
+						<select class="form-select form-select-sm" data-task-col-select multiple size="4" ${locked ? 'disabled' : ''}>${buildUserMultiOptions(usuarios, colIds)}</select>
+						<div class="crm-task-preview empty" data-task-col-preview><span class="crm-task-empty-text">Sin seleccionados</span></div>
+					</td>
+					<td>
+						<select class="form-select form-select-sm" data-task-result-select ${locked ? 'disabled' : ''}>${buildOptions(resultados, task.resultado_id || '', 'Sin resultado')}</select>
+					</td>
+					<td>
+						<div class="crm-task-state-wrap">
+							<span class="crm-task-status-pill ${locked ? 'is-complete' : 'is-pending'}">Estado actual: ${locked ? 'Completada' : 'Pendiente'}</span>
+							<span class="crm-task-save-status" data-task-save-status="${locked ? 'saved' : 'idle'}">${locked ? 'Bloqueada por completado' : 'Auto-guardado activo'}</span>
+							${locked ? '<small class="text-muted">Tarea cerrada, sin edición.</small>' : '<button type="button" class="btn btn-outline-success btn-sm" data-task-complete-btn>Marcar completada</button>'}
+						</div>
+					</td>
+				</tr>
+			`;
+		}).join('');
+
+		container.innerHTML = `
+			<div class="crm-tasks-shell">
+				<form id="crmStudentTaskCreateForm" class="row g-2 mb-3">
+					<input type="hidden" name="student_id" value="${escapeHtml(studentId)}">
+					<div class="col-md-3">
+						<label class="form-label mb-1">Tipo tarea</label>
+						<select name="tipo_tarea_id" class="form-select form-select-sm">${buildOptions(tipos, '', 'Sin tipo')}</select>
+					</div>
+					<div class="col-md-5">
+						<label class="form-label mb-1">Titulo</label>
+						<input type="text" name="titulo" class="form-control form-control-sm" required>
+					</div>
+					<div class="col-md-4">
+						<label class="form-label mb-1">Propietario</label>
+						<select name="propietario_id" class="form-select form-select-sm" required>${buildOptions(usuarios, '', 'Seleccionar')}</select>
+					</div>
+					<div class="col-md-5">
+						<label class="form-label mb-1">Descripcion</label>
+						<textarea name="descripcion" rows="2" class="form-control form-control-sm"></textarea>
+					</div>
+					<div class="col-md-2">
+						<label class="form-label mb-1">Fecha venc.</label>
+						<input type="date" name="fecha_vencimiento" class="form-control form-control-sm">
+					</div>
+					<div class="col-md-2">
+						<label class="form-label mb-1">Hora</label>
+						<input type="time" name="hora_vencimiento" class="form-control form-control-sm">
+					</div>
+					<div class="col-md-3">
+						<label class="form-label mb-1">Resultado</label>
+						<select name="resultado_id" class="form-select form-select-sm">${buildOptions(resultados, '', 'Sin resultado')}</select>
+					</div>
+					<div class="col-md-3">
+						<label class="form-label mb-1">Relacionados</label>
+						<input type="text" class="form-control form-control-sm mb-1" data-create-rel-search placeholder="Buscar por nombre...">
+						<select name="relacionados[]" class="form-select form-select-sm" data-create-rel-select multiple size="4">${buildUserMultiOptions(usuarios, [])}</select>
+						<div class="crm-task-preview empty" data-create-rel-preview><span class="crm-task-empty-text">Sin seleccionados</span></div>
+					</div>
+					<div class="col-md-3">
+						<label class="form-label mb-1">Colaboradores</label>
+						<input type="text" class="form-control form-control-sm mb-1" data-create-col-search placeholder="Buscar por nombre...">
+						<select name="colaboradores[]" class="form-select form-select-sm" data-create-col-select multiple size="4">${buildUserMultiOptions(usuarios, [])}</select>
+						<div class="crm-task-preview empty" data-create-col-preview><span class="crm-task-empty-text">Sin seleccionados</span></div>
+					</div>
+					<div class="col-md-2 d-grid align-self-end">
+						<button type="submit" class="btn btn-primary btn-sm">Guardar tarea</button>
+					</div>
+				</form>
+
+				<div class="table-responsive">
+					<table class="table table-sm align-middle crm-task-table">
+						<thead class="table-light">
+							<tr>
+								<th>Tarea</th>
+								<th>Tipo</th>
+								<th>Propietario</th>
+								<th>Vence</th>
+								<th>Relacionados</th>
+								<th>Colaboradores</th>
+								<th>Resultado</th>
+								<th>Estado</th>
+							</tr>
+						</thead>
+						<tbody>
+							${taskRowsHtml || '<tr><td colspan="8" class="text-center text-muted py-4">Sin tareas registradas.</td></tr>'}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		`;
+
+		const createForm = document.getElementById('crmStudentTaskCreateForm');
+		if (createForm) {
+			bindTaskSelectBlock(createForm, '[data-create-rel-search]', '[data-create-rel-select]', '[data-create-rel-preview]');
+			bindTaskSelectBlock(createForm, '[data-create-col-search]', '[data-create-col-select]', '[data-create-col-preview]');
+
+			createForm.addEventListener('submit', async (event) => {
+				event.preventDefault();
+				const payload = new URLSearchParams();
+				payload.set('student_id', String(studentId));
+				payload.set('tipo_tarea_id', String(createForm.querySelector('[name="tipo_tarea_id"]')?.value || ''));
+				payload.set('titulo', String(createForm.querySelector('[name="titulo"]')?.value || '').trim());
+				payload.set('propietario_id', String(createForm.querySelector('[name="propietario_id"]')?.value || ''));
+				payload.set('descripcion', String(createForm.querySelector('[name="descripcion"]')?.value || '').trim());
+				payload.set('fecha_vencimiento', String(createForm.querySelector('[name="fecha_vencimiento"]')?.value || ''));
+				payload.set('hora_vencimiento', String(createForm.querySelector('[name="hora_vencimiento"]')?.value || ''));
+				payload.set('resultado_id', String(createForm.querySelector('[name="resultado_id"]')?.value || ''));
+				Array.from(createForm.querySelector('[data-create-rel-select]')?.selectedOptions || []).forEach((option) => payload.append('relacionados[]', String(option.value || '')));
+				Array.from(createForm.querySelector('[data-create-col-select]')?.selectedOptions || []).forEach((option) => payload.append('colaboradores[]', String(option.value || '')));
+
+				try {
+					const response = await fetch(`${BASE_URL}crm/addStudentTask`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+						body: payload,
+					});
+					const data = await response.json();
+					if (!response.ok || !data.success) {
+						throw new Error(data.error || 'No se pudo crear la tarea');
+					}
+
+					await loadStudentTasks(studentId);
+					await loadStudentHistory(studentId);
+				} catch (error) {
+					alert(error.message || 'Error al guardar tarea');
+				}
+			});
+		}
+
+		const saveTimers = new Map();
+		container.querySelectorAll('[data-task-row]').forEach((row) => {
+			const locked = row.getAttribute('data-locked') === '1';
+			const taskId = Number(row.getAttribute('data-task-id') || 0);
+			bindTaskSelectBlock(row, '[data-task-rel-search]', '[data-task-rel-select]', '[data-task-rel-preview]');
+			bindTaskSelectBlock(row, '[data-task-col-search]', '[data-task-col-select]', '[data-task-col-preview]');
+
+			if (locked || taskId <= 0) {
+				return;
+			}
+
+			const scheduleParticipantsSave = () => {
+				const timerKey = `task-${taskId}`;
+				const activeTimer = saveTimers.get(timerKey);
+				if (activeTimer) clearTimeout(activeTimer);
+				setTaskRowStatus(row, 'pending', 'Cambios pendientes...');
+				saveTimers.set(timerKey, setTimeout(async () => {
+					const payload = new URLSearchParams();
+					payload.set('student_id', String(studentId));
+					payload.set('task_id', String(taskId));
+					Array.from(row.querySelector('[data-task-rel-select]')?.selectedOptions || []).forEach((option) => payload.append('relacionados[]', String(option.value || '')));
+					Array.from(row.querySelector('[data-task-col-select]')?.selectedOptions || []).forEach((option) => payload.append('colaboradores[]', String(option.value || '')));
+
+					try {
+						setTaskRowStatus(row, 'saving', 'Guardando...');
+						const response = await fetch(`${BASE_URL}crm/updateStudentTaskParticipants`, {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+							body: payload,
+						});
+						const data = await response.json();
+						if (!response.ok || !data.success) throw new Error(data.error || 'No se pudo guardar.');
+						setTaskRowStatus(row, 'saved', 'Auto-guardado listo');
+						flashTaskRow(row, 'crm-task-row-saved');
+						await loadStudentHistory(studentId);
+					} catch (error) {
+						setTaskRowStatus(row, 'error', 'Error al guardar');
+						flashTaskRow(row, 'crm-task-row-error');
+					}
+				}, 450));
+			};
+
+			row.querySelector('[data-task-rel-select]')?.addEventListener('change', scheduleParticipantsSave);
+			row.querySelector('[data-task-col-select]')?.addEventListener('change', scheduleParticipantsSave);
+
+			row.querySelector('[data-task-result-select]')?.addEventListener('change', async (event) => {
+				const payload = new URLSearchParams();
+				payload.set('student_id', String(studentId));
+				payload.set('task_id', String(taskId));
+				payload.set('resultado_id', String(event.target.value || ''));
+				try {
+					setTaskRowStatus(row, 'saving', 'Guardando resultado...');
+					const response = await fetch(`${BASE_URL}crm/updateStudentTaskResult`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+						body: payload,
+					});
+					const data = await response.json();
+					if (!response.ok || !data.success) throw new Error(data.error || 'No se pudo guardar resultado.');
+					setTaskRowStatus(row, 'saved', 'Resultado guardado');
+					flashTaskRow(row, 'crm-task-row-saved');
+					await loadStudentHistory(studentId);
+				} catch (error) {
+					setTaskRowStatus(row, 'error', 'Error al guardar resultado');
+					flashTaskRow(row, 'crm-task-row-error');
+				}
+			});
+
+			row.querySelector('[data-task-complete-btn]')?.addEventListener('click', async () => {
+				const payload = new URLSearchParams();
+				payload.set('student_id', String(studentId));
+				payload.set('task_id', String(taskId));
+				try {
+					setTaskRowStatus(row, 'saving', 'Cerrando tarea...');
+					const response = await fetch(`${BASE_URL}crm/completeStudentTask`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+						body: payload,
+					});
+					const data = await response.json();
+					if (!response.ok || !data.success) throw new Error(data.error || 'No se pudo completar la tarea');
+					await loadStudentTasks(studentId);
+					await loadStudentHistory(studentId);
+				} catch (error) {
+					setTaskRowStatus(row, 'error', 'Error al completar');
+					flashTaskRow(row, 'crm-task-row-error');
+				}
+			});
+		});
+
+		renderCrmTaskCountdowns(container);
+	};
+
+	const loadStudentTasks = async (studentId) => {
+		try {
+			const response = await fetch(`${BASE_URL}crm/getStudentTasks?student_id=${studentId}`);
+			if (!response.ok) throw new Error('Error al cargar tareas');
+			const data = await response.json();
+			if (!data.success) throw new Error(data.error || 'Error desconocido');
+			renderStudentTasks(data, studentId);
+		} catch (error) {
+			console.error('Error:', error);
+			const container = document.getElementById('tareasList');
+			if (container) {
+				container.innerHTML = `<div class="alert alert-danger alert-sm">${escapeHtml(error.message)}</div>`;
+			}
+		}
 	};
 
 	const loadStudentTickets = async (studentId) => {

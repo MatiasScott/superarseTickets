@@ -148,11 +148,15 @@ class CRMController extends Controller
 	{
 		Auth::requireAuth();
 		$this->ensureCrmSupportTables();
-		$studentsData = $this->fetchSuperarseStudents(1000);
+		$periodoFiltro = $this->sanitizePeriodoKey((string) ($_GET['periodo'] ?? ''));
+		$studentsData = $this->fetchSuperarseStudents(1000, $periodoFiltro);
 		$estudiantesSuperarse = is_array($studentsData['rows'] ?? null) ? $studentsData['rows'] : [];
+		$periodos = is_array($studentsData['periodos'] ?? null) ? $studentsData['periodos'] : [];
 
 		$this->view('crm/interesados', [
 			'estudiantesSuperarse' => $estudiantesSuperarse,
+			'periodos' => $periodos,
+			'periodoSeleccionado' => $periodoFiltro,
 			'sourceLabel' => (string) ($studentsData['source'] ?? 'No disponible'),
 			'sourceError' => (string) ($studentsData['error'] ?? ''),
 		], [
@@ -187,19 +191,22 @@ class CRMController extends Controller
 		]);
 	}
 
-	private function fetchSuperarseStudents(int $limit = 500): array
+	private function fetchSuperarseStudents(int $limit = 500, string $periodoFiltro = ''): array
 	{
 		$limit = max(50, min(2000, $limit));
+		$periodoFiltro = $this->sanitizePeriodoKey($periodoFiltro);
 		try {
 			$this->ensureCrmSupportTables();
 			$remote = $this->connectSuperarseDatabase();
 			if ($remote === null) {
-				$fallbackRows = $this->fetchLocalFallbackStudents($limit);
+				$fallbackRows = $this->fetchLocalFallbackStudents($limit, $periodoFiltro);
 				$fallbackRows = $this->attachPipelineData($fallbackRows);
-				$fallbackTotal = $this->countLocalStudents();
+				$fallbackTotal = $this->countLocalStudents($periodoFiltro);
+				$periodos = $this->fetchLocalPeriodOptions();
 				return [
 					'rows' => $fallbackRows,
 					'total' => $fallbackTotal > 0 ? $fallbackTotal : count($fallbackRows),
+					'periodos' => $periodos,
 					'source' => 'Local (fallback)',
 					'error' => 'No se pudo conectar a la BD Superarse. Revisa SUPERARSE_DB_* en .env.',
 				];
@@ -210,7 +217,16 @@ class CRMController extends Controller
 				throw new RuntimeException('No existe tabla users ni estudiantes en la BD Superarse.');
 			}
 
+			$periodos = $this->fetchRemotePeriodOptions($remote, $sourceTable);
+			$params = [];
+
 			if ($sourceTable === 'users') {
+				$whereSql = '';
+				if ($periodoFiltro !== '') {
+					$whereSql = "WHERE TRIM(COALESCE(u.periodo, '')) = :periodo";
+					$params[':periodo'] = $periodoFiltro;
+				}
+
 				$sql = "SELECT
 						u.id,
 						u.codigo_matricula AS codigo_estudiante,
@@ -218,23 +234,42 @@ class CRMController extends Controller
 						TRIM(CONCAT_WS(' ', u.primer_apellido, u.segundo_apellido)) AS apellido,
 						u.correo_electronico AS email,
 						u.programa AS carrera,
-						u.estado
+						u.nivel,
+						u.periodo,
+						u.estado,
+						u.fecha_matricula,
+						TRIM(COALESCE(u.periodo, '')) AS periodo_clave
 					FROM users u
+					$whereSql
 					ORDER BY u.id DESC
 					LIMIT :limit";
 			} else {
+				$whereSql = '';
+				if ($periodoFiltro !== '') {
+					$whereSql = "WHERE DATE_FORMAT(e.created_at, '%Y-%m') = :periodo";
+					$params[':periodo'] = $periodoFiltro;
+				}
+
 				$sql = "SELECT e.id, e.codigo_estudiante, e.estado,
+						'' AS nivel,
+						'' AS periodo,
 							c.nombre, c.apellido, c.email,
-							ca.nombre AS carrera
+							ca.nombre AS carrera,
+							e.created_at AS fecha_matricula,
+							DATE_FORMAT(e.created_at, '%Y-%m') AS periodo_clave
 						FROM estudiantes e
 						LEFT JOIN contactos c ON c.id = e.contacto_id
 						LEFT JOIN matriculas m ON m.estudiante_id = e.id
 						LEFT JOIN carreras ca ON ca.id = m.carrera_id
+						$whereSql
 						ORDER BY e.id DESC
 						LIMIT :limit";
 			}
 
 			$stmt = $remote->prepare($sql);
+			if ($periodoFiltro !== '') {
+				$stmt->bindValue(':periodo', $periodoFiltro, PDO::PARAM_STR);
+			}
 			$stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
 			$stmt->execute();
 			$rows = $stmt->fetchAll() ?: [];
@@ -242,7 +277,24 @@ class CRMController extends Controller
 
 			$total = 0;
 			try {
-				$total = (int) $remote->query('SELECT COUNT(*) FROM ' . $sourceTable)->fetchColumn();
+				if ($sourceTable === 'users') {
+					$countSql = 'SELECT COUNT(*) FROM users u';
+					if ($periodoFiltro !== '') {
+						$countSql .= " WHERE TRIM(COALESCE(u.periodo, '')) = :periodo";
+					}
+				} else {
+					$countSql = 'SELECT COUNT(*) FROM estudiantes e';
+					if ($periodoFiltro !== '') {
+						$countSql .= " WHERE DATE_FORMAT(e.created_at, '%Y-%m') = :periodo";
+					}
+				}
+
+				$countStmt = $remote->prepare($countSql);
+				if ($periodoFiltro !== '') {
+					$countStmt->bindValue(':periodo', $periodoFiltro, PDO::PARAM_STR);
+				}
+				$countStmt->execute();
+				$total = (int) $countStmt->fetchColumn();
 			} catch (Throwable $e) {
 				$total = count($rows);
 			}
@@ -250,16 +302,19 @@ class CRMController extends Controller
 			return [
 				'rows' => $rows,
 				'total' => $total,
+				'periodos' => $periodos,
 				'source' => 'Superarse (' . $sourceTable . ')',
 				'error' => '',
 			];
 		} catch (Throwable $e) {
-			$fallbackRows = $this->fetchLocalFallbackStudents($limit);
+			$fallbackRows = $this->fetchLocalFallbackStudents($limit, $periodoFiltro);
 			$fallbackRows = $this->attachPipelineData($fallbackRows);
-			$fallbackTotal = $this->countLocalStudents();
+			$fallbackTotal = $this->countLocalStudents($periodoFiltro);
+			$periodos = $this->fetchLocalPeriodOptions();
 			return [
 				'rows' => $fallbackRows,
 				'total' => $fallbackTotal > 0 ? $fallbackTotal : count($fallbackRows),
+				'periodos' => $periodos,
 				'source' => 'Local (fallback)',
 				'error' => 'No se pudo leer estudiantes de Superarse: ' . $e->getMessage(),
 			];
@@ -289,20 +344,34 @@ class CRMController extends Controller
 		return null;
 	}
 
-	private function fetchLocalFallbackStudents(int $limit): array
+	private function fetchLocalFallbackStudents(int $limit, string $periodoFiltro = ''): array
 	{
 		try {
 			$db = Database::getInstance()->connection();
+			$periodoFiltro = $this->sanitizePeriodoKey($periodoFiltro);
+			$whereSql = '';
+			if ($periodoFiltro !== '') {
+				$whereSql = "WHERE DATE_FORMAT(e.created_at, '%Y-%m') = :periodo";
+			}
+
 			$sql = "SELECT e.id, e.codigo_estudiante, e.estado,
+						'' AS nivel,
+						'' AS periodo,
 						c.nombre, c.apellido, c.email,
-						ca.nombre AS carrera
+						ca.nombre AS carrera,
+						e.created_at AS fecha_matricula,
+						DATE_FORMAT(e.created_at, '%Y-%m') AS periodo_clave
 					FROM estudiantes e
 					LEFT JOIN contactos c ON c.id = e.contacto_id
 					LEFT JOIN matriculas m ON m.estudiante_id = e.id
 					LEFT JOIN carreras ca ON ca.id = m.carrera_id
+					$whereSql
 					ORDER BY e.id DESC
 					LIMIT :limit";
 			$stmt = $db->prepare($sql);
+			if ($periodoFiltro !== '') {
+				$stmt->bindValue(':periodo', $periodoFiltro, PDO::PARAM_STR);
+			}
 			$stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
 			$stmt->execute();
 			return $stmt->fetchAll() ?: [];
@@ -331,14 +400,197 @@ class CRMController extends Controller
 		]);
 	}
 
-	private function countLocalStudents(): int
+	private function countLocalStudents(string $periodoFiltro = ''): int
 	{
 		try {
 			$db = Database::getInstance()->connection();
-			return (int) $db->query('SELECT COUNT(*) FROM estudiantes')->fetchColumn();
+			$periodoFiltro = $this->sanitizePeriodoKey($periodoFiltro);
+			if ($periodoFiltro === '') {
+				return (int) $db->query('SELECT COUNT(*) FROM estudiantes')->fetchColumn();
+			}
+
+			$stmt = $db->prepare("SELECT COUNT(*) FROM estudiantes e WHERE DATE_FORMAT(e.created_at, '%Y-%m') = :periodo");
+			$stmt->execute([':periodo' => $periodoFiltro]);
+			return (int) $stmt->fetchColumn();
 		} catch (Throwable $e) {
 			return 0;
 		}
+	}
+
+	private function sanitizePeriodoKey(string $periodo): string
+	{
+		$periodo = trim($periodo);
+		if ($periodo === '') {
+			return '';
+		}
+
+		if (mb_strlen($periodo) > 40) {
+			$periodo = mb_substr($periodo, 0, 40);
+		}
+
+		return preg_match('/^[\p{L}\p{N}\s\-_.\/]+$/u', $periodo) === 1 ? $periodo : '';
+	}
+
+	private function fetchRemotePeriodOptions(PDO $remote, string $sourceTable): array
+	{
+		try {
+			if ($sourceTable === 'users') {
+				$sql = "SELECT DISTINCT TRIM(COALESCE(u.periodo, '')) AS periodo
+					FROM users u
+					WHERE u.periodo IS NOT NULL AND TRIM(u.periodo) <> ''
+					ORDER BY periodo DESC";
+			} else {
+				$sql = "SELECT DISTINCT DATE_FORMAT(e.created_at, '%Y-%m') AS periodo
+					FROM estudiantes e
+					WHERE e.created_at IS NOT NULL
+					ORDER BY periodo DESC";
+			}
+
+			$rows = $remote->query($sql)->fetchAll() ?: [];
+			$periodos = [];
+			foreach ($rows as $row) {
+				$periodo = $this->sanitizePeriodoKey((string) ($row['periodo'] ?? ''));
+				if ($periodo !== '') {
+					$periodos[] = $periodo;
+				}
+			}
+
+			return array_values(array_unique($periodos));
+		} catch (Throwable $e) {
+			return [];
+		}
+	}
+
+	private function fetchLocalPeriodOptions(): array
+	{
+		try {
+			$db = Database::getInstance()->connection();
+			$rows = $db->query("SELECT DISTINCT DATE_FORMAT(e.created_at, '%Y-%m') AS periodo
+				FROM estudiantes e
+				WHERE e.created_at IS NOT NULL
+				ORDER BY periodo DESC")->fetchAll() ?: [];
+
+			$periodos = [];
+			foreach ($rows as $row) {
+				$periodo = $this->sanitizePeriodoKey((string) ($row['periodo'] ?? ''));
+				if ($periodo !== '') {
+					$periodos[] = $periodo;
+				}
+			}
+
+			return array_values(array_unique($periodos));
+		} catch (Throwable $e) {
+			return [];
+		}
+	}
+
+	private function currentUserId(): int
+	{
+		return (int) ($_SESSION['user_id'] ?? 0);
+	}
+
+	private function crmHistoryNote(int $studentId, string $sourceType, string $noteText): void
+	{
+		$db = Database::getInstance()->connection();
+		$stmt = $db->prepare("INSERT INTO crm_student_notes (student_id, source_type, note_text, created_by, created_at)
+			VALUES (:student_id, :source_type, :note_text, :user_id, NOW())");
+		$stmt->execute([
+			':student_id' => $studentId,
+			':source_type' => $sourceType,
+			':note_text' => $noteText,
+			':user_id' => $this->currentUserId(),
+		]);
+	}
+
+	private function formatUsuariosList(PDO $db, array $ids): string
+	{
+		$cleanIds = [];
+		foreach ($ids as $id) {
+			$value = (int) $id;
+			if ($value > 0) {
+				$cleanIds[$value] = $value;
+			}
+		}
+
+		if (empty($cleanIds)) {
+			return '-';
+		}
+
+		$orderedIds = array_values($cleanIds);
+		$placeholders = implode(',', array_fill(0, count($orderedIds), '?'));
+		$stmt = $db->prepare("SELECT id, nombre FROM usuarios WHERE id IN ($placeholders)");
+		$stmt->execute($orderedIds);
+		$rows = $stmt->fetchAll() ?: [];
+
+		$map = [];
+		foreach ($rows as $row) {
+			$uid = (int) ($row['id'] ?? 0);
+			if ($uid > 0) {
+				$map[$uid] = (string) ($row['nombre'] ?? ('Usuario #' . $uid));
+			}
+		}
+
+		$labels = [];
+		foreach ($orderedIds as $uid) {
+			$labels[] = $map[$uid] ?? ('Usuario #' . $uid);
+		}
+
+		return implode(', ', $labels);
+	}
+
+	private function activeTaskTypes(PDO $db): array
+	{
+		$stmt = $db->query("SELECT id, nombre FROM tipo_tarea_convenios WHERE estado = 'activo' ORDER BY orden ASC, nombre ASC");
+		return $stmt ? ($stmt->fetchAll() ?: []) : [];
+	}
+
+	private function activeResultados(PDO $db): array
+	{
+		$stmt = $db->query("SELECT id, nombre FROM resultados WHERE estado = 'activo' ORDER BY orden ASC, nombre ASC");
+		return $stmt ? ($stmt->fetchAll() ?: []) : [];
+	}
+
+	private function activeUsuarios(PDO $db): array
+	{
+		$stmt = $db->query("SELECT id, nombre FROM usuarios WHERE estado = 'activo' ORDER BY nombre ASC");
+		return $stmt ? ($stmt->fetchAll() ?: []) : [];
+	}
+
+	private function findStudentTaskMeta(PDO $db, int $studentId, int $taskId): ?array
+	{
+		$stmt = $db->prepare("SELECT id, estado, completado FROM crm_student_tasks WHERE id = :id AND student_id = :student_id LIMIT 1");
+		$stmt->execute([
+			':id' => $taskId,
+			':student_id' => $studentId,
+		]);
+		$row = $stmt->fetch();
+		return $row ?: null;
+	}
+
+	private function listStudentTasks(PDO $db, int $studentId): array
+	{
+		$sql = "SELECT t.*, tt.nombre AS tipo_tarea_nombre, r.nombre AS resultado_nombre,
+				up.nombre AS propietario_nombre, uc.nombre AS created_by_nombre,
+				GROUP_CONCAT(DISTINCT ur.nombre ORDER BY ur.nombre SEPARATOR ', ') AS relacionados,
+				GROUP_CONCAT(DISTINCT uc2.nombre ORDER BY uc2.nombre SEPARATOR ', ') AS colaboradores,
+				GROUP_CONCAT(DISTINCT tr.usuario_id ORDER BY tr.usuario_id SEPARATOR ',') AS relacionados_ids,
+				GROUP_CONCAT(DISTINCT tc.usuario_id ORDER BY tc.usuario_id SEPARATOR ',') AS colaboradores_ids
+			FROM crm_student_tasks t
+			LEFT JOIN tipo_tarea_convenios tt ON tt.id = t.tipo_tarea_id
+			LEFT JOIN resultados r ON r.id = t.resultado_id
+			LEFT JOIN usuarios up ON up.id = t.propietario_id
+			LEFT JOIN usuarios uc ON uc.id = t.created_by
+			LEFT JOIN crm_student_task_relacionados tr ON tr.task_id = t.id
+			LEFT JOIN usuarios ur ON ur.id = tr.usuario_id
+			LEFT JOIN crm_student_task_colaboradores tc ON tc.task_id = t.id
+			LEFT JOIN usuarios uc2 ON uc2.id = tc.usuario_id
+			WHERE t.student_id = :student_id
+			GROUP BY t.id
+			ORDER BY t.completado ASC, t.fecha_vencimiento ASC, t.hora_vencimiento ASC, t.id DESC";
+
+		$stmt = $db->prepare($sql);
+		$stmt->execute([':student_id' => $studentId]);
+		return $stmt->fetchAll() ?: [];
 	}
 
 	private function ensureCrmSupportTables(): void
@@ -360,6 +612,89 @@ class CRMController extends Controller
 				updated_by INT NULL,
 				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+			$db->exec("CREATE TABLE IF NOT EXISTS crm_student_notes (
+				id BIGINT AUTO_INCREMENT PRIMARY KEY,
+				student_id INT NOT NULL,
+				source_type VARCHAR(40) NOT NULL DEFAULT 'note',
+				note_text TEXT NOT NULL,
+				created_by INT NULL,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP NULL DEFAULT NULL,
+				INDEX idx_student_source (student_id, source_type),
+				INDEX idx_created_at (created_at)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+			$db->exec("CREATE TABLE IF NOT EXISTS tipo_tarea_convenios (
+				id INT AUTO_INCREMENT PRIMARY KEY,
+				nombre VARCHAR(150) NOT NULL,
+				orden INT DEFAULT 0,
+				estado ENUM('activo','inactivo') DEFAULT 'activo',
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+			$db->exec("CREATE TABLE IF NOT EXISTS resultados (
+				id INT AUTO_INCREMENT PRIMARY KEY,
+				nombre VARCHAR(150) NOT NULL,
+				orden INT DEFAULT 0,
+				estado ENUM('activo','inactivo') DEFAULT 'activo',
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+			$db->exec("CREATE TABLE IF NOT EXISTS crm_student_tasks (
+				id BIGINT AUTO_INCREMENT PRIMARY KEY,
+				student_id INT NOT NULL,
+				tipo_tarea_id INT NULL,
+				resultado_id INT NULL,
+				titulo VARCHAR(255) NOT NULL,
+				descripcion TEXT NULL,
+				fecha_vencimiento DATE NULL,
+				hora_vencimiento TIME NULL,
+				propietario_id INT NOT NULL,
+				estado ENUM('pendiente','completada') DEFAULT 'pendiente',
+				completado TINYINT(1) DEFAULT 0,
+				created_by INT NULL,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+				INDEX idx_student_id (student_id),
+				INDEX idx_estado (estado),
+				INDEX idx_vencimiento (fecha_vencimiento),
+				INDEX idx_propietario (propietario_id)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+			$db->exec("CREATE TABLE IF NOT EXISTS crm_student_task_relacionados (
+				id BIGINT AUTO_INCREMENT PRIMARY KEY,
+				task_id BIGINT NOT NULL,
+				usuario_id INT NOT NULL,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE KEY uniq_task_relacionado (task_id, usuario_id),
+				INDEX idx_task_id (task_id),
+				INDEX idx_usuario_id (usuario_id)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+			$db->exec("CREATE TABLE IF NOT EXISTS crm_student_task_colaboradores (
+				id BIGINT AUTO_INCREMENT PRIMARY KEY,
+				task_id BIGINT NOT NULL,
+				usuario_id INT NOT NULL,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE KEY uniq_task_colaborador (task_id, usuario_id),
+				INDEX idx_task_id (task_id),
+				INDEX idx_usuario_id (usuario_id)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+			$countTipos = (int) $db->query("SELECT COUNT(*) FROM tipo_tarea_convenios")->fetchColumn();
+			if ($countTipos === 0) {
+				$db->exec("INSERT INTO tipo_tarea_convenios (nombre, orden) VALUES
+					('Llamada', 1), ('Correo', 2), ('Reunión', 3), ('Firma', 4), ('Seguimiento', 5), ('Visita', 6)");
+			}
+
+			$countResultados = (int) $db->query("SELECT COUNT(*) FROM resultados")->fetchColumn();
+			if ($countResultados === 0) {
+				$db->exec("INSERT INTO resultados (nombre, orden) VALUES
+					('Exitoso', 1), ('Pendiente', 2), ('Sin respuesta', 3), ('Reagendado', 4), ('Cancelado', 5)");
+			}
 		} catch (Throwable $e) {
 			// Evitar romper el flujo principal por auto-creacion auxiliar.
 		}
@@ -650,6 +985,7 @@ class CRMController extends Controller
 						u.telefono,
 						u.celular,
 						u.programa AS carrera,
+						u.nivel,
 						u.sede,
 						u.estado,
 						u.fecha_matricula
@@ -704,7 +1040,7 @@ class CRMController extends Controller
 				FROM crm_student_notes csn
 				LEFT JOIN usuarios u ON u.id = csn.created_by
 				WHERE csn.student_id = :student_id
-				AND csn.source_type = 'estado_change'
+				AND csn.source_type IN ('estado_change', 'task_create', 'task_participants', 'task_result', 'task_complete')
 				ORDER BY csn.created_at DESC
 				LIMIT 30");
 			$historyStmt->execute([':student_id' => $studentId]);
@@ -787,6 +1123,276 @@ class CRMController extends Controller
 				'message' => 'Estado actualizado correctamente',
 				'pipeline_nombre' => (string) ($estado['nombre'] ?? 'Estado'),
 			]);
+		} catch (Throwable $e) {
+			http_response_code(500);
+			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+		}
+		exit;
+	}
+
+	public function getStudentTasks(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		$studentId = max(0, (int) ($_GET['student_id'] ?? 0));
+		if ($studentId <= 0) {
+			http_response_code(400);
+			echo json_encode(['success' => false, 'error' => 'ID inválido']);
+			exit;
+		}
+
+		try {
+			$this->ensureCrmSupportTables();
+			$db = Database::getInstance()->connection();
+
+			echo json_encode([
+				'success' => true,
+				'tasks' => $this->listStudentTasks($db, $studentId),
+				'tipos_tarea' => $this->activeTaskTypes($db),
+				'resultados' => $this->activeResultados($db),
+				'usuarios' => $this->activeUsuarios($db),
+			]);
+		} catch (Throwable $e) {
+			http_response_code(500);
+			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+		}
+		exit;
+	}
+
+	public function addStudentTask(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		$studentId = max(0, (int) ($_POST['student_id'] ?? 0));
+		$titulo = trim((string) ($_POST['titulo'] ?? ''));
+		$propietarioId = max(0, (int) ($_POST['propietario_id'] ?? 0));
+
+		if ($studentId <= 0 || $titulo === '' || $propietarioId <= 0) {
+			http_response_code(400);
+			echo json_encode(['success' => false, 'error' => 'Título y propietario son obligatorios.']);
+			exit;
+		}
+
+		$relacionados = array_values(array_unique(array_map('intval', (array) ($_POST['relacionados'] ?? []))));
+		$colaboradores = array_values(array_unique(array_map('intval', (array) ($_POST['colaboradores'] ?? []))));
+
+		try {
+			$this->ensureCrmSupportTables();
+			$db = Database::getInstance()->connection();
+			$db->beginTransaction();
+
+			$stmt = $db->prepare("INSERT INTO crm_student_tasks (student_id, tipo_tarea_id, resultado_id, titulo, descripcion, fecha_vencimiento, hora_vencimiento, propietario_id, estado, completado, created_by)
+				VALUES (:student_id, :tipo_tarea_id, :resultado_id, :titulo, :descripcion, :fecha_vencimiento, :hora_vencimiento, :propietario_id, 'pendiente', 0, :created_by)");
+			$stmt->execute([
+				':student_id' => $studentId,
+				':tipo_tarea_id' => ($_POST['tipo_tarea_id'] ?? '') !== '' ? (int) $_POST['tipo_tarea_id'] : null,
+				':resultado_id' => ($_POST['resultado_id'] ?? '') !== '' ? (int) $_POST['resultado_id'] : null,
+				':titulo' => $titulo,
+				':descripcion' => trim((string) ($_POST['descripcion'] ?? '')),
+				':fecha_vencimiento' => trim((string) ($_POST['fecha_vencimiento'] ?? '')),
+				':hora_vencimiento' => trim((string) ($_POST['hora_vencimiento'] ?? '')),
+				':propietario_id' => $propietarioId,
+				':created_by' => $this->currentUserId(),
+			]);
+
+			$taskId = (int) $db->lastInsertId();
+
+			if (!empty($relacionados)) {
+				$relStmt = $db->prepare("INSERT INTO crm_student_task_relacionados (task_id, usuario_id) VALUES (:task_id, :usuario_id)");
+				foreach ($relacionados as $usuarioId) {
+					if ($usuarioId > 0) {
+						$relStmt->execute([':task_id' => $taskId, ':usuario_id' => $usuarioId]);
+					}
+				}
+			}
+
+			if (!empty($colaboradores)) {
+				$colStmt = $db->prepare("INSERT INTO crm_student_task_colaboradores (task_id, usuario_id) VALUES (:task_id, :usuario_id)");
+				foreach ($colaboradores as $usuarioId) {
+					if ($usuarioId > 0) {
+						$colStmt->execute([':task_id' => $taskId, ':usuario_id' => $usuarioId]);
+					}
+				}
+			}
+
+			$this->crmHistoryNote($studentId, 'task_create', 'Tarea creada: ' . $titulo);
+			$db->commit();
+
+			echo json_encode(['success' => true, 'message' => 'Tarea creada correctamente.', 'task_id' => $taskId]);
+		} catch (Throwable $e) {
+			if (isset($db) && $db instanceof PDO && $db->inTransaction()) {
+				$db->rollBack();
+			}
+			http_response_code(500);
+			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+		}
+		exit;
+	}
+
+	public function updateStudentTaskParticipants(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		$studentId = max(0, (int) ($_POST['student_id'] ?? 0));
+		$taskId = max(0, (int) ($_POST['task_id'] ?? 0));
+		if ($studentId <= 0 || $taskId <= 0) {
+			http_response_code(400);
+			echo json_encode(['success' => false, 'error' => 'Datos inválidos.']);
+			exit;
+		}
+
+		$relacionadosRaw = (array) ($_POST['relacionados'] ?? []);
+		$colaboradoresRaw = (array) ($_POST['colaboradores'] ?? []);
+		$relacionados = [];
+		foreach ($relacionadosRaw as $item) {
+			$value = (int) $item;
+			if ($value > 0) {
+				$relacionados[$value] = $value;
+			}
+		}
+		$colaboradores = [];
+		foreach ($colaboradoresRaw as $item) {
+			$value = (int) $item;
+			if ($value > 0) {
+				$colaboradores[$value] = $value;
+			}
+		}
+
+		try {
+			$this->ensureCrmSupportTables();
+			$db = Database::getInstance()->connection();
+			$meta = $this->findStudentTaskMeta($db, $studentId, $taskId);
+			if (!$meta) {
+				http_response_code(404);
+				echo json_encode(['success' => false, 'error' => 'Tarea no encontrada.']);
+				exit;
+			}
+			if ((string) ($meta['estado'] ?? '') === 'completada' || (int) ($meta['completado'] ?? 0) === 1) {
+				http_response_code(409);
+				echo json_encode(['success' => false, 'error' => 'La tarea está completada y quedó bloqueada.']);
+				exit;
+			}
+
+			$db->beginTransaction();
+			$db->prepare("DELETE FROM crm_student_task_relacionados WHERE task_id = :task_id")->execute([':task_id' => $taskId]);
+			$db->prepare("DELETE FROM crm_student_task_colaboradores WHERE task_id = :task_id")->execute([':task_id' => $taskId]);
+
+			if (!empty($relacionados)) {
+				$relStmt = $db->prepare("INSERT INTO crm_student_task_relacionados (task_id, usuario_id) VALUES (:task_id, :usuario_id)");
+				foreach (array_values($relacionados) as $usuarioId) {
+					$relStmt->execute([':task_id' => $taskId, ':usuario_id' => $usuarioId]);
+				}
+			}
+
+			if (!empty($colaboradores)) {
+				$colStmt = $db->prepare("INSERT INTO crm_student_task_colaboradores (task_id, usuario_id) VALUES (:task_id, :usuario_id)");
+				foreach (array_values($colaboradores) as $usuarioId) {
+					$colStmt->execute([':task_id' => $taskId, ':usuario_id' => $usuarioId]);
+				}
+			}
+
+			$detalle = 'Relacionados: ' . $this->formatUsuariosList($db, array_values($relacionados));
+			$detalle .= ' | Colaboradores: ' . $this->formatUsuariosList($db, array_values($colaboradores));
+			$this->crmHistoryNote($studentId, 'task_participants', $detalle);
+			$db->commit();
+
+			echo json_encode(['success' => true, 'message' => 'Participantes actualizados.']);
+		} catch (Throwable $e) {
+			if (isset($db) && $db instanceof PDO && $db->inTransaction()) {
+				$db->rollBack();
+			}
+			http_response_code(500);
+			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+		}
+		exit;
+	}
+
+	public function updateStudentTaskResult(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		$studentId = max(0, (int) ($_POST['student_id'] ?? 0));
+		$taskId = max(0, (int) ($_POST['task_id'] ?? 0));
+		if ($studentId <= 0 || $taskId <= 0) {
+			http_response_code(400);
+			echo json_encode(['success' => false, 'error' => 'Datos inválidos.']);
+			exit;
+		}
+
+		$resultadoId = ($_POST['resultado_id'] ?? '') !== '' ? (int) $_POST['resultado_id'] : null;
+
+		try {
+			$this->ensureCrmSupportTables();
+			$db = Database::getInstance()->connection();
+			$meta = $this->findStudentTaskMeta($db, $studentId, $taskId);
+			if (!$meta) {
+				http_response_code(404);
+				echo json_encode(['success' => false, 'error' => 'Tarea no encontrada.']);
+				exit;
+			}
+			if ((string) ($meta['estado'] ?? '') === 'completada' || (int) ($meta['completado'] ?? 0) === 1) {
+				http_response_code(409);
+				echo json_encode(['success' => false, 'error' => 'La tarea está completada y quedó bloqueada.']);
+				exit;
+			}
+
+			$stmt = $db->prepare("UPDATE crm_student_tasks SET resultado_id = :resultado_id WHERE id = :id");
+			$stmt->execute([':resultado_id' => $resultadoId, ':id' => $taskId]);
+
+			$resultadoNombre = '-';
+			if ($resultadoId !== null && $resultadoId > 0) {
+				$resStmt = $db->prepare("SELECT nombre FROM resultados WHERE id = :id LIMIT 1");
+				$resStmt->execute([':id' => $resultadoId]);
+				$resultadoNombre = (string) ($resStmt->fetchColumn() ?: '-');
+			}
+
+			$this->crmHistoryNote($studentId, 'task_result', 'Resultado de tarea: ' . $resultadoNombre);
+			echo json_encode(['success' => true, 'message' => 'Resultado actualizado.']);
+		} catch (Throwable $e) {
+			http_response_code(500);
+			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+		}
+		exit;
+	}
+
+	public function completeStudentTask(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		$studentId = max(0, (int) ($_POST['student_id'] ?? 0));
+		$taskId = max(0, (int) ($_POST['task_id'] ?? 0));
+		if ($studentId <= 0 || $taskId <= 0) {
+			http_response_code(400);
+			echo json_encode(['success' => false, 'error' => 'Datos inválidos.']);
+			exit;
+		}
+
+		try {
+			$this->ensureCrmSupportTables();
+			$db = Database::getInstance()->connection();
+			$meta = $this->findStudentTaskMeta($db, $studentId, $taskId);
+			if (!$meta) {
+				http_response_code(404);
+				echo json_encode(['success' => false, 'error' => 'Tarea no encontrada.']);
+				exit;
+			}
+			if ((string) ($meta['estado'] ?? '') === 'completada' || (int) ($meta['completado'] ?? 0) === 1) {
+				echo json_encode(['success' => true, 'message' => 'La tarea ya estaba completada.']);
+				exit;
+			}
+
+			$db->prepare("UPDATE crm_student_tasks SET estado = 'completada', completado = 1 WHERE id = :id")->execute([':id' => $taskId]);
+			$titleStmt = $db->prepare("SELECT titulo FROM crm_student_tasks WHERE id = :id LIMIT 1");
+			$titleStmt->execute([':id' => $taskId]);
+			$titulo = (string) ($titleStmt->fetchColumn() ?: 'Tarea');
+
+			$this->crmHistoryNote($studentId, 'task_complete', 'Tarea completada: ' . $titulo);
+			echo json_encode(['success' => true, 'message' => 'Tarea completada.']);
 		} catch (Throwable $e) {
 			http_response_code(500);
 			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
@@ -984,7 +1590,7 @@ class CRMController extends Controller
 			$sql = "SELECT csn.created_at, u.nombre AS usuario, csn.note_text
 					FROM crm_student_notes csn
 					LEFT JOIN usuarios u ON u.id = csn.created_by
-					WHERE csn.student_id = :student_id AND csn.source_type = 'estado_change'
+					WHERE csn.student_id = :student_id AND csn.source_type IN ('estado_change', 'task_create', 'task_participants', 'task_result', 'task_complete')
 					ORDER BY csn.created_at DESC";
 			$stmt = $db->prepare($sql);
 			$stmt->execute([':student_id' => $studentId]);
