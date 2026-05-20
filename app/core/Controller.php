@@ -17,6 +17,7 @@ abstract class Controller
 		$useLayout = $meta['layout'] ?? true;
 		$showSidebar = $meta['showSidebar'] ?? ($layoutModule !== 'auth');
 		$showTopbar = $meta['showTopbar'] ?? true;
+		$showFooter = $meta['showFooter'] ?? false;
 
 		$styles = ['global.css'];
 		$scripts = ['global.js'];

@@ -1,6 +1,7 @@
 	</div>
 
 	<?php $scripts = $scripts ?? ['global.js']; ?>
+	<?php if (!empty($showFooter)): ?>
 	<footer class="page-footer">
 		<div class="container-fluid py-2 small text-center">
 			<span style="color:var(--ink-soft)">
@@ -9,6 +10,7 @@
 			</span>
 		</div>
 	</footer>
+	<?php endif; ?>
 
 	<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 	<?php foreach ($scripts as $script): ?>
