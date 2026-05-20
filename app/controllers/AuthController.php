@@ -11,6 +11,7 @@ class AuthController extends Controller
 		$this->view('auth/login', [], [
 			'title' => 'Iniciar sesion',
 			'showSidebar' => false,
+			'showTopbar' => false,
 		]);
 	}
 

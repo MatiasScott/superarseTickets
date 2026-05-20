@@ -27,6 +27,22 @@
     font-size: .88rem;
 }
 
+.crm-summary-table th,
+.crm-level-table th {
+    white-space: nowrap;
+}
+
+.crm-level-table td,
+.crm-level-table th {
+    vertical-align: middle;
+}
+
+@media (max-width: 768px) {
+    .crm-level-table {
+        font-size: 0.88rem;
+    }
+}
+
 /* Estilos para Student Detail Modal */
 .student-detail-link {
     color: #2f80ed;

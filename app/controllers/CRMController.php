@@ -5,143 +5,248 @@ class CRMController extends Controller
 	public function dashboard(): void
 	{
 		Auth::requireAuth();
-		$db = Database::getInstance()->connection();
-		$estadoId = max(0, (int) ($_GET['estado_id'] ?? 0));
 
-		$pipelineEstados = [];
-		$estadoLabel = 'Todos los estados';
+		$admisionesRows = [
+			'adm_1' => ['label' => '1. Etapa interesados', 'count' => 0],
+			'adm_2' => ['label' => '2. Etapa seguimiento', 'count' => 0],
+			'adm_31' => ['label' => '3.1 Etapa nuevos siguiente paso', 'count' => 0],
+		];
+		$matriculasRows = [
+			'mat_32' => ['label' => '3.2 Inscrito reingreso y homologacion siguiente paso', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
+			'mat_33' => ['label' => '3.3 Pendiente prematricula antiguos siguiente paso', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
+			'mat_4' => ['label' => '4. Prematricula nuevos y antiguos siguiente paso', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
+			'mat_5' => ['label' => '5. Etapa matriculado PAO actual', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
+		];
+		$docenciaRows = [
+			'doc_riesgo_financiero' => ['label' => 'Riesgo financiero', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
+			'doc_riesgo_academico' => ['label' => 'Riesgo academico', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
+			'doc_riesgo_af' => ['label' => 'Riesgo a+f', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
+			'doc_no_legaliza' => ['label' => 'Siguiente periodo no legaliza matricula', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
+			'doc_retiro_anulacion' => ['label' => 'Retiro y anulacion de matricula', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
+			'doc_egresado' => ['label' => 'Egresado', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
+			'doc_graduado' => ['label' => 'Graduado', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
+			'doc_descalificado' => ['label' => 'Descalificado', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
+		];
+
+		$kpiMatriculas3233 = [
+			'label' => 'KPI etapas 3.2 + 3.3 por nivel',
+			'levels' => $this->dashboardEmptyLevelBucket(),
+			'total' => 0,
+		];
+		$kpiMatriculas45 = [
+			'label' => 'KPI etapas 4 + 5 por nivel',
+			'levels' => $this->dashboardEmptyLevelBucket(),
+			'total' => 0,
+		];
+
 		try {
-			$pipelineEstados = $db->query("SELECT id, nombre FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC")->fetchAll() ?: [];
-			foreach ($pipelineEstados as $estado) {
-				if ((int) ($estado['id'] ?? 0) === $estadoId) {
-					$estadoLabel = (string) ($estado['nombre'] ?? 'Estado');
-					break;
+			$this->ensureCrmSupportTables();
+			$db = Database::getInstance()->connection();
+			$stageKeyByEstadoId = [];
+			$activeEstados = $db->query("SELECT id, nombre, categoria, orden FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC")->fetchAll() ?: [];
+			foreach ($activeEstados as $estado) {
+				$estadoId = (int) ($estado['id'] ?? 0);
+				if ($estadoId <= 0) {
+					continue;
+				}
+
+				$stageKeyByEstadoId[$estadoId] = $this->dashboardResolveStageKeyFromState($estado);
+			}
+
+			$pipelineRows = $db->query("SELECT p.student_id, p.estado_id, COALESCE(pe.nombre, '') AS estado_nombre
+				FROM crm_student_pipeline p
+				LEFT JOIN pipeline_estados pe ON pe.id = p.estado_id")->fetchAll() ?: [];
+
+			$userLevels = [];
+			$remote = $this->connectSuperarseDatabase();
+			if ($remote instanceof PDO && $this->resolveSuperarseStudentTable($remote) === 'users') {
+				$userRows = $remote->query('SELECT id, nivel FROM users')->fetchAll() ?: [];
+				foreach ($userRows as $userRow) {
+					$studentId = (int) ($userRow['id'] ?? 0);
+					if ($studentId <= 0) {
+						continue;
+					}
+					$nivel = $this->dashboardExtractNivel((string) ($userRow['nivel'] ?? ''));
+					if ($nivel !== null) {
+						$userLevels[$studentId] = $nivel;
+					}
+				}
+			}
+
+			foreach ($pipelineRows as $row) {
+				$estadoId = (int) ($row['estado_id'] ?? 0);
+				$stageKey = $stageKeyByEstadoId[$estadoId] ?? $this->dashboardResolveStageKey((string) ($row['estado_nombre'] ?? ''));
+				if ($stageKey === null) {
+					continue;
+				}
+
+				if (isset($admisionesRows[$stageKey])) {
+					$admisionesRows[$stageKey]['count']++;
+					continue;
+				}
+
+				$studentId = (int) ($row['student_id'] ?? 0);
+				$nivel = $userLevels[$studentId] ?? null;
+
+				if (isset($matriculasRows[$stageKey])) {
+					$this->dashboardIncrementByLevel($matriculasRows[$stageKey], $nivel);
+
+					if ($stageKey === 'mat_32' || $stageKey === 'mat_33') {
+						$this->dashboardIncrementByLevel($kpiMatriculas3233, $nivel);
+					}
+
+					if ($stageKey === 'mat_4' || $stageKey === 'mat_5') {
+						$this->dashboardIncrementByLevel($kpiMatriculas45, $nivel);
+					}
+					continue;
+				}
+
+				if (isset($docenciaRows[$stageKey])) {
+					$this->dashboardIncrementByLevel($docenciaRows[$stageKey], $nivel);
 				}
 			}
 		} catch (Throwable $e) {
-			$pipelineEstados = [];
-		}
-
-		$metrics = [
-			'contactos' => 0,
-			'interesados' => 0,
-			'estudiantes' => 0,
-			'convertidos' => 0,
-			'tasa_conversion' => 0.0,
-		];
-		$recentInteresados = [];
-		$pipelineBreakdown = [];
-		$monthlySeries = [];
-
-		$whereInteresados = " WHERE i.estado = 'activo' ";
-		$paramsInteresados = [];
-		if ($estadoId > 0) {
-			$whereInteresados .= ' AND i.estado_id = :estado_id ';
-			$paramsInteresados[':estado_id'] = $estadoId;
-		}
-
-		try {
-			$metrics['contactos'] = (int) $db->query("SELECT COUNT(*) FROM contactos WHERE estado = 'activo'")->fetchColumn();
-		} catch (Throwable $e) {
-			$metrics['contactos'] = 0;
-		}
-
-		try {
-			$sql = 'SELECT COUNT(*) FROM interesados i ' . $whereInteresados;
-			$stmt = $db->prepare($sql);
-			$stmt->execute($paramsInteresados);
-			$metrics['interesados'] = (int) $stmt->fetchColumn();
-		} catch (Throwable $e) {
-			$metrics['interesados'] = 0;
-		}
-
-		try {
-			$studentsData = $this->fetchSuperarseStudents(400);
-			$metrics['estudiantes'] = (int) ($studentsData['total'] ?? 0);
-		} catch (Throwable $e) {
-			$metrics['estudiantes'] = 0;
-		}
-
-		try {
-			$sql = 'SELECT COUNT(*) FROM interesados i ' . $whereInteresados . ' AND i.convertido = 1';
-			$stmt = $db->prepare($sql);
-			$stmt->execute($paramsInteresados);
-			$metrics['convertidos'] = (int) $stmt->fetchColumn();
-		} catch (Throwable $e) {
-			$metrics['convertidos'] = 0;
-		}
-		$metrics['tasa_conversion'] = $metrics['interesados'] > 0
-			? round(($metrics['convertidos'] / $metrics['interesados']) * 100, 1)
-			: 0.0;
-
-		try {
-			$sql = "SELECT i.id, c.nombre, c.apellido, i.origen, i.convertido, i.estado
-					FROM interesados i
-					INNER JOIN contactos c ON c.id = i.contacto_id
-					" . $whereInteresados . "
-					ORDER BY i.id DESC
-					LIMIT 8";
-			$stmt = $db->prepare($sql);
-			$stmt->execute($paramsInteresados);
-			$recentInteresados = $stmt->fetchAll() ?: [];
-		} catch (Throwable $e) {
-			$recentInteresados = [];
-		}
-
-		try {
-			$sql = "SELECT pe.id, pe.nombre, COUNT(i.id) AS total
-					FROM pipeline_estados pe
-					LEFT JOIN interesados i
-						ON i.estado_id = pe.id
-						AND i.estado = 'activo'
-					GROUP BY pe.id, pe.nombre
-					ORDER BY pe.id ASC";
-			$pipelineBreakdown = $db->query($sql)->fetchAll() ?: [];
-		} catch (Throwable $e) {
-			$pipelineBreakdown = [];
-		}
-
-		try {
-			$sql = "SELECT DATE_FORMAT(i.created_at, '%Y-%m') AS mes, COUNT(*) AS total
-					FROM interesados i
-					" . $whereInteresados . "
-					GROUP BY DATE_FORMAT(i.created_at, '%Y-%m')
-					ORDER BY mes DESC
-					LIMIT 6";
-			$stmt = $db->prepare($sql);
-			$stmt->execute($paramsInteresados);
-			$monthlySeries = array_reverse($stmt->fetchAll() ?: []);
-		} catch (Throwable $e) {
-			$monthlySeries = [];
-		}
-
-		$pipelineLabels = [];
-		$pipelineValues = [];
-		foreach ($pipelineBreakdown as $row) {
-			$pipelineLabels[] = (string) ($row['nombre'] ?? 'Estado');
-			$pipelineValues[] = (int) ($row['total'] ?? 0);
-		}
-
-		$monthlyLabels = [];
-		$monthlyValues = [];
-		foreach ($monthlySeries as $row) {
-			$monthlyLabels[] = (string) ($row['mes'] ?? '');
-			$monthlyValues[] = (int) ($row['total'] ?? 0);
+			// Si falla alguna fuente de datos, renderiza en cero para no romper la vista.
 		}
 
 		$this->view('crm/dashboard', [
-			'metrics' => $metrics,
-			'recentInteresados' => $recentInteresados,
-			'pipelineEstados' => $pipelineEstados,
-			'estadoId' => $estadoId,
-			'estadoLabel' => $estadoLabel,
-			'pipelineLabels' => $pipelineLabels,
-			'pipelineValues' => $pipelineValues,
-			'monthlyLabels' => $monthlyLabels,
-			'monthlyValues' => $monthlyValues,
+			'admisionesRows' => array_values($admisionesRows),
+			'matriculasRows' => array_values($matriculasRows),
+			'docenciaRows' => array_values($docenciaRows),
+			'kpiMatriculas3233' => $kpiMatriculas3233,
+			'kpiMatriculas45' => $kpiMatriculas45,
 		], [
 			'title' => 'CRM - Dashboard',
 		]);
+	}
+
+	private function dashboardEmptyLevelBucket(): array
+	{
+		return [
+			'1' => 0,
+			'2' => 0,
+			'3' => 0,
+			'4' => 0,
+		];
+	}
+
+	private function dashboardExtractNivel(string $rawNivel): ?string
+	{
+		$rawNivel = trim($rawNivel);
+		if ($rawNivel === '') {
+			return null;
+		}
+
+		if (preg_match('/([1-4])/', $rawNivel, $matches) !== 1) {
+			return null;
+		}
+
+		return (string) ($matches[1] ?? '');
+	}
+
+	private function dashboardNormalizeLabel(string $value): string
+	{
+		$value = mb_strtolower(trim($value), 'UTF-8');
+		$value = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $value) ?: $value;
+		$value = preg_replace('/[^a-z0-9]+/', ' ', $value) ?: '';
+		return trim(preg_replace('/\s+/', ' ', $value) ?: '');
+	}
+
+	private function dashboardResolveStageKey(string $stageName): ?string
+	{
+		$code = $this->dashboardExtractStageCode($stageName);
+		$byCode = [
+			'1' => 'adm_1',
+			'2' => 'adm_2',
+			'3.1' => 'adm_31',
+			'3.2' => 'mat_32',
+			'3.3' => 'mat_33',
+			'4' => 'mat_4',
+			'5' => 'mat_5',
+		];
+		if ($code !== null && isset($byCode[$code])) {
+			return $byCode[$code];
+		}
+
+		$normalized = $this->dashboardNormalizeLabel($stageName);
+		if ($normalized === '') {
+			return null;
+		}
+
+		$aliases = [
+			'adm_1' => ['etapa interesados'],
+			'adm_2' => ['etapa seguimiento'],
+			'adm_31' => ['etapa nuevos siguiente paso', 'etapa nuevos siguiente pao'],
+			'mat_32' => ['inscrito reingreso y homologacion siguiente paso', 'inscrito reingreso y homologacion siguiente pao'],
+			'mat_33' => ['pendiente prematricula antiguos siguiente paso', 'pendiente prematricula antiguos siguiente pao'],
+			'mat_4' => ['prematricula nuevos y antiguos siguiente paso', 'prematricula nuevos y antiguos siguiente pao'],
+			'mat_5' => ['etapa matriculado pao actual', 'etapa matriculado paso actual'],
+			'doc_riesgo_financiero' => ['riesgo financiero'],
+			'doc_riesgo_academico' => ['riesgo academico'],
+			'doc_riesgo_af' => ['riesgo a f', 'riesgo af'],
+			'doc_no_legaliza' => ['siguiente periodo no legaliza matricula'],
+			'doc_retiro_anulacion' => ['retiro y anulacion de matricula'],
+			'doc_egresado' => ['egresado'],
+			'doc_graduado' => ['graduado'],
+			'doc_descalificado' => ['descalificado'],
+		];
+
+		foreach ($aliases as $key => $checks) {
+			foreach ($checks as $check) {
+				if (strpos($normalized, $check) !== false) {
+					return $key;
+				}
+			}
+		}
+
+		return null;
+	}
+
+	private function dashboardResolveStageKeyFromState(array $state): ?string
+	{
+		$stageName = (string) ($state['nombre'] ?? '');
+		$stageCategory = $this->dashboardNormalizeLabel((string) ($state['categoria'] ?? ''));
+
+		$resolved = $this->dashboardResolveStageKey($stageName);
+		if ($resolved !== null) {
+			return $resolved;
+		}
+
+		if ($stageCategory !== '') {
+			$resolvedByCategory = $this->dashboardResolveStageKey($stageCategory);
+			if ($resolvedByCategory !== null) {
+				return $resolvedByCategory;
+			}
+		}
+
+		return null;
+	}
+
+	private function dashboardExtractStageCode(string $stageName): ?string
+	{
+		$raw = mb_strtolower(trim($stageName), 'UTF-8');
+		$raw = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $raw) ?: $raw;
+
+		if (preg_match('/\b(3\.[123])\b/', $raw, $matches) === 1) {
+			return (string) ($matches[1] ?? '');
+		}
+
+		if (preg_match('/\b([1245])\b/', $raw, $matches) === 1) {
+			return (string) ($matches[1] ?? '');
+		}
+
+		return null;
+	}
+
+	private function dashboardIncrementByLevel(array &$bucket, ?string $level): void
+	{
+		$bucket['total']++;
+
+		if ($level === null || !isset($bucket['levels'][$level])) {
+			return;
+		}
+
+		$bucket['levels'][$level]++;
 	}
 
 	public function interesados(): void

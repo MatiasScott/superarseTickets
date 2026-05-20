@@ -16,6 +16,7 @@ abstract class Controller
 		$pageTitle = $meta['title'] ?? 'ISTS Ticket';
 		$useLayout = $meta['layout'] ?? true;
 		$showSidebar = $meta['showSidebar'] ?? ($layoutModule !== 'auth');
+		$showTopbar = $meta['showTopbar'] ?? true;
 
 		$styles = ['global.css'];
 		$scripts = ['global.js'];

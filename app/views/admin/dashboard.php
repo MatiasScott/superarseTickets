@@ -1,10 +1,17 @@
 <!-- =========================
 ADMINISTRACIÓN GENERAL
 ========================= -->
-<div class="mb-4">
-	<div class="d-flex align-items-center mb-3">
-		<h4 class="mb-0">⚙️ Administración General</h4>
-	</div>
+<div class="admin-shell">
+	<div class="admin-section admin-dashboard-grid">
+		<div class="admin-hero">
+			<h2><i class="bi bi-grid-1x2-fill me-2"></i>Panel Administrativo</h2>
+			<p>Gestiona usuarios, permisos, catálogos y reglas operativas desde una vista central.</p>
+		</div>
+
+	<div class="mb-4">
+		<div class="d-flex align-items-center mb-3">
+			<h4 class="mb-0"><i class="bi bi-gear-fill text-turquoise me-2"></i>Administración General</h4>
+		</div>
 
 	<div class="row g-3">
 
@@ -13,7 +20,7 @@ ADMINISTRACIÓN GENERAL
 			<div class="card admin-card h-100">
 				<div class="card-body">
 					<div class="section-title mb-3">
-						<h5 class="mb-1">👥 Usuarios</h5>
+						<h5 class="mb-1"><i class="bi bi-people-fill me-2 text-turquoise"></i>Usuarios</h5>
 						<small class="text-muted">
 							Gestión de usuarios del sistema
 						</small>
@@ -34,7 +41,7 @@ ADMINISTRACIÓN GENERAL
 			<div class="card admin-card h-100">
 				<div class="card-body">
 					<div class="section-title mb-3">
-						<h5 class="mb-1">🛡️ Roles</h5>
+						<h5 class="mb-1"><i class="bi bi-shield-lock-fill me-2 text-teal"></i>Roles</h5>
 						<small class="text-muted">
 							Perfiles y permisos
 						</small>
@@ -55,7 +62,7 @@ ADMINISTRACIÓN GENERAL
 			<div class="card admin-card h-100">
 				<div class="card-body">
 					<div class="section-title mb-3">
-						<h5 class="mb-1">👨‍💼 Grupos</h5>
+						<h5 class="mb-1"><i class="bi bi-diagram-3-fill me-2 text-orange"></i>Grupos</h5>
 						<small class="text-muted">
 							Equipos de atención
 						</small>
@@ -80,7 +87,7 @@ CONFIGURACIÓN TICKETS
 <div class="mb-4">
 
 	<div class="d-flex align-items-center mb-3">
-		<h4 class="mb-0">🎫 Configuración Tickets</h4>
+		<h4 class="mb-0"><i class="bi bi-ticket-perforated-fill text-orange me-2"></i>Configuración Tickets</h4>
 	</div>
 
 	<div class="row g-3">
@@ -89,7 +96,7 @@ CONFIGURACIÓN TICKETS
 		<div class="col-12 col-xl-3">
 			<div class="card admin-card h-100">
 				<div class="card-body">
-					<h5>📌 Estados</h5>
+					<h5><i class="bi bi-signpost-2-fill me-2 text-turquoise"></i>Estados</h5>
 					<small class="text-muted d-block mb-3">
 						Estados de tickets
 					</small>
@@ -106,7 +113,7 @@ CONFIGURACIÓN TICKETS
 		<div class="col-12 col-xl-3">
 			<div class="card admin-card h-100">
 				<div class="card-body">
-					<h5>⚠️ Prioridades</h5>
+					<h5><i class="bi bi-exclamation-triangle-fill me-2 text-gold"></i>Prioridades</h5>
 					<small class="text-muted d-block mb-3">
 						Niveles de atención
 					</small>
@@ -123,7 +130,7 @@ CONFIGURACIÓN TICKETS
 		<div class="col-12 col-xl-3">
 			<div class="card admin-card h-100">
 				<div class="card-body">
-					<h5>⏱️ SLA</h5>
+					<h5><i class="bi bi-clock-history me-2 text-navy"></i>SLA</h5>
 					<small class="text-muted d-block mb-3">
 						Tiempos y métricas
 					</small>
@@ -140,7 +147,7 @@ CONFIGURACIÓN TICKETS
 		<div class="col-12 col-xl-3">
 			<div class="card admin-card h-100">
 				<div class="card-body">
-					<h5>🏷️ Tipos</h5>
+					<h5><i class="bi bi-tags-fill me-2 text-teal"></i>Tipos</h5>
 					<small class="text-muted d-block mb-3">
 						Tipos de tickets
 					</small>
@@ -162,7 +169,7 @@ CRM
 <div class="mb-4">
 
 	<div class="d-flex align-items-center mb-3">
-		<h4 class="mb-0">📈 CRM Académico</h4>
+		<h4 class="mb-0"><i class="bi bi-graph-up-arrow text-teal me-2"></i>CRM Académico</h4>
 	</div>
 
 	<div class="row g-3">
@@ -171,7 +178,7 @@ CRM
 			<div class="card admin-card h-100">
 				<div class="card-body">
 					<div class="section-title mb-3">
-						<h5 class="mb-1">📊 Pipeline CRM</h5>
+						<h5 class="mb-1"><i class="bi bi-kanban-fill me-2 text-turquoise"></i>Pipeline CRM</h5>
 
 						<small class="text-muted">
 							Etapas del estudiante
@@ -197,7 +204,7 @@ SEGURIDAD
 <div class="mb-4">
 
 	<div class="d-flex align-items-center mb-3">
-		<h4 class="mb-0">🔒 Seguridad</h4>
+		<h4 class="mb-0"><i class="bi bi-shield-check text-navy me-2"></i>Seguridad</h4>
 	</div>
 
 	<div class="row g-3">
@@ -207,7 +214,7 @@ SEGURIDAD
 				<div class="card-body">
 
 					<div class="section-title mb-3">
-						<h5 class="mb-1">🕵️ Auditoría</h5>
+						<h5 class="mb-1"><i class="bi bi-clipboard2-data-fill me-2 text-orange"></i>Auditoría</h5>
 
 						<small class="text-muted">
 							Control y seguimiento
@@ -227,22 +234,5 @@ SEGURIDAD
 
 	</div>
 </div>
-
-<style>
-	.admin-card {
-		border: none;
-		border-radius: 14px;
-		box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-		transition: all .2s ease;
-	}
-
-	.admin-card:hover {
-		transform: translateY(-3px);
-		box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
-	}
-
-	.section-title {
-		padding-bottom: .75rem;
-		border-bottom: 1px solid rgba(0, 0, 0, .06);
-	}
-</style>
+	</div>
+</div>
