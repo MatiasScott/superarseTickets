@@ -20,7 +20,7 @@ $this->accounts = is_array($this->config['accounts'] ?? null) ? $this->config['a
 /**
  * Enviar un correo simple
  */
-public function send(string $to, string $subject, string $body, array $cc = [], array $bcc = [], ?string $accountAlias = null, array $extraHeaders = []): bool
+public function send(string $to, string $subject, string $body, array $cc = [], array $bcc = [], ?string $accountAlias = null, array $extraHeaders = [], array $attachments = []): bool
 {
 try {
 $account = $this->resolveSendingAccount($accountAlias);
@@ -31,16 +31,25 @@ $this->from = [
 $this->activeAccount = $account;
 
 if (($this->config['driver'] ?? 'smtp') === 'smtp') {
-return $this->sendViaSMTP($to, $subject, $body, $cc, $bcc, $extraHeaders);
+			$sent = $this->sendViaSMTP($to, $subject, $body, $cc, $bcc, $extraHeaders, $attachments);
+			if ($sent) {
+				return true;
+			}
+
+			if ($this->graphService !== null && $this->graphService->isEnabled()) {
+				return $this->sendViaGraph($to, $subject, $body, $cc, $bcc, $attachments);
+			}
+
+			return false;
 }
 
 		if (($this->config['driver'] ?? '') === 'graph') {
-			return $this->sendViaGraph($to, $subject, $body, $cc, $bcc);
+			return $this->sendViaGraph($to, $subject, $body, $cc, $bcc, $attachments);
 		}
 
 if (($this->config['driver'] ?? '') === 'sendmail') {
-$headers = $this->getHeaders($cc, $bcc, $extraHeaders);
-return $this->sendViaSendmail($to, $subject, $body, $headers);
+			$payload = $this->buildMimePayload($body, $cc, $bcc, $extraHeaders, $attachments);
+			return $this->sendViaSendmail($to, $subject, $payload['body'], $payload['headers']);
 }
 
 return false;
@@ -163,7 +172,7 @@ return strtolower(trim((string) $value)) === 'true';
 /**
  * Envio via SMTP autenticado (AUTH LOGIN + STARTTLS/SSL).
  */
-private function sendViaSMTP(string $to, string $subject, string $body, array $cc, array $bcc, array $extraHeaders): bool
+private function sendViaSMTP(string $to, string $subject, string $body, array $cc, array $bcc, array $extraHeaders, array $attachments = []): bool
 {
 $account = $this->activeAccount;
 $host = trim((string) ($account['host'] ?? ''));
@@ -227,15 +236,15 @@ $this->smtpCommand($socket, 'RCPT TO:<' . $recipient . '>', [250, 251]);
 
 $this->smtpCommand($socket, 'DATA', [354]);
 
-$headers = $this->getHeaders($cc, $bcc, $extraHeaders);
+$payload = $this->buildMimePayload($body, $cc, $bcc, $extraHeaders, $attachments);
 $encodedSubject = function_exists('mb_encode_mimeheader')
 ? mb_encode_mimeheader($subject, 'UTF-8')
 : $subject;
 
 $message = 'To: ' . $to . "\r\n";
 $message .= 'Subject: ' . $encodedSubject . "\r\n";
-$message .= $headers . "\r\n";
-$message .= $this->normalizeSmtpBody($body) . "\r\n";
+$message .= $payload['headers'] . "\r\n";
+$message .= $this->normalizeSmtpBody($payload['body']) . "\r\n";
 $message .= ".\r\n";
 
 fwrite($socket, $message);
@@ -261,7 +270,7 @@ private function sendViaSendmail(string $to, string $subject, string $body, stri
 return @mail($to, $subject, $body, $headers);
 }
 
-private function sendViaGraph(string $to, string $subject, string $body, array $cc, array $bcc): bool
+private function sendViaGraph(string $to, string $subject, string $body, array $cc, array $bcc, array $attachments = []): bool
 {
 		if ($this->graphService === null || !$this->graphService->isEnabled()) {
 			error_log('Mail Graph Error: Graph no esta habilitado o no fue inicializado.');
@@ -269,13 +278,101 @@ private function sendViaGraph(string $to, string $subject, string $body, array $
 		}
 
 		$account = $this->activeAccount;
-		$result = $this->graphService->sendMail($account, $to, $subject, $body, $cc, $bcc);
+		$result = $this->graphService->sendMail($account, $to, $subject, $body, $cc, $bcc, $attachments);
 		if (!($result['ok'] ?? false)) {
 			error_log('Mail Graph Error: ' . (string) ($result['error'] ?? 'Error no especificado.'));
 			return false;
 		}
 
 		return true;
+}
+
+private function buildMimePayload(string $htmlBody, array $cc, array $bcc, array $extraHeaders = [], array $attachments = []): array
+{
+	$attachments = $this->sanitizeAttachments($attachments);
+	if (empty($attachments)) {
+		return [
+			'headers' => $this->getHeaders($cc, $bcc, $extraHeaders),
+			'body' => $htmlBody,
+		];
+	}
+
+	$boundary = 'atlas_' . bin2hex(random_bytes(12));
+	$headers = "From: {$this->from['name']} <{$this->from['email']}>\r\n";
+	$headers .= "MIME-Version: 1.0\r\n";
+	$headers .= 'Date: ' . date(DATE_RFC2822) . "\r\n";
+	if (!empty($cc)) {
+		$headers .= 'Cc: ' . implode(',', $cc) . "\r\n";
+	}
+	if (!empty($bcc)) {
+		$headers .= 'Bcc: ' . implode(',', $bcc) . "\r\n";
+	}
+	foreach ($extraHeaders as $headerName => $headerValue) {
+		$name = trim((string) $headerName);
+		$value = trim((string) $headerValue);
+		if ($name === '' || $value === '') {
+			continue;
+		}
+		$headers .= str_replace(["\r", "\n"], '', $name) . ': ' . str_replace(["\r", "\n"], '', $value) . "\r\n";
+	}
+	$headers .= 'Content-Type: multipart/mixed; boundary="' . $boundary . '"' . "\r\n";
+
+	$body = '--' . $boundary . "\r\n";
+	$body .= "Content-Type: text/html; charset=UTF-8\r\n";
+	$body .= "Content-Transfer-Encoding: 8bit\r\n\r\n";
+	$body .= $htmlBody . "\r\n";
+
+	foreach ($attachments as $attachment) {
+		$binary = @file_get_contents($attachment['path']);
+		if ($binary === false) {
+			continue;
+		}
+
+		$isInline = !empty($attachment['inline']);
+		$contentId = trim((string) ($attachment['content_id'] ?? ''));
+		$disposition = ($isInline && $contentId !== '') ? 'inline' : 'attachment';
+
+		$body .= '--' . $boundary . "\r\n";
+		$body .= 'Content-Type: ' . $attachment['mime'] . '; name="' . addslashes($attachment['name']) . '"' . "\r\n";
+		$body .= 'Content-Disposition: ' . $disposition . '; filename="' . addslashes($attachment['name']) . '"' . "\r\n";
+		if ($isInline && $contentId !== '') {
+			$body .= 'Content-ID: <' . str_replace(["\r", "\n", '<', '>'], '', $contentId) . '>' . "\r\n";
+		}
+		$body .= "Content-Transfer-Encoding: base64\r\n\r\n";
+		$body .= chunk_split(base64_encode($binary)) . "\r\n";
+	}
+
+	$body .= '--' . $boundary . '--';
+
+	return [
+		'headers' => $headers,
+		'body' => $body,
+	];
+}
+
+private function sanitizeAttachments(array $attachments): array
+{
+	$sanitized = [];
+	foreach ($attachments as $attachment) {
+		if (!is_array($attachment)) {
+			continue;
+		}
+		$path = trim((string) ($attachment['path'] ?? ''));
+		$name = trim((string) ($attachment['name'] ?? basename($path)));
+		$mime = trim((string) ($attachment['mime'] ?? 'application/octet-stream'));
+		if ($path === '' || !is_file($path) || $name === '') {
+			continue;
+		}
+		$sanitized[] = [
+			'path' => $path,
+			'name' => $name,
+			'mime' => $mime !== '' ? $mime : 'application/octet-stream',
+			'inline' => !empty($attachment['inline']),
+			'content_id' => trim((string) ($attachment['content_id'] ?? '')),
+		];
+	}
+
+	return $sanitized;
 }
 
 /**

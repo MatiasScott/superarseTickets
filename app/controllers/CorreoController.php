@@ -484,6 +484,8 @@ class CorreoController extends Controller
 
 		$db = Database::getInstance()->connection();
 		$this->ensureMailSyncTable($db);
+		$this->ensureTicketMensajesThreadColumns($db);
+		$this->ensureReplyAttachmentsTable($db);
 		$ticketCfg = $this->resolveTicketDefaults($db);
 
 		$createdByGroup = [];
@@ -566,6 +568,15 @@ class CorreoController extends Controller
 					continue;
 				}
 
+				$existingTicketId = $this->findThreadTicketId($db, $email);
+				if ($existingTicketId !== null) {
+					$this->appendIncomingMessageToTicket($db, $existingTicketId, $email);
+					$this->markEmailProcessed($db, $email, $existingTicketId);
+					$mailbox->markMessageAsSeen((string) ($email['account_alias'] ?? ''), (string) ($email['uid'] ?? ''));
+					$updated++;
+					continue;
+				}
+
 				$ticketId = (new Ticket())->create([
 					'codigo' => $this->generateTicketCode(),
 					'contacto_id' => $contactId,
@@ -588,6 +599,8 @@ class CorreoController extends Controller
 				$grupoNombre = $this->resolveGroupNameByTicketId($db, $ticketId);
 				$groupKey = $grupoNombre !== '' ? $grupoNombre : 'Sin asignar';
 				$createdByGroup[$groupKey] = (int) ($createdByGroup[$groupKey] ?? 0) + 1;
+
+				$this->appendIncomingMessageToTicket($db, $ticketId, $email);
 
 				$this->markEmailProcessed($db, $email, $ticketId);
 				$mailbox->markMessageAsSeen((string) ($email['account_alias'] ?? ''), (string) ($email['uid'] ?? ''));
@@ -739,15 +752,60 @@ class CorreoController extends Controller
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			account_alias VARCHAR(100) NOT NULL,
 			email_uid VARCHAR(255) NOT NULL,
+			graph_message_id VARCHAR(255) NULL,
+			conversation_id VARCHAR(255) NULL,
+			internet_message_id VARCHAR(255) NULL,
 			message_id VARCHAR(255) NULL,
 			ticket_id INT NOT NULL,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE KEY uniq_account_uid (account_alias, email_uid),
-			INDEX idx_message_id (message_id)
+			INDEX idx_message_id (message_id),
+			INDEX idx_internet_message_id (internet_message_id),
+			INDEX idx_conversation_id (conversation_id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
 
 		$db->exec($sql);
 		$db->exec('ALTER TABLE mail_ticket_sync MODIFY email_uid VARCHAR(255) NOT NULL');
+		$this->addColumnIfMissing($db, 'mail_ticket_sync', 'graph_message_id', 'VARCHAR(255) NULL AFTER email_uid');
+		$this->addColumnIfMissing($db, 'mail_ticket_sync', 'conversation_id', 'VARCHAR(255) NULL AFTER graph_message_id');
+		$this->addColumnIfMissing($db, 'mail_ticket_sync', 'internet_message_id', 'VARCHAR(255) NULL AFTER conversation_id');
+	}
+
+	private function ensureTicketMensajesThreadColumns(PDO $db): void
+	{
+		$this->addColumnIfMissing($db, 'ticket_mensajes', 'graph_message_id', 'VARCHAR(255) NULL');
+		$this->addColumnIfMissing($db, 'ticket_mensajes', 'conversation_id', 'VARCHAR(255) NULL');
+		$this->addColumnIfMissing($db, 'ticket_mensajes', 'internet_message_id', 'VARCHAR(255) NULL');
+	}
+
+	private function ensureReplyAttachmentsTable(PDO $db): void
+	{
+		$db->exec("CREATE TABLE IF NOT EXISTS ticket_mensaje_adjuntos (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			ticket_mensaje_id INT NOT NULL,
+			ticket_id INT NOT NULL,
+			filename_original VARCHAR(255) NOT NULL,
+			filename_storage VARCHAR(255) NOT NULL,
+			mime VARCHAR(120) NOT NULL,
+			size_bytes INT NOT NULL DEFAULT 0,
+			storage_path VARCHAR(600) NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_ticket_mensaje_adjuntos_ticket (ticket_id),
+			INDEX idx_ticket_mensaje_adjuntos_msg (ticket_mensaje_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+		$this->addColumnIfMissing($db, 'ticket_mensaje_adjuntos', 'is_inline', 'TINYINT(1) NOT NULL DEFAULT 0');
+		$this->addColumnIfMissing($db, 'ticket_mensaje_adjuntos', 'content_id', 'VARCHAR(255) NULL');
+	}
+
+	private function addColumnIfMissing(PDO $db, string $table, string $column, string $definition): void
+	{
+		$columns = $this->getTableColumns($db, $table);
+		if (in_array($column, $columns, true)) {
+			return;
+		}
+
+		$db->exec(sprintf('ALTER TABLE %s ADD COLUMN %s %s', $table, $column, $definition));
 	}
 
 	private function resolveTicketDefaults(PDO $db): array
@@ -1047,6 +1105,89 @@ class CorreoController extends Controller
 		return $ticketId > 0 ? $ticketId : null;
 	}
 
+	private function findThreadTicketId(PDO $db, array $email): ?int
+	{
+		$conversationId = trim((string) ($email['conversation_id'] ?? ''));
+		$internetMessageId = trim((string) ($email['internet_message_id'] ?? ($email['message_id'] ?? '')));
+		$subject = trim((string) ($email['subject'] ?? ''));
+
+		if ($conversationId !== '') {
+			$stmt = $db->prepare('SELECT ticket_id FROM mail_ticket_sync WHERE conversation_id = :conversation_id ORDER BY id DESC LIMIT 1');
+			$stmt->execute([
+				'conversation_id' => $conversationId,
+			]);
+			$ticketId = (int) $stmt->fetchColumn();
+			if ($ticketId > 0) {
+				return $ticketId;
+			}
+
+			$stmtMsg = $db->prepare('SELECT ticket_id FROM ticket_mensajes WHERE conversation_id = :conversation_id ORDER BY id DESC LIMIT 1');
+			$stmtMsg->execute([
+				'conversation_id' => $conversationId,
+			]);
+			$ticketId = (int) $stmtMsg->fetchColumn();
+			if ($ticketId > 0) {
+				return $ticketId;
+			}
+		}
+
+		if ($internetMessageId !== '') {
+			$stmt = $db->prepare('SELECT ticket_id FROM mail_ticket_sync WHERE internet_message_id = :internet_message_id OR message_id = :internet_message_id ORDER BY id DESC LIMIT 1');
+			$stmt->execute([
+				'internet_message_id' => $internetMessageId,
+			]);
+			$ticketId = (int) $stmt->fetchColumn();
+			if ($ticketId > 0) {
+				return $ticketId;
+			}
+
+			$stmtMsg = $db->prepare('SELECT ticket_id FROM ticket_mensajes WHERE internet_message_id = :internet_message_id ORDER BY id DESC LIMIT 1');
+			$stmtMsg->execute([
+				'internet_message_id' => $internetMessageId,
+			]);
+			$ticketId = (int) $stmtMsg->fetchColumn();
+			if ($ticketId > 0) {
+				return $ticketId;
+			}
+		}
+
+		$subjectTicketId = $this->extractTicketIdFromSubject($subject);
+		if ($subjectTicketId !== null) {
+			$stmtTicket = $db->prepare('SELECT id FROM tickets WHERE id = :id LIMIT 1');
+			$stmtTicket->execute(['id' => $subjectTicketId]);
+			$existing = (int) $stmtTicket->fetchColumn();
+			if ($existing > 0) {
+				return $existing;
+			}
+		}
+
+		return null;
+	}
+
+	private function extractTicketIdFromSubject(string $subject): ?int
+	{
+		$subject = trim($subject);
+		if ($subject === '') {
+			return null;
+		}
+
+		$patterns = [
+			'/\[#\s*(\d+)\]/i',
+			'/\bTCK[-\s]?(\d+)\b/i',
+		];
+
+		foreach ($patterns as $pattern) {
+			if (preg_match($pattern, $subject, $matches) === 1) {
+				$id = (int) ($matches[1] ?? 0);
+				if ($id > 0) {
+					return $id;
+				}
+			}
+		}
+
+		return null;
+	}
+
 	private function updateTicketGroupIfNeeded(PDO $db, int $ticketId, int $newGroupId): bool
 	{
 		if ($ticketId <= 0 || $newGroupId <= 0) {
@@ -1073,14 +1214,151 @@ class CorreoController extends Controller
 
 	private function markEmailProcessed(PDO $db, array $email, int $ticketId): void
 	{
-		$stmt = $db->prepare('INSERT INTO mail_ticket_sync (account_alias, email_uid, message_id, ticket_id, created_at) VALUES (:alias, :uid, :message_id, :ticket_id, NOW())');
+		$stmt = $db->prepare('INSERT INTO mail_ticket_sync (account_alias, email_uid, graph_message_id, conversation_id, internet_message_id, message_id, ticket_id, created_at) VALUES (:alias, :uid, :graph_message_id, :conversation_id, :internet_message_id, :message_id, :ticket_id, NOW())');
 		$uid = trim((string) ($email['uid'] ?? ''));
 		$stmt->execute([
 			'alias' => (string) ($email['account_alias'] ?? ''),
 			'uid' => $uid,
+			'graph_message_id' => trim((string) ($email['graph_message_id'] ?? '')),
+			'conversation_id' => trim((string) ($email['conversation_id'] ?? '')),
+			'internet_message_id' => trim((string) ($email['internet_message_id'] ?? ($email['message_id'] ?? ''))),
 			'message_id' => (string) ($email['message_id'] ?? ''),
 			'ticket_id' => $ticketId,
 		]);
+	}
+
+	private function appendIncomingMessageToTicket(PDO $db, int $ticketId, array $email): void
+	{
+		$subject = trim((string) ($email['subject'] ?? ''));
+		$fromEmail = trim((string) ($email['from_email'] ?? ''));
+		$fromName = trim((string) ($email['from_name'] ?? ''));
+		$bodyHtml = trim((string) ($email['body_html'] ?? ''));
+		$bodyText = trim((string) ($email['body_text'] ?? ''));
+		$attachments = is_array($email['attachments'] ?? null) ? $email['attachments'] : [];
+
+		if ($bodyHtml === '') {
+			$bodyHtml = '<p>' . nl2br(htmlspecialchars($bodyText, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')) . '</p>';
+		}
+
+		$prefix = $fromName !== '' ? $fromName : $fromEmail;
+		$messageHtml = ($prefix !== '' ? '<p><strong>De:</strong> ' . htmlspecialchars($prefix, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</p>' : '') . $bodyHtml;
+		$messageHtml = $this->sanitizeIncomingHtml($messageHtml);
+
+		$stmt = $db->prepare("INSERT INTO ticket_mensajes
+			(tipo, para, cc, asunto, mensaje, cuenta_alias, ticket_id, usuario_id, fecha, graph_message_id, conversation_id, internet_message_id)
+			VALUES ('original', NULL, NULL, :asunto, :mensaje, :alias, :ticket_id, NULL, NOW(), :graph_message_id, :conversation_id, :internet_message_id)");
+		$stmt->execute([
+			'asunto' => $subject !== '' ? $subject : '(Sin asunto)',
+			'mensaje' => $messageHtml,
+			'alias' => (string) ($email['account_alias'] ?? ''),
+			'ticket_id' => $ticketId,
+			'graph_message_id' => trim((string) ($email['graph_message_id'] ?? '')),
+			'conversation_id' => trim((string) ($email['conversation_id'] ?? '')),
+			'internet_message_id' => trim((string) ($email['internet_message_id'] ?? ($email['message_id'] ?? ''))),
+		]);
+
+		$mensajeId = (int) $db->lastInsertId();
+		if ($mensajeId > 0 && !empty($attachments)) {
+			$updatedHtml = $this->storeIncomingAttachmentsAndResolveInline($db, $ticketId, $mensajeId, $messageHtml, $attachments);
+			if ($updatedHtml !== $messageHtml) {
+				$stmtUpdate = $db->prepare('UPDATE ticket_mensajes SET mensaje = :mensaje WHERE id = :id LIMIT 1');
+				$stmtUpdate->execute([
+					'mensaje' => $updatedHtml,
+					'id' => $mensajeId,
+				]);
+			}
+		}
+
+		// Si el cliente responde de nuevo por correo, reabrir el ticket.
+		$openStatusId = $this->resolveOpenStatusId($db);
+		if ($openStatusId !== null && $openStatusId > 0) {
+			$stmtOpen = $db->prepare('UPDATE tickets SET estado_id = :estado_id, updated_at = NOW() WHERE id = :id');
+			$stmtOpen->execute([
+				'estado_id' => $openStatusId,
+				'id' => $ticketId,
+			]);
+		}
+	}
+
+	private function resolveOpenStatusId(PDO $db): ?int
+	{
+		return $this->pickCatalogId($db, 'ticket_estados', ['abierto', 'open']);
+	}
+
+	private function sanitizeIncomingHtml(string $html): string
+	{
+		$allowed = '<p><br><b><strong><i><em><u><a><ul><ol><li><img><blockquote><span><div><table><tbody><thead><tr><td><th><hr>';
+		$clean = strip_tags($html, $allowed);
+		$clean = preg_replace('/javascript\s*:/i', '', $clean) ?? $clean;
+		return trim($clean);
+	}
+
+	private function storeIncomingAttachmentsAndResolveInline(PDO $db, int $ticketId, int $mensajeId, string $messageHtml, array $attachments): string
+	{
+		$uploadDir = ROOT_PATH . '/uploads/tickets/' . $ticketId;
+		if (!is_dir($uploadDir) && !@mkdir($uploadDir, 0775, true) && !is_dir($uploadDir)) {
+			return $messageHtml;
+		}
+
+		$cidToUrl = [];
+		foreach ($attachments as $attachment) {
+			if (!is_array($attachment)) {
+				continue;
+			}
+
+			$content = $attachment['content'] ?? null;
+			if (!is_string($content) || $content === '') {
+				continue;
+			}
+
+			$name = trim((string) ($attachment['name'] ?? 'adjunto.bin'));
+			$mime = trim((string) ($attachment['mime'] ?? 'application/octet-stream'));
+			$isInline = !empty($attachment['is_inline']);
+			$contentId = trim((string) ($attachment['content_id'] ?? ''));
+
+			$ext = strtolower((string) pathinfo($name, PATHINFO_EXTENSION));
+			$storageName = bin2hex(random_bytes(16)) . ($ext !== '' ? '.' . $ext : '');
+			$targetPath = $uploadDir . '/' . $storageName;
+			if (@file_put_contents($targetPath, $content) === false) {
+				continue;
+			}
+
+			$stmt = $db->prepare('INSERT INTO ticket_mensaje_adjuntos (ticket_mensaje_id, ticket_id, filename_original, filename_storage, mime, size_bytes, storage_path, is_inline, content_id, created_at) VALUES (:ticket_mensaje_id, :ticket_id, :filename_original, :filename_storage, :mime, :size_bytes, :storage_path, :is_inline, :content_id, NOW())');
+			$stmt->execute([
+				'ticket_mensaje_id' => $mensajeId,
+				'ticket_id' => $ticketId,
+				'filename_original' => substr($name !== '' ? $name : 'adjunto.bin', 0, 255),
+				'filename_storage' => $storageName,
+				'mime' => substr($mime !== '' ? $mime : 'application/octet-stream', 0, 120),
+				'size_bytes' => strlen($content),
+				'storage_path' => $targetPath,
+				'is_inline' => $isInline ? 1 : 0,
+				'content_id' => $contentId !== '' ? substr($contentId, 0, 255) : null,
+			]);
+
+			$attachmentId = (int) $db->lastInsertId();
+			if ($isInline && $attachmentId > 0 && $contentId !== '') {
+				$cidToUrl[$this->normalizeContentId($contentId)] = base_url('tickets/' . $ticketId . '/reply-attachment/' . $attachmentId . '?mode=inline');
+			}
+		}
+
+		if (empty($cidToUrl)) {
+			return $messageHtml;
+		}
+
+		$updatedHtml = $messageHtml;
+		foreach ($cidToUrl as $cid => $url) {
+			$updatedHtml = preg_replace('/cid:' . preg_quote($cid, '/') . '/i', $url, $updatedHtml) ?? $updatedHtml;
+		}
+
+		return $updatedHtml;
+	}
+
+	private function normalizeContentId(string $contentId): string
+	{
+		$cid = trim($contentId);
+		$cid = trim($cid, '<>');
+		return $cid;
 	}
 
 	private function findOrCreateContactFromEmail(PDO $db, array $email): int
@@ -1207,16 +1485,11 @@ class CorreoController extends Controller
 	private function buildTicketSubject(array $email): string
 	{
 		$subject = trim((string) ($email['subject'] ?? ''));
-		$from = trim((string) ($email['from_email'] ?? ''));
 		if ($subject === '') {
 			$subject = 'Correo entrante';
 		}
 
-		$result = $from !== ''
-			? '[Email] ' . $subject . ' - ' . $from
-			: '[Email] ' . $subject;
-
-		// Truncar a 490 chars para no exceder VARCHAR(500)
-		return mb_strlen($result) > 490 ? mb_substr($result, 0, 490) . '...' : $result;
+		// Mantener exactamente el asunto original del correo (sin prefijos ni remitente)
+		return mb_strlen($subject) > 490 ? mb_substr($subject, 0, 490) . '...' : $subject;
 	}
 }

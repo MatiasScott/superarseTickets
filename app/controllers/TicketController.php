@@ -91,6 +91,7 @@ class TicketController extends Controller
 		// Cargar catálogos (errores aquí no deben ocultar tickets)
 		try {
 			$db = Database::getInstance()->connection();
+			$this->ensureReplyAttachmentsTable($db);
 			$estados     = $db->query("SELECT id, nombre FROM ticket_estados ORDER BY nombre")->fetchAll() ?: [];
 			$prioridades = $db->query("SELECT id, nombre FROM ticket_prioridades ORDER BY nombre")->fetchAll() ?: [];
 			$tipos       = $db->query("SELECT id, nombre FROM ticket_tipos ORDER BY nombre")->fetchAll() ?: [];
@@ -275,6 +276,8 @@ class TicketController extends Controller
 		$correoOrigen = null;
 		$adjuntos = [];
 		$mailAccounts = [];
+		$responseAccountAlias = '';
+		$responseAccountLocked = false;
 
 		try {
 			$ticket = (new Ticket())->findDetailed($ticketId);
@@ -306,6 +309,35 @@ class TicketController extends Controller
 			$stmtM = $db->prepare("SELECT tm.*, u.nombre AS autor_nombre FROM ticket_mensajes tm LEFT JOIN usuarios u ON u.id = tm.usuario_id WHERE tm.ticket_id = :tid ORDER BY tm.fecha ASC");
 			$stmtM->execute(['tid' => $ticketId]);
 			$mensajes = $stmtM->fetchAll() ?: [];
+			$mensajes = $this->hydrateMissingInlineImages($db, $ticketId, $mensajes);
+
+			$attachmentsByMessage = [];
+			$stmtAttach = $db->prepare("SELECT id, ticket_mensaje_id, filename_original, mime, size_bytes, is_inline
+				FROM ticket_mensaje_adjuntos
+				WHERE ticket_id = :tid
+				ORDER BY id ASC");
+			$stmtAttach->execute(['tid' => $ticketId]);
+			foreach (($stmtAttach->fetchAll() ?: []) as $attRow) {
+				$messageId = (int) ($attRow['ticket_mensaje_id'] ?? 0);
+				if ($messageId <= 0) {
+					continue;
+				}
+				if (!isset($attachmentsByMessage[$messageId])) {
+					$attachmentsByMessage[$messageId] = [];
+				}
+				$attachmentsByMessage[$messageId][] = [
+					'id' => (int) ($attRow['id'] ?? 0),
+					'filename' => (string) ($attRow['filename_original'] ?? 'Adjunto'),
+					'mime' => (string) ($attRow['mime'] ?? 'application/octet-stream'),
+					'size' => (int) ($attRow['size_bytes'] ?? 0),
+					'is_inline' => !empty($attRow['is_inline']),
+				];
+			}
+
+			foreach ($mensajes as $idx => $msg) {
+				$msgId = (int) ($msg['id'] ?? 0);
+				$mensajes[$idx]['attachments'] = $attachmentsByMessage[$msgId] ?? [];
+			}
 
 			if (empty($mensajes)) {
 				$mensajes[] = [
@@ -366,22 +398,48 @@ class TicketController extends Controller
 				$mensajeOrigen = $mailbox->getMessage((string) ($correoOrigen['account_alias'] ?? ''), (string) $correoOrigen['email_uid']);
 				if (!empty($mensajeOrigen['ok']) && is_array($mensajeOrigen['message'] ?? null)) {
 					$adjuntos = is_array($mensajeOrigen['message']['attachments'] ?? null) ? $mensajeOrigen['message']['attachments'] : [];
+					$mensajes = $this->applyCidFallbackFromOriginAttachments($mensajes, $adjuntos, $ticketId);
 				}
 			} catch (Throwable $e) {
 				$adjuntos = [];
 			}
 		}
 
+		$mensajes = $this->sanitizeUnresolvedCidSources($mensajes);
+
 		try {
 			$mailService  = new MailService();
 			$mailAccounts = $mailService->getAvailableAccounts();
+			$defaultAlias = $mailService->getDefaultAlias();
+
+			$originAlias = trim((string) ($correoOrigen['account_alias'] ?? ''));
+			$ticketAlias = trim((string) ($ticket['mail_account_alias'] ?? ''));
+			$candidates = array_values(array_filter([$originAlias, $ticketAlias, $defaultAlias]));
+
+			foreach ($candidates as $candidateAlias) {
+				foreach ($mailAccounts as $acc) {
+					if ((string) ($acc['alias'] ?? '') === $candidateAlias) {
+						$responseAccountAlias = $candidateAlias;
+						break 2;
+					}
+				}
+			}
+
+			if ($responseAccountAlias === '' && !empty($mailAccounts)) {
+				$responseAccountAlias = (string) ($mailAccounts[0]['alias'] ?? '');
+			}
+
+			$responseAccountLocked = $originAlias !== '' && $responseAccountAlias === $originAlias;
 		} catch (Throwable $e) {
 			$mailAccounts = [];
+			$responseAccountAlias = '';
+			$responseAccountLocked = false;
 		}
 
 		$this->view('tickets/show', compact(
 			'ticket', 'mensajes', 'estados', 'prioridades', 'tipos',
-			'grupos', 'usuarios', 'contacto', 'historial', 'historialCorreos', 'correoOrigen', 'adjuntos', 'mailAccounts'
+			'grupos', 'usuarios', 'contacto', 'historial', 'historialCorreos', 'correoOrigen', 'adjuntos', 'mailAccounts',
+			'responseAccountAlias', 'responseAccountLocked'
 		), [
 			'title' => 'Ticket ' . ($ticket['codigo'] ?? '#' . $ticketId),
 		]);
@@ -401,20 +459,51 @@ class TicketController extends Controller
 		$asunto   = trim((string) ($_POST['asunto']   ?? ''));
 		$cuerpoHtml = $this->sanitizeRichText((string) ($_POST['cuerpo_html'] ?? ''));
 		$alias    = trim((string) ($_POST['cuenta_alias'] ?? ''));
+		$cuerpoTexto = html_entity_decode(strip_tags($cuerpoHtml), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+		$cuerpoTexto = preg_replace('/[\x{00A0}\x{200B}]+/u', ' ', (string) $cuerpoTexto) ?? '';
+		$cuerpoTexto = trim((string) preg_replace('/\s+/u', ' ', $cuerpoTexto));
+		$tieneImagen = preg_match('/<img\b/i', $cuerpoHtml) === 1;
 
-		if ($para === '' || strip_tags($cuerpoHtml) === '') {
-			set_flash('error', 'El destinatario y el cuerpo son obligatorios.');
+		if ($para === '' || !MailService::isValidEmail($para)) {
+			set_flash('error', 'El destinatario es obligatorio y debe ser un correo valido.');
+			redirect('tickets/' . $ticketId);
+		}
+
+		if ($cuerpoTexto === '' && !$tieneImagen) {
+			set_flash('error', 'El cuerpo del mensaje es obligatorio.');
 			redirect('tickets/' . $ticketId);
 		}
 
 		try {
 			$db  = Database::getInstance()->connection();
 			$uid = Auth::user()['id'] ?? null;
+			$this->ensureReplyAttachmentsTable($db);
+			$this->ensureTicketMensajesThreadColumns($db);
+
+			// Forzar cuenta de salida segun origen del ticket si existe.
+			$stmtAlias = $db->prepare('SELECT account_alias, email_uid, graph_message_id, conversation_id, internet_message_id, message_id FROM mail_ticket_sync WHERE ticket_id = :tid ORDER BY id DESC LIMIT 1');
+			$stmtAlias->execute(['tid' => $ticketId]);
+			$threadOrigin = $stmtAlias->fetch() ?: [];
+			$forcedAlias = trim((string) ($threadOrigin['account_alias'] ?? ''));
+			$originUid = trim((string) ($threadOrigin['email_uid'] ?? ''));
+			$originGraphMessageId = trim((string) ($threadOrigin['graph_message_id'] ?? ''));
+			$originConversationId = trim((string) ($threadOrigin['conversation_id'] ?? ''));
+			$originInternetMessageId = trim((string) ($threadOrigin['internet_message_id'] ?? ($threadOrigin['message_id'] ?? '')));
+			$hasThreadOrigin = $originUid !== '' || $originGraphMessageId !== '' || $originConversationId !== '' || $originInternetMessageId !== '';
+
+			// Preferir el id nativo de Graph cuando exista para asegurar reply en el hilo correcto.
+			$replyToken = $originUid;
+			if ($originGraphMessageId !== '') {
+				$replyToken = $this->encodeGraphMessageToken($originGraphMessageId);
+			}
+			if ($forcedAlias !== '') {
+				$alias = $forcedAlias;
+			}
 
 			// Guardar mensaje en BD
 			$stmt = $db->prepare("INSERT INTO ticket_mensajes
-				(tipo, para, cc, asunto, mensaje, cuenta_alias, ticket_id, usuario_id, fecha)
-				VALUES ('respuesta', :para, :cc, :asunto, :mensaje, :alias, :tid, :uid, NOW())");
+				(tipo, para, cc, asunto, mensaje, cuenta_alias, ticket_id, usuario_id, fecha, graph_message_id, conversation_id, internet_message_id)
+				VALUES ('respuesta', :para, :cc, :asunto, :mensaje, :alias, :tid, :uid, NOW(), NULL, :conversation_id, :internet_message_id)");
 			$stmt->execute([
 				'para'    => $para,
 				'cc'      => $cc ?: null,
@@ -423,23 +512,167 @@ class TicketController extends Controller
 				'alias'   => $alias ?: null,
 				'tid'     => $ticketId,
 				'uid'     => $uid,
+				'conversation_id' => $originConversationId !== '' ? $originConversationId : null,
+				'internet_message_id' => $originInternetMessageId !== '' ? $originInternetMessageId : null,
 			]);
+			$mensajeId = (int) $db->lastInsertId();
 
-			// Enviar correo
-			$mailService = new MailService();
+			$uploadResult = $this->storeReplyAttachments($db, $ticketId, $mensajeId, $_FILES['adjuntos'] ?? null);
+			$inlineResult = $this->storeInlineImagesFromHtml($db, $ticketId, $mensajeId, $cuerpoHtml);
+			$cuerpoHtml = (string) ($inlineResult['html_mail'] ?? $cuerpoHtml);
+			$cuerpoHtmlForTicket = (string) ($inlineResult['html_ticket'] ?? $cuerpoHtml);
+			$cuerpoTexto = html_entity_decode(strip_tags($cuerpoHtml), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+			$cuerpoTexto = preg_replace('/[\x{00A0}\x{200B}]+/u', ' ', (string) $cuerpoTexto) ?? '';
+			$cuerpoTexto = trim((string) preg_replace('/\s+/u', ' ', $cuerpoTexto));
+
+			$allMailAttachments = array_merge(
+				(array) ($uploadResult['mailAttachments'] ?? []),
+				(array) ($inlineResult['mailAttachments'] ?? [])
+			);
+			$allErrors = array_merge(
+				(array) ($uploadResult['errors'] ?? []),
+				(array) ($inlineResult['errors'] ?? [])
+			);
+
+			if ($cuerpoHtmlForTicket !== '') {
+				$stmtUpdateMessage = $db->prepare('UPDATE ticket_mensajes SET mensaje = :mensaje WHERE id = :id LIMIT 1');
+				$stmtUpdateMessage->execute([
+					'mensaje' => $cuerpoHtmlForTicket,
+					'id' => $mensajeId,
+				]);
+			}
+
+			// Enviar correo: si existe hilo de origen, responder en el mismo thread.
 			$ccArr = $cc !== '' ? array_filter(array_map('trim', explode(',', $cc))) : [];
-			$sent  = $mailService->send($para, $asunto, $cuerpoHtml, $ccArr, [], $alias ?: null);
+			$threadMeta = [];
+			$sent = false;
+			$replyError = '';
+			$mailbox = new MailboxService();
+
+			if ($replyToken !== '' && $alias !== '') {
+				$replyResult = $mailbox->replyToMessage($alias, $replyToken, $cuerpoTexto, $cuerpoHtml, $allMailAttachments);
+				$sent = (bool) ($replyResult['ok'] ?? false);
+				$threadMeta = is_array($replyResult['thread'] ?? null) ? $replyResult['thread'] : [];
+				$replyError = trim((string) ($replyResult['error'] ?? ''));
+			}
+
+			if (!$sent && $hasThreadOrigin && $alias !== '') {
+				$resolved = $mailbox->resolveReplyTokenForThread($alias, $originInternetMessageId, $originConversationId);
+				$resolvedToken = trim((string) ($resolved['token'] ?? ''));
+				if ($resolvedToken !== '') {
+					$retryResult = $mailbox->replyToMessage($alias, $resolvedToken, $cuerpoTexto, $cuerpoHtml, $allMailAttachments);
+					$sent = (bool) ($retryResult['ok'] ?? false);
+					$threadMeta = is_array($retryResult['thread'] ?? null) ? $retryResult['thread'] : $threadMeta;
+					$replyError = trim((string) ($retryResult['error'] ?? ''));
+				} elseif (trim((string) ($resolved['error'] ?? '')) !== '') {
+					$replyError = trim((string) ($resolved['error'] ?? ''));
+				}
+			}
+
+			if (!$sent && !$hasThreadOrigin) {
+				$mailService = new MailService();
+				$sent = $mailService->send($para, $asunto, $cuerpoHtml, $ccArr, [], $alias ?: null, [], $allMailAttachments);
+			}
+
+			if (!empty($threadMeta)) {
+				$stmtUpdateThread = $db->prepare('UPDATE ticket_mensajes SET graph_message_id = :graph_message_id, conversation_id = :conversation_id, internet_message_id = :internet_message_id WHERE id = :id LIMIT 1');
+				$stmtUpdateThread->execute([
+					'graph_message_id' => trim((string) ($threadMeta['graph_message_id'] ?? '')) ?: null,
+					'conversation_id' => trim((string) ($threadMeta['conversation_id'] ?? '')) ?: null,
+					'internet_message_id' => trim((string) ($threadMeta['internet_message_id'] ?? '')) ?: null,
+					'id' => $mensajeId,
+				]);
+			}
 
 			if ($sent) {
-				set_flash('success', 'Respuesta enviada correctamente.');
+				if (!empty($allErrors)) {
+					set_flash('success', 'Respuesta enviada. Algunos archivos no se adjuntaron: ' . implode(' | ', $allErrors));
+				} else {
+					set_flash('success', 'Respuesta enviada correctamente.');
+				}
 			} else {
-				set_flash('success', 'Respuesta guardada. No se pudo enviar el correo.');
+				if ($hasThreadOrigin) {
+					$msg = 'Respuesta guardada, pero no se pudo responder en el hilo original.';
+					if ($replyError !== '') {
+						$msg .= ' Detalle: ' . $replyError;
+					}
+					set_flash('error', $msg);
+				} else {
+					set_flash('success', 'Respuesta guardada. No se pudo enviar el correo.');
+				}
 			}
 		} catch (Throwable $e) {
 			set_flash('error', 'Error al guardar la respuesta: ' . $e->getMessage());
 		}
 
 		redirect('tickets/' . $ticketId);
+	}
+
+	private function encodeGraphMessageToken(string $messageId): string
+	{
+		$encoded = rtrim(strtr(base64_encode($messageId), '+/', '-_'), '=');
+		return trim((string) $encoded);
+	}
+
+	public function replyAttachment(string $id, string $attachmentId): void
+	{
+		Auth::requireAuth();
+
+		$ticketId = (int) $id;
+		$adjId = (int) $attachmentId;
+		if ($ticketId <= 0 || $adjId <= 0) {
+			http_response_code(400);
+			echo 'Adjunto invalido.';
+			return;
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+			$this->ensureReplyAttachmentsTable($db);
+			$stmt = $db->prepare('SELECT filename_original, mime, size_bytes, storage_path FROM ticket_mensaje_adjuntos WHERE id = :id AND ticket_id = :ticket_id LIMIT 1');
+			$stmt->execute([
+				'id' => $adjId,
+				'ticket_id' => $ticketId,
+			]);
+			$row = $stmt->fetch() ?: null;
+			if (!is_array($row)) {
+				http_response_code(404);
+				echo 'Adjunto no encontrado.';
+				return;
+			}
+
+			$fullPath = (string) ($row['storage_path'] ?? '');
+			if ($fullPath === '' || !is_file($fullPath)) {
+				http_response_code(404);
+				echo 'Archivo adjunto no disponible.';
+				return;
+			}
+
+			$basePath = realpath(ROOT_PATH . '/uploads/tickets');
+			$legacyBasePath = realpath(STORAGE_PATH . '/uploads/ticket_reply_attachments');
+			$realFile = realpath($fullPath);
+			$insideNewBase = $basePath !== false && $realFile !== false && strncmp($realFile, $basePath, strlen($basePath)) === 0;
+			$insideLegacyBase = $legacyBasePath !== false && $realFile !== false && strncmp($realFile, $legacyBasePath, strlen($legacyBasePath)) === 0;
+			if (!$insideNewBase && !$insideLegacyBase) {
+				http_response_code(403);
+				echo 'Acceso denegado al adjunto.';
+				return;
+			}
+
+			$filename = (string) ($row['filename_original'] ?? 'adjunto.bin');
+			$mime = (string) ($row['mime'] ?? 'application/octet-stream');
+			$size = (int) ($row['size_bytes'] ?? filesize($realFile));
+
+			header('Content-Type: ' . $mime);
+			header('Content-Length: ' . $size);
+			$mode = strtolower(trim((string) ($_GET['mode'] ?? 'attachment')));
+			$disposition = $mode === 'inline' ? 'inline' : 'attachment';
+			header('Content-Disposition: ' . $disposition . '; filename="' . addslashes($filename) . '"');
+			readfile($realFile);
+		} catch (Throwable $e) {
+			http_response_code(500);
+			echo 'No se pudo servir el adjunto.';
+		}
 	}
 
 	public function attachment(string $id): void
@@ -922,6 +1155,536 @@ class TicketController extends Controller
 		$clean = strip_tags($html, $allowed);
 		$clean = preg_replace('/javascript\s*:/i', '', $clean) ?? $clean;
 		return trim($clean);
+	}
+
+	private function ensureReplyAttachmentsTable(PDO $db): void
+	{
+		$db->exec("CREATE TABLE IF NOT EXISTS ticket_mensaje_adjuntos (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			ticket_mensaje_id INT NOT NULL,
+			ticket_id INT NOT NULL,
+			filename_original VARCHAR(255) NOT NULL,
+			filename_storage VARCHAR(255) NOT NULL,
+			mime VARCHAR(120) NOT NULL,
+			size_bytes INT NOT NULL DEFAULT 0,
+			storage_path VARCHAR(600) NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_ticket_mensaje_adjuntos_ticket (ticket_id),
+			INDEX idx_ticket_mensaje_adjuntos_msg (ticket_mensaje_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+		$columns = $this->getTableColumns($db, 'ticket_mensaje_adjuntos');
+		if (!in_array('is_inline', $columns, true)) {
+			$db->exec('ALTER TABLE ticket_mensaje_adjuntos ADD COLUMN is_inline TINYINT(1) NOT NULL DEFAULT 0');
+		}
+		if (!in_array('content_id', $columns, true)) {
+			$db->exec('ALTER TABLE ticket_mensaje_adjuntos ADD COLUMN content_id VARCHAR(255) NULL');
+		}
+	}
+
+	private function ensureTicketMensajesThreadColumns(PDO $db): void
+	{
+		$columns = $this->getTableColumns($db, 'ticket_mensajes');
+		if (!in_array('graph_message_id', $columns, true)) {
+			$db->exec('ALTER TABLE ticket_mensajes ADD COLUMN graph_message_id VARCHAR(255) NULL');
+		}
+		if (!in_array('conversation_id', $columns, true)) {
+			$db->exec('ALTER TABLE ticket_mensajes ADD COLUMN conversation_id VARCHAR(255) NULL');
+		}
+		if (!in_array('internet_message_id', $columns, true)) {
+			$db->exec('ALTER TABLE ticket_mensajes ADD COLUMN internet_message_id VARCHAR(255) NULL');
+		}
+	}
+
+	private function storeReplyAttachments(PDO $db, int $ticketId, int $mensajeId, $rawFiles): array
+	{
+		$result = [
+			'mailAttachments' => [],
+			'errors' => [],
+		];
+
+		$files = $this->normalizeUploadedFiles($rawFiles);
+		if (empty($files)) {
+			return $result;
+		}
+
+		$allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar'];
+		$maxBytes = 15 * 1024 * 1024;
+		$maxFiles = 10;
+		$maxTotalBytes = 20 * 1024 * 1024;
+		$totalBytes = 0;
+		$acceptedFiles = 0;
+
+		$uploadDir = ROOT_PATH . '/uploads/tickets/' . $ticketId;
+		if (!is_dir($uploadDir) && !@mkdir($uploadDir, 0775, true) && !is_dir($uploadDir)) {
+			throw new RuntimeException('No se pudo crear el directorio para adjuntos.');
+		}
+
+		$finfo = function_exists('finfo_open') ? finfo_open(FILEINFO_MIME_TYPE) : null;
+
+		foreach ($files as $file) {
+			if ($acceptedFiles >= $maxFiles) {
+				$result['errors'][] = 'Solo se permiten hasta ' . $maxFiles . ' archivos por respuesta.';
+				break;
+			}
+
+			$errorCode = (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE);
+			if ($errorCode === UPLOAD_ERR_NO_FILE) {
+				continue;
+			}
+			if ($errorCode !== UPLOAD_ERR_OK) {
+				$result['errors'][] = 'Archivo no valido (codigo ' . $errorCode . ').';
+				continue;
+			}
+
+			$tmpName = (string) ($file['tmp_name'] ?? '');
+			$origName = trim((string) ($file['name'] ?? 'adjunto'));
+			$size = (int) ($file['size'] ?? 0);
+			if ($tmpName === '' || !is_uploaded_file($tmpName)) {
+				$result['errors'][] = 'No se recibio correctamente el archivo ' . $origName . '.';
+				continue;
+			}
+			if ($size <= 0 || $size > $maxBytes) {
+				$result['errors'][] = 'El archivo ' . $origName . ' supera el limite de 15MB o esta vacio.';
+				continue;
+			}
+			if (($totalBytes + $size) > $maxTotalBytes) {
+				$result['errors'][] = 'El total de adjuntos supera el limite de 20MB.';
+				continue;
+			}
+
+			$ext = strtolower((string) pathinfo($origName, PATHINFO_EXTENSION));
+			if (!in_array($ext, $allowedExtensions, true)) {
+				$result['errors'][] = 'Tipo de archivo no permitido: ' . $origName . '.';
+				continue;
+			}
+
+			$mime = 'application/octet-stream';
+			if ($finfo !== null) {
+				$detected = finfo_file($finfo, $tmpName);
+				if (is_string($detected) && $detected !== '') {
+					$mime = $detected;
+				}
+			}
+
+			$storageName = bin2hex(random_bytes(16)) . ($ext !== '' ? ('.' . $ext) : '');
+			$targetPath = $uploadDir . '/' . $storageName;
+			if (!move_uploaded_file($tmpName, $targetPath)) {
+				$result['errors'][] = 'No se pudo almacenar el archivo ' . $origName . '.';
+				continue;
+			}
+
+			$stmt = $db->prepare('INSERT INTO ticket_mensaje_adjuntos (ticket_mensaje_id, ticket_id, filename_original, filename_storage, mime, size_bytes, storage_path, created_at) VALUES (:ticket_mensaje_id, :ticket_id, :filename_original, :filename_storage, :mime, :size_bytes, :storage_path, NOW())');
+			$stmt->execute([
+				'ticket_mensaje_id' => $mensajeId,
+				'ticket_id' => $ticketId,
+				'filename_original' => substr($origName, 0, 255),
+				'filename_storage' => $storageName,
+				'mime' => substr($mime, 0, 120),
+				'size_bytes' => $size,
+				'storage_path' => $targetPath,
+			]);
+
+			$result['mailAttachments'][] = [
+				'name' => $origName,
+				'mime' => $mime,
+				'path' => $targetPath,
+			];
+			$totalBytes += $size;
+			$acceptedFiles++;
+		}
+
+		if ($finfo !== null) {
+			finfo_close($finfo);
+		}
+
+		return $result;
+	}
+
+	private function storeInlineImagesFromHtml(PDO $db, int $ticketId, int $mensajeId, string $html): array
+	{
+		$result = [
+			'html_ticket' => $html,
+			'html_mail' => $html,
+			'mailAttachments' => [],
+			'errors' => [],
+		];
+
+		if ($html === '' || stripos($html, 'data:image/') === false) {
+			return $result;
+		}
+
+		if (!preg_match_all('/src=["\'](data:image\/[^"\']+)["\']/i', $html, $matches) || empty($matches[1])) {
+			return $result;
+		}
+
+		$uploadDir = ROOT_PATH . '/uploads/tickets/' . $ticketId;
+		if (!is_dir($uploadDir) && !@mkdir($uploadDir, 0775, true) && !is_dir($uploadDir)) {
+			$result['errors'][] = 'No se pudo crear el directorio para imagenes inline.';
+			return $result;
+		}
+
+		$uniqueUris = array_values(array_unique(array_map('trim', $matches[1])));
+		$htmlTicket = $html;
+		$htmlMail = $html;
+
+		foreach ($uniqueUris as $idx => $dataUri) {
+			$parsed = $this->parseInlineDataUri($dataUri);
+			if ($parsed === null) {
+				continue;
+			}
+
+			$mime = (string) ($parsed['mime'] ?? 'image/png');
+			$content = (string) ($parsed['content'] ?? '');
+			$ext = $this->mimeToExtension($mime);
+			$storageName = bin2hex(random_bytes(16)) . '.' . $ext;
+			$targetPath = $uploadDir . '/' . $storageName;
+			if (@file_put_contents($targetPath, $content) === false) {
+				$result['errors'][] = 'No se pudo guardar una imagen inline.';
+				continue;
+			}
+
+			$contentId = 'atlas-inline-' . $mensajeId . '-' . $idx . '@atlas.local';
+			$origName = 'inline-' . ($idx + 1) . '.' . $ext;
+
+			$stmt = $db->prepare('INSERT INTO ticket_mensaje_adjuntos (ticket_mensaje_id, ticket_id, filename_original, filename_storage, mime, size_bytes, storage_path, is_inline, content_id, created_at) VALUES (:ticket_mensaje_id, :ticket_id, :filename_original, :filename_storage, :mime, :size_bytes, :storage_path, :is_inline, :content_id, NOW())');
+			$stmt->execute([
+				'ticket_mensaje_id' => $mensajeId,
+				'ticket_id' => $ticketId,
+				'filename_original' => $origName,
+				'filename_storage' => $storageName,
+				'mime' => substr($mime, 0, 120),
+				'size_bytes' => strlen($content),
+				'storage_path' => $targetPath,
+				'is_inline' => 1,
+				'content_id' => $contentId,
+			]);
+
+			$attachmentId = (int) $db->lastInsertId();
+			$localUrl = base_url('tickets/' . $ticketId . '/reply-attachment/' . $attachmentId . '?mode=inline');
+
+			$htmlTicket = str_replace($dataUri, $localUrl, $htmlTicket);
+			$htmlMail = str_replace($dataUri, 'cid:' . $contentId, $htmlMail);
+
+			$result['mailAttachments'][] = [
+				'name' => $origName,
+				'mime' => $mime,
+				'path' => $targetPath,
+				'inline' => true,
+				'content_id' => $contentId,
+			];
+		}
+
+		$result['html_ticket'] = $htmlTicket;
+		$result['html_mail'] = $htmlMail;
+		return $result;
+	}
+
+	private function parseInlineDataUri(string $dataUri): ?array
+	{
+		if (!preg_match('/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/', trim($dataUri), $m)) {
+			return null;
+		}
+
+		$mime = strtolower(trim((string) ($m[1] ?? 'image/png')));
+		$raw = (string) ($m[2] ?? '');
+		$content = base64_decode($raw, true);
+		if ($content === false || $content === '') {
+			return null;
+		}
+
+		return [
+			'mime' => $mime,
+			'content' => $content,
+		];
+	}
+
+	private function mimeToExtension(string $mime): string
+	{
+		$map = [
+			'image/jpeg' => 'jpg',
+			'image/jpg' => 'jpg',
+			'image/png' => 'png',
+			'image/gif' => 'gif',
+			'image/webp' => 'webp',
+			'image/bmp' => 'bmp',
+		];
+
+		$key = strtolower(trim($mime));
+		return (string) ($map[$key] ?? 'png');
+	}
+
+	private function normalizeUploadedFiles($rawFiles): array
+	{
+		if (!is_array($rawFiles) || !isset($rawFiles['name'])) {
+			return [];
+		}
+
+		if (!is_array($rawFiles['name'])) {
+			return [$rawFiles];
+		}
+
+		$files = [];
+		$count = count($rawFiles['name']);
+		for ($i = 0; $i < $count; $i++) {
+			$files[] = [
+				'name' => $rawFiles['name'][$i] ?? '',
+				'type' => $rawFiles['type'][$i] ?? '',
+				'tmp_name' => $rawFiles['tmp_name'][$i] ?? '',
+				'error' => $rawFiles['error'][$i] ?? UPLOAD_ERR_NO_FILE,
+				'size' => $rawFiles['size'][$i] ?? 0,
+			];
+		}
+
+		return $files;
+	}
+
+	private function hydrateMissingInlineImages(PDO $db, int $ticketId, array $mensajes): array
+	{
+		if (empty($mensajes)) {
+			return $mensajes;
+		}
+
+		$mailbox = new MailboxService();
+
+		foreach ($mensajes as $idx => $msg) {
+			$msgId = (int) ($msg['id'] ?? 0);
+			if ($msgId <= 0) {
+				continue;
+			}
+
+			$html = (string) ($msg['mensaje'] ?? '');
+			if ($html === '' || stripos($html, 'cid:') === false) {
+				continue;
+			}
+
+			$cidMap = $this->buildInlineCidMapFromStoredAttachments($db, $ticketId, $msgId);
+			if (!empty($cidMap)) {
+				$resolved = $this->replaceCidSources($html, $cidMap);
+				if ($resolved !== $html) {
+					$this->updateMessageHtml($db, $msgId, $resolved);
+					$mensajes[$idx]['mensaje'] = $resolved;
+					continue;
+				}
+			}
+
+			$internetMessageId = trim((string) ($msg['internet_message_id'] ?? ''));
+			$syncStmt = $db->prepare('SELECT account_alias, email_uid FROM mail_ticket_sync WHERE ticket_id = :ticket_id AND (:internet_message_id = "" OR internet_message_id = :internet_message_id OR message_id = :internet_message_id) ORDER BY id DESC LIMIT 1');
+			$syncStmt->execute([
+				'ticket_id' => $ticketId,
+				'internet_message_id' => $internetMessageId,
+			]);
+			$syncRow = $syncStmt->fetch() ?: null;
+			if (!is_array($syncRow)) {
+				continue;
+			}
+
+			$alias = trim((string) ($syncRow['account_alias'] ?? ''));
+			$uid = trim((string) ($syncRow['email_uid'] ?? ''));
+			if ($alias === '' || $uid === '') {
+				continue;
+			}
+
+			$messageResult = $mailbox->getMessage($alias, $uid);
+			if (!($messageResult['ok'] ?? false)) {
+				continue;
+			}
+
+			$sourceAttachments = is_array($messageResult['message']['attachments'] ?? null) ? $messageResult['message']['attachments'] : [];
+			$newCidMap = $this->storeInlineAttachmentsFromMailbox($db, $ticketId, $msgId, $alias, $uid, $sourceAttachments, $mailbox);
+			if (empty($newCidMap)) {
+				continue;
+			}
+
+			$resolved = $this->replaceCidSources($html, $newCidMap);
+			if ($resolved !== $html) {
+				$this->updateMessageHtml($db, $msgId, $resolved);
+				$mensajes[$idx]['mensaje'] = $resolved;
+			}
+		}
+
+		return $mensajes;
+	}
+
+	private function buildInlineCidMapFromStoredAttachments(PDO $db, int $ticketId, int $mensajeId): array
+	{
+		$stmt = $db->prepare('SELECT id, content_id FROM ticket_mensaje_adjuntos WHERE ticket_id = :ticket_id AND ticket_mensaje_id = :ticket_mensaje_id AND is_inline = 1');
+		$stmt->execute([
+			'ticket_id' => $ticketId,
+			'ticket_mensaje_id' => $mensajeId,
+		]);
+		$rows = $stmt->fetchAll() ?: [];
+
+		$map = [];
+		foreach ($rows as $row) {
+			$cid = $this->normalizeContentId((string) ($row['content_id'] ?? ''));
+			$adjId = (int) ($row['id'] ?? 0);
+			if ($cid === '' || $adjId <= 0) {
+				continue;
+			}
+			$map[$cid] = base_url('tickets/' . $ticketId . '/reply-attachment/' . $adjId . '?mode=inline');
+		}
+
+		return $map;
+	}
+
+	private function storeInlineAttachmentsFromMailbox(PDO $db, int $ticketId, int $mensajeId, string $alias, string $uid, array $attachments, MailboxService $mailbox): array
+	{
+		$uploadDir = ROOT_PATH . '/uploads/tickets/' . $ticketId;
+		if (!is_dir($uploadDir) && !@mkdir($uploadDir, 0775, true) && !is_dir($uploadDir)) {
+			return [];
+		}
+
+		$cidMap = [];
+		foreach ($attachments as $attachment) {
+			if (!is_array($attachment)) {
+				continue;
+			}
+
+			$isInline = !empty($attachment['is_inline']) || trim((string) ($attachment['content_id'] ?? '')) !== '';
+			if (!$isInline) {
+				continue;
+			}
+
+			$part = trim((string) ($attachment['part_no'] ?? ''));
+			if ($part === '') {
+				continue;
+			}
+
+			$getAttachment = $mailbox->getAttachment($alias, $uid, $part);
+			if (!($getAttachment['ok'] ?? false)) {
+				continue;
+			}
+
+			$attPayload = is_array($getAttachment['attachment'] ?? null) ? $getAttachment['attachment'] : [];
+			$content = $attPayload['content'] ?? null;
+			if (!is_string($content) || $content === '') {
+				continue;
+			}
+
+			$name = trim((string) ($attPayload['filename'] ?? ($attachment['filename'] ?? 'inline.bin')));
+			$mime = trim((string) ($attPayload['mime'] ?? ($attachment['mime'] ?? 'application/octet-stream')));
+			$ext = strtolower((string) pathinfo($name, PATHINFO_EXTENSION));
+			$storageName = bin2hex(random_bytes(16)) . ($ext !== '' ? '.' . $ext : '');
+			$targetPath = $uploadDir . '/' . $storageName;
+			if (@file_put_contents($targetPath, $content) === false) {
+				continue;
+			}
+
+			$contentId = $this->normalizeContentId((string) ($attachment['content_id'] ?? ''));
+			$stmt = $db->prepare('INSERT INTO ticket_mensaje_adjuntos (ticket_mensaje_id, ticket_id, filename_original, filename_storage, mime, size_bytes, storage_path, is_inline, content_id, created_at) VALUES (:ticket_mensaje_id, :ticket_id, :filename_original, :filename_storage, :mime, :size_bytes, :storage_path, 1, :content_id, NOW())');
+			$stmt->execute([
+				'ticket_mensaje_id' => $mensajeId,
+				'ticket_id' => $ticketId,
+				'filename_original' => substr($name !== '' ? $name : 'inline.bin', 0, 255),
+				'filename_storage' => $storageName,
+				'mime' => substr($mime !== '' ? $mime : 'application/octet-stream', 0, 120),
+				'size_bytes' => strlen($content),
+				'storage_path' => $targetPath,
+				'content_id' => $contentId !== '' ? substr($contentId, 0, 255) : null,
+			]);
+
+			$adjId = (int) $db->lastInsertId();
+			if ($adjId > 0 && $contentId !== '') {
+				$cidMap[$contentId] = base_url('tickets/' . $ticketId . '/reply-attachment/' . $adjId . '?mode=inline');
+			}
+		}
+
+		return $cidMap;
+	}
+
+	private function replaceCidSources(string $html, array $cidToUrl): string
+	{
+		$updated = $html;
+		foreach ($cidToUrl as $cid => $url) {
+			if ($cid === '' || $url === '') {
+				continue;
+			}
+			$updated = preg_replace('/cid:' . preg_quote($cid, '/') . '/i', $url, $updated) ?? $updated;
+		}
+
+		return $updated;
+	}
+
+	private function updateMessageHtml(PDO $db, int $mensajeId, string $html): void
+	{
+		$stmt = $db->prepare('UPDATE ticket_mensajes SET mensaje = :mensaje WHERE id = :id LIMIT 1');
+		$stmt->execute([
+			'mensaje' => $html,
+			'id' => $mensajeId,
+		]);
+	}
+
+	private function normalizeContentId(string $contentId): string
+	{
+		$cid = trim($contentId);
+		$cid = trim($cid, '<>');
+		return $cid;
+	}
+
+	private function applyCidFallbackFromOriginAttachments(array $mensajes, array $adjuntos, int $ticketId): array
+	{
+		if (empty($mensajes) || empty($adjuntos)) {
+			return $mensajes;
+		}
+
+		$imageAttachmentUrls = [];
+		foreach ($adjuntos as $adj) {
+			if (!is_array($adj)) {
+				continue;
+			}
+			$mime = strtolower(trim((string) ($adj['mime'] ?? '')));
+			$part = trim((string) ($adj['part_no'] ?? ''));
+			if ($part === '' || !str_starts_with($mime, 'image/')) {
+				continue;
+			}
+			$imageAttachmentUrls[] = base_url('tickets/' . $ticketId . '/attachment?part=' . urlencode($part) . '&mode=inline');
+		}
+
+		if (empty($imageAttachmentUrls)) {
+			return $mensajes;
+		}
+
+		foreach ($mensajes as $idx => $msg) {
+			$html = (string) ($msg['mensaje'] ?? '');
+			if ($html === '' || stripos($html, 'cid:') === false) {
+				continue;
+			}
+
+			$cursor = 0;
+			$updated = preg_replace_callback(
+				'/cid:[^"\'\s>]+/i',
+				static function () use (&$cursor, $imageAttachmentUrls): string {
+					$idxUrl = min($cursor, count($imageAttachmentUrls) - 1);
+					$cursor++;
+					return $imageAttachmentUrls[$idxUrl];
+				},
+				$html
+			);
+
+			if (is_string($updated) && $updated !== $html) {
+				$mensajes[$idx]['mensaje'] = $updated;
+			}
+		}
+
+		return $mensajes;
+	}
+
+	private function sanitizeUnresolvedCidSources(array $mensajes): array
+	{
+		foreach ($mensajes as $idx => $msg) {
+			$html = (string) ($msg['mensaje'] ?? '');
+			if ($html === '' || stripos($html, 'cid:') === false) {
+				continue;
+			}
+
+			$updated = preg_replace('/cid:[^"\'\s>]+/i', 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', $html);
+			if (is_string($updated) && $updated !== $html) {
+				$mensajes[$idx]['mensaje'] = $updated;
+			}
+		}
+
+		return $mensajes;
 	}
 
 	private function getTableColumns(PDO $db, string $table): array

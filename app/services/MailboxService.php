@@ -455,7 +455,7 @@ class MailboxService
 		];
 	}
 
-	public function replyToMessage(?string $accountAlias, string $uid, string $bodyText): array
+	public function replyToMessage(?string $accountAlias, string $uid, string $bodyText, ?string $htmlBody = null, array $attachments = []): array
 	{
 		if ($this->isGraphMode()) {
 			$account = $this->resolveAccount($accountAlias);
@@ -467,7 +467,7 @@ class MailboxService
 				return ['ok' => false, 'error' => 'No se pudo inicializar servicio Graph.'];
 			}
 
-			return $this->graphService->replyToMessage($account, $uid, $bodyText);
+			return $this->graphService->replyToMessage($account, $uid, $bodyText, $htmlBody, $attachments);
 		}
 
 		$current = $this->getMessage($accountAlias, $uid);
@@ -487,11 +487,14 @@ class MailboxService
 		}
 
 		$plainBody = trim($bodyText);
-		$htmlBody = nl2br(e($plainBody));
+		$replyHtmlBody = trim((string) $htmlBody);
+		if ($replyHtmlBody === '') {
+			$replyHtmlBody = nl2br(e($plainBody));
+		}
 
 		$quotedSource = trim((string) ($message['body_text'] ?? ''));
 		if ($quotedSource !== '') {
-			$htmlBody .= '<hr><p><strong>Mensaje original:</strong></p><blockquote style="border-left:3px solid #ccc;padding-left:10px;">' . nl2br(e($quotedSource)) . '</blockquote>';
+			$replyHtmlBody .= '<hr><p><strong>Mensaje original:</strong></p><blockquote style="border-left:3px solid #ccc;padding-left:10px;">' . nl2br(e($quotedSource)) . '</blockquote>';
 		}
 
 		$references = trim((string) ($message['references'] ?? ''));
@@ -511,11 +514,12 @@ class MailboxService
 		$sent = $this->mailService->send(
 			$to,
 			$subject,
-			$htmlBody,
+			$replyHtmlBody,
 			[],
 			[],
 			$this->resolveAliasOrDefault($accountAlias),
-			$extraHeaders
+			$extraHeaders,
+			$attachments
 		);
 
 		if (!$sent) {
@@ -523,6 +527,24 @@ class MailboxService
 		}
 
 		return ['ok' => true, 'error' => null];
+	}
+
+	public function resolveReplyTokenForThread(?string $accountAlias, string $internetMessageId = '', string $conversationId = ''): array
+	{
+		if (!$this->isGraphMode()) {
+			return ['ok' => true, 'error' => null, 'token' => ''];
+		}
+
+		$account = $this->resolveAccount($accountAlias);
+		if ($account === null) {
+			return ['ok' => false, 'error' => 'Cuenta no disponible.', 'token' => ''];
+		}
+
+		if ($this->graphService === null) {
+			return ['ok' => false, 'error' => 'No se pudo inicializar servicio Graph.', 'token' => ''];
+		}
+
+		return $this->graphService->resolveReplyTokenForThread($account, $internetMessageId, $conversationId);
 	}
 
 	private function resolveAliasOrDefault(?string $alias): ?string

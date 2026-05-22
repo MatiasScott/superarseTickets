@@ -109,6 +109,7 @@ return static function (Router $router): void {
 	$router->post('/tickets', 'TicketController@store');
 	$router->get('/tickets/{id}', 'TicketController@show');
 	$router->get('/tickets/{id}/attachment', 'TicketController@attachment');
+	$router->get('/tickets/{id}/reply-attachment/{attachmentId}', 'TicketController@replyAttachment');
 	$router->post('/tickets/{id}/reply', 'TicketController@replyTicket');
 	$router->post('/tickets/{id}/note', 'TicketController@addNote');
 	$router->post('/tickets/{id}/properties', 'TicketController@updateProperties');

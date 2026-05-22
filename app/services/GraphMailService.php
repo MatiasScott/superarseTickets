@@ -55,7 +55,7 @@ class GraphMailService
 		];
 	}
 
-	public function sendMail(array $account, string $to, string $subject, string $htmlBody, array $cc = [], array $bcc = []): array
+	public function sendMail(array $account, string $to, string $subject, string $htmlBody, array $cc = [], array $bcc = [], array $attachments = []): array
 	{
 		$userPrincipalName = trim((string) ($account['email'] ?? ''));
 		if ($userPrincipalName === '') {
@@ -88,6 +88,19 @@ class GraphMailService
 		$bccRecipients = $this->toRecipients($bcc);
 		if (!empty($bccRecipients)) {
 			$payload['message']['bccRecipients'] = $bccRecipients;
+		}
+
+		$graphAttachments = [];
+		foreach ($attachments as $attachment) {
+			$graphAttachment = $this->buildGraphAttachmentFromPath($attachment);
+			if ($graphAttachment === null) {
+				continue;
+			}
+			$graphAttachments[] = $graphAttachment;
+		}
+
+		if (!empty($graphAttachments)) {
+			$payload['message']['attachments'] = $graphAttachments;
 		}
 
 		$response = $this->request('POST', '/users/' . rawurlencode($userPrincipalName) . '/sendMail', $payload);
@@ -221,7 +234,7 @@ class GraphMailService
 			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId) . '/attachments',
 			null,
 			[
-				'$select' => 'id,name,contentType,size',
+				'$select' => 'id,name,contentType,size,isInline',
 			]
 		);
 		if ($attachmentsResponse['ok']) {
@@ -236,6 +249,8 @@ class GraphMailService
 					'mime' => (string) ($attachmentItem['contentType'] ?? 'application/octet-stream'),
 					'size' => (int) ($attachmentItem['size'] ?? 0),
 					'part_no' => (string) ($attachmentItem['id'] ?? ''),
+					'is_inline' => !empty($attachmentItem['isInline']),
+					'content_id' => trim((string) ($attachmentItem['contentId'] ?? '')),
 				];
 			}
 		}
@@ -295,8 +310,7 @@ class GraphMailService
 		}
 
 		$body = is_array($response['body'] ?? null) ? $response['body'] : [];
-		$contentBytes = (string) ($body['contentBytes'] ?? '');
-		$content = $contentBytes !== '' ? base64_decode($contentBytes, true) : false;
+		$content = $this->decodeContentBytes((string) ($body['contentBytes'] ?? ''));
 		if ($content === false || $content === null) {
 			return ['ok' => false, 'error' => 'No se pudo decodificar el adjunto.'];
 		}
@@ -312,7 +326,7 @@ class GraphMailService
 		];
 	}
 
-	public function replyToMessage(array $account, string $messageToken, string $bodyText): array
+	public function replyToMessage(array $account, string $messageToken, string $bodyText, ?string $htmlBody = null, array $attachments = []): array
 	{
 		$userPrincipalName = trim((string) ($account['email'] ?? ''));
 		if ($userPrincipalName === '') {
@@ -324,21 +338,192 @@ class GraphMailService
 			return ['ok' => false, 'error' => 'Identificador de mensaje invalido para Graph.'];
 		}
 
-		$payload = [
-			'comment' => trim($bodyText),
-		];
-
-		$response = $this->request(
-			'POST',
-			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId) . '/reply',
-			$payload
+		$originalMessage = $this->request(
+			'GET',
+			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId),
+			null,
+			['$select' => 'id,conversationId,internetMessageId']
 		);
 
-		if (!$response['ok']) {
-			return ['ok' => false, 'error' => $response['error']];
+		if (!$originalMessage['ok']) {
+			return ['ok' => false, 'error' => $originalMessage['error']];
 		}
 
-		return ['ok' => true, 'error' => null];
+		$createDraft = $this->request(
+			'POST',
+			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId) . '/createReply',
+			[]
+		);
+
+		if (!$createDraft['ok']) {
+			$createErr = (string) ($createDraft['error'] ?? '');
+			if ($this->isAccessDeniedError($createErr)) {
+				return $this->sendReplyCommentFallback($userPrincipalName, $messageId, $bodyText, $originalMessage);
+			}
+			return ['ok' => false, 'error' => $createErr];
+		}
+
+		$draft = is_array($createDraft['body'] ?? null) ? $createDraft['body'] : [];
+		$draftId = trim((string) ($draft['id'] ?? ''));
+		if ($draftId === '') {
+			return ['ok' => false, 'error' => 'Graph no devolvio el borrador de respuesta.'];
+		}
+
+		$bodyContent = trim((string) ($htmlBody ?? ''));
+		if ($bodyContent === '') {
+			$bodyContent = nl2br(htmlspecialchars(trim($bodyText), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
+		}
+
+		$updateDraft = $this->request(
+			'PATCH',
+			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($draftId),
+			[
+				'body' => [
+					'contentType' => 'HTML',
+					'content' => $bodyContent,
+				],
+			]
+		);
+		if (!$updateDraft['ok']) {
+			$updateErr = (string) ($updateDraft['error'] ?? '');
+			if ($this->isAccessDeniedError($updateErr)) {
+				return $this->sendReplyCommentFallback($userPrincipalName, $messageId, $bodyText, $originalMessage);
+			}
+			return ['ok' => false, 'error' => $updateErr];
+		}
+
+		foreach ($attachments as $attachment) {
+			$graphAttachment = $this->buildGraphAttachmentFromPath($attachment);
+			if ($graphAttachment === null) {
+				continue;
+			}
+
+			$attachResult = $this->request(
+				'POST',
+				'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($draftId) . '/attachments',
+				$graphAttachment
+			);
+			if (!$attachResult['ok']) {
+				$attachErr = (string) ($attachResult['error'] ?? '');
+				if ($this->isAccessDeniedError($attachErr)) {
+					return $this->sendReplyCommentFallback($userPrincipalName, $messageId, $bodyText, $originalMessage);
+				}
+				return ['ok' => false, 'error' => $attachErr];
+			}
+		}
+
+		$sendDraft = $this->request(
+			'POST',
+			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($draftId) . '/send',
+			[]
+		);
+		if (!$sendDraft['ok']) {
+			$sendErr = (string) ($sendDraft['error'] ?? '');
+			if ($this->isAccessDeniedError($sendErr)) {
+				return $this->sendReplyCommentFallback($userPrincipalName, $messageId, $bodyText, $originalMessage);
+			}
+			return ['ok' => false, 'error' => $sendErr];
+		}
+
+		$source = is_array($originalMessage['body'] ?? null) ? $originalMessage['body'] : [];
+		return [
+			'ok' => true,
+			'error' => null,
+			'thread' => [
+				'graph_message_id' => $draftId,
+				'conversation_id' => (string) ($source['conversationId'] ?? ''),
+				'internet_message_id' => (string) ($source['internetMessageId'] ?? ''),
+			],
+		];
+	}
+
+	private function sendReplyCommentFallback(string $userPrincipalName, string $messageId, string $bodyText, array $originalMessage): array
+	{
+		$comment = trim((string) $bodyText);
+		if ($comment === '') {
+			$comment = 'Respuesta enviada desde Atlas Ticket.';
+		}
+
+		$reply = $this->request(
+			'POST',
+			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId) . '/reply',
+			['comment' => $comment]
+		);
+		if (!$reply['ok']) {
+			return ['ok' => false, 'error' => (string) ($reply['error'] ?? 'No se pudo responder en el hilo.')];
+		}
+
+		$source = is_array($originalMessage['body'] ?? null) ? $originalMessage['body'] : [];
+		return [
+			'ok' => true,
+			'error' => null,
+			'thread' => [
+				'graph_message_id' => $messageId,
+				'conversation_id' => (string) ($source['conversationId'] ?? ''),
+				'internet_message_id' => (string) ($source['internetMessageId'] ?? ''),
+			],
+		];
+	}
+
+	private function isAccessDeniedError(string $error): bool
+	{
+		$err = strtolower(trim($error));
+		return $err !== '' && str_contains($err, 'erroraccessdenied');
+	}
+
+	public function resolveReplyTokenForThread(array $account, string $internetMessageId = '', string $conversationId = ''): array
+	{
+		$userPrincipalName = trim((string) ($account['email'] ?? ''));
+		if ($userPrincipalName === '') {
+			return ['ok' => false, 'error' => 'La cuenta no tiene email configurado para Graph.', 'token' => ''];
+		}
+
+		$internetMessageId = trim($internetMessageId);
+		$conversationId = trim($conversationId);
+
+		if ($internetMessageId !== '') {
+			$response = $this->request(
+				'GET',
+				'/users/' . rawurlencode($userPrincipalName) . '/messages',
+				null,
+				[
+					'$top' => '1',
+					'$orderby' => 'receivedDateTime DESC',
+					'$select' => 'id',
+					'$filter' => "internetMessageId eq '" . $this->escapeODataString($internetMessageId) . "'",
+				]
+			);
+
+			if ($response['ok']) {
+				$token = $this->extractTokenFromListResponse($response);
+				if ($token !== '') {
+					return ['ok' => true, 'error' => null, 'token' => $token];
+				}
+			}
+		}
+
+		if ($conversationId !== '') {
+			$response = $this->request(
+				'GET',
+				'/users/' . rawurlencode($userPrincipalName) . '/messages',
+				null,
+				[
+					'$top' => '1',
+					'$orderby' => 'receivedDateTime DESC',
+					'$select' => 'id',
+					'$filter' => "conversationId eq '" . $this->escapeODataString($conversationId) . "'",
+				]
+			);
+
+			if ($response['ok']) {
+				$token = $this->extractTokenFromListResponse($response);
+				if ($token !== '') {
+					return ['ok' => true, 'error' => null, 'token' => $token];
+				}
+			}
+		}
+
+		return ['ok' => true, 'error' => null, 'token' => ''];
 	}
 
 	public function fetchUnreadForTicketing(array $account, int $limit = 30): array
@@ -357,7 +542,7 @@ class GraphMailService
 				'$top' => (string) $limit,
 				'$orderby' => 'receivedDateTime DESC',
 				'$filter' => 'isRead eq false',
-				'$select' => 'id,subject,from,receivedDateTime,internetMessageId,bodyPreview',
+				'$select' => 'id,subject,from,receivedDateTime,internetMessageId,conversationId,bodyPreview,body,hasAttachments',
 			]
 		);
 
@@ -380,17 +565,28 @@ class GraphMailService
 			$from = is_array($item['from']['emailAddress'] ?? null) ? $item['from']['emailAddress'] : [];
 			$fromEmail = trim((string) ($from['address'] ?? ''));
 			$fromName = trim((string) ($from['name'] ?? ''));
+			$bodyHtml = (string) ($item['body']['content'] ?? '');
+			if ($bodyHtml === '') {
+				$bodyHtml = nl2br(htmlspecialchars((string) ($item['bodyPreview'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
+			}
+
+			$attachments = $this->fetchMessageAttachments($userPrincipalName, $rawId);
 
 			$emails[] = [
 				'account_alias' => (string) ($account['alias'] ?? ''),
 				'account_email' => $userPrincipalName,
 				'uid' => $this->encodeMessageId($rawId),
+				'graph_message_id' => $rawId,
+				'conversation_id' => (string) ($item['conversationId'] ?? ''),
+				'internet_message_id' => (string) ($item['internetMessageId'] ?? ''),
 				'message_id' => (string) ($item['internetMessageId'] ?? ''),
 				'date' => (string) ($item['receivedDateTime'] ?? ''),
 				'subject' => (string) ($item['subject'] ?? '(Sin asunto)'),
 				'from_email' => $fromEmail,
 				'from_name' => $fromName,
 				'body_text' => (string) ($item['bodyPreview'] ?? ''),
+				'body_html' => $bodyHtml,
+				'attachments' => $attachments,
 			];
 		}
 
@@ -442,6 +638,137 @@ class GraphMailService
 		return $recipients;
 	}
 
+	private function buildGraphAttachmentFromPath(array $attachment): ?array
+	{
+		if (!is_array($attachment)) {
+			return null;
+		}
+
+		$path = trim((string) ($attachment['path'] ?? ''));
+		if ($path === '' || !is_file($path)) {
+			return null;
+		}
+
+		$content = @file_get_contents($path);
+		if ($content === false) {
+			return null;
+		}
+
+		$item = [
+			'@odata.type' => '#microsoft.graph.fileAttachment',
+			'name' => (string) ($attachment['name'] ?? basename($path)),
+			'contentType' => (string) ($attachment['mime'] ?? 'application/octet-stream'),
+			'contentBytes' => base64_encode($content),
+		];
+
+		$isInline = !empty($attachment['inline']);
+		$contentId = trim((string) ($attachment['content_id'] ?? ''));
+		if ($isInline && $contentId !== '') {
+			$item['isInline'] = true;
+			$item['contentId'] = $contentId;
+		}
+
+		return $item;
+	}
+
+	private function fetchMessageAttachments(string $userPrincipalName, string $messageId): array
+	{
+		$list = $this->request(
+			'GET',
+			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId) . '/attachments',
+			null,
+			[
+				'$select' => 'id,name,contentType,size,isInline',
+			]
+		);
+		if (!$list['ok']) {
+			return [];
+		}
+
+		$items = is_array($list['body']['value'] ?? null) ? $list['body']['value'] : [];
+		$result = [];
+		foreach ($items as $item) {
+			if (!is_array($item)) {
+				continue;
+			}
+
+			$attachmentId = trim((string) ($item['id'] ?? ''));
+			if ($attachmentId === '') {
+				continue;
+			}
+
+			$content = $this->decodeContentBytes((string) ($item['contentBytes'] ?? ''));
+			$detailBody = [];
+			if ($content === false || $content === null) {
+				$detail = $this->request(
+					'GET',
+					'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId) . '/attachments/' . rawurlencode($attachmentId)
+				);
+				if (!$detail['ok']) {
+					continue;
+				}
+
+				$detailBody = is_array($detail['body'] ?? null) ? $detail['body'] : [];
+				$content = $this->decodeContentBytes((string) ($detailBody['contentBytes'] ?? ''));
+				if ($content === false || $content === null) {
+					continue;
+				}
+			}
+
+			if (empty($detailBody)) {
+				$detailBody = is_array($item) ? $item : [];
+			}
+
+			$result[] = [
+				'id' => $attachmentId,
+				'name' => (string) (($detailBody['name'] ?? $item['name']) ?? 'Adjunto'),
+				'mime' => (string) (($detailBody['contentType'] ?? $item['contentType']) ?? 'application/octet-stream'),
+				'size' => (int) (($detailBody['size'] ?? $item['size']) ?? 0),
+				'is_inline' => !empty($detailBody['isInline'] ?? $item['isInline']),
+				'content_id' => trim((string) (($detailBody['contentId'] ?? $item['contentId']) ?? '')),
+				'content' => $content,
+			];
+		}
+
+		return $result;
+	}
+
+	private function decodeContentBytes(string $contentBytes)
+	{
+		$value = trim($contentBytes);
+		if ($value === '') {
+			return false;
+		}
+
+		$decoded = base64_decode($value, true);
+		if ($decoded !== false && $decoded !== null) {
+			return $decoded;
+		}
+
+		$fallback = base64_decode(strtr($value, '-_', '+/'), true);
+		return $fallback !== false ? $fallback : false;
+	}
+
+	private function extractTokenFromListResponse(array $response): string
+	{
+		$items = is_array($response['body']['value'] ?? null) ? $response['body']['value'] : [];
+		if (empty($items) || !is_array($items[0] ?? null)) {
+			return '';
+		}
+
+		$rawId = trim((string) ($items[0]['id'] ?? ''));
+		if ($rawId === '') {
+			return '';
+		}
+
+		return $this->encodeMessageId($rawId);
+	}
+
+	private function escapeODataString(string $value): string
+	{
+		return str_replace("'", "''", $value);
+	}
+
 	private function formatAddress(string $email, string $name): string
 	{
 		$email = trim($email);
@@ -475,8 +802,9 @@ class GraphMailService
 		}
 
 		$decoded = base64_decode(strtr($token, '-_', '+/'), true);
-		if ($decoded === false) {
-			return '';
+		if ($decoded === false || $decoded === '') {
+			// Compatibilidad con datos historicos: algunos registros pueden traer el id crudo de Graph.
+			return trim($messageToken);
 		}
 
 		return $decoded;

@@ -12,6 +12,8 @@ $historialCorreos = $historialCorreos ?? [];
 $correoOrigen = $correoOrigen ?? null;
 $adjuntos = $adjuntos ?? [];
 $mailAccounts = $mailAccounts ?? [];
+$responseAccountAlias = (string) ($responseAccountAlias ?? '');
+$responseAccountLocked = !empty($responseAccountLocked);
 
 $ticketId = (int) ($ticket['id'] ?? 0);
 $ticketCodigo = (string) ($ticket['codigo'] ?? ('#' . $ticketId));
@@ -21,8 +23,8 @@ $contactoNombre = trim((string) (($contacto['nombre'] ?? '') . ' ' . ($contacto[
 $contactoEmail = (string) ($contacto['email'] ?? '');
 $createdAt = (string) ($ticket['created_at'] ?? '');
 
-$defaultAlias = '';
-if (!empty($mailAccounts)) {
+$defaultAlias = $responseAccountAlias;
+if ($defaultAlias === '' && !empty($mailAccounts)) {
     $defaultAlias = (string) ($mailAccounts[0]['alias'] ?? '');
 }
 
@@ -115,79 +117,6 @@ $phones = array_values(array_unique($phones));
                 </div>
             </div>
 
-            <div class="ticket-compose">
-                <div class="compose-tabs">
-                    <button class="compose-tab active" id="tab-reply" type="button" data-compose-mode="reply">Responder</button>
-                    <button class="compose-tab" id="tab-note" type="button" data-compose-mode="note">Nota interna</button>
-                </div>
-
-                <div id="compose-reply">
-                    <form method="POST" action="<?= e(base_url('tickets/' . $ticketId . '/reply')) ?>" data-editor-form="reply-editor:reply-body">
-                        <input type="hidden" name="_token" value="<?= csrf_token() ?>">
-                        <input type="hidden" name="cuerpo_html" id="reply-body">
-
-                        <?php if (!empty($mailAccounts)): ?>
-                            <div class="compose-row">
-                                <label>De:</label>
-                                <select name="cuenta_alias">
-                                    <?php foreach ($mailAccounts as $acc): ?>
-                                        <option value="<?= e((string) ($acc['alias'] ?? '')) ?>" <?= ((string) ($acc['alias'] ?? '') === $defaultAlias) ? 'selected' : '' ?>>
-                                            <?= e((string) (($acc['name'] ?? '') . ' <' . ($acc['email'] ?? '') . '>')) ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-                        <?php endif; ?>
-
-                        <div class="compose-row">
-                            <label>Para:</label>
-                            <input type="email" name="para" required value="<?= e($contactoEmail) ?>" placeholder="destino@correo.com">
-                        </div>
-
-                        <div class="compose-row">
-                            <label>CC:</label>
-                            <input type="text" name="cc" placeholder="cc1@correo.com, cc2@correo.com">
-                        </div>
-
-                        <div class="compose-row">
-                            <label>Asunto:</label>
-                            <input type="text" name="asunto" value="Re: <?= e($asunto) ?>">
-                        </div>
-
-                        <div class="compose-toolbar">
-                            <button type="button" data-editor-target="reply-editor" data-editor-cmd="bold"><strong>B</strong></button>
-                            <button type="button" data-editor-target="reply-editor" data-editor-cmd="italic"><em>I</em></button>
-                            <button type="button" data-editor-target="reply-editor" data-editor-cmd="underline"><u>U</u></button>
-                            <button type="button" data-editor-target="reply-editor" data-editor-link="true">Link</button>
-                        </div>
-                        <div class="compose-editor" id="reply-editor" contenteditable="true"></div>
-
-                        <div class="compose-actions">
-                            <button class="btn btn-outline-secondary btn-sm" type="button" data-editor-target="reply-editor" data-editor-clear="true">Limpiar</button>
-                            <button class="btn btn-primary btn-sm" type="submit">Enviar respuesta</button>
-                        </div>
-                    </form>
-                </div>
-
-                <div id="compose-note" style="display:none;">
-                    <form method="POST" action="<?= e(base_url('tickets/' . $ticketId . '/note')) ?>" data-editor-form="note-editor:note-body">
-                        <input type="hidden" name="_token" value="<?= csrf_token() ?>">
-                        <input type="hidden" name="cuerpo_html" id="note-body">
-
-                        <div class="compose-toolbar">
-                            <button type="button" data-editor-target="note-editor" data-editor-cmd="bold"><strong>B</strong></button>
-                            <button type="button" data-editor-target="note-editor" data-editor-cmd="italic"><em>I</em></button>
-                            <button type="button" data-editor-target="note-editor" data-editor-cmd="underline"><u>U</u></button>
-                        </div>
-                        <div class="compose-editor" id="note-editor" contenteditable="true" style="background:#fffdf6;border-color:#f4dda8;"></div>
-
-                        <div class="compose-actions">
-                            <button class="btn btn-warning btn-sm" type="submit">Guardar nota</button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-
             <div class="ticket-thread">
                 <?php
                 $avatarColors = ['#2a6af4', '#168046', '#cf6d00', '#a82424', '#6d3fc0'];
@@ -218,8 +147,144 @@ $phones = array_values(array_unique($phones));
                             </span>
                         </header>
                         <div class="message-body"><?= $m['mensaje'] ?? '' ?></div>
+                        <?php
+                        $messageAttachmentsRaw = is_array($m['attachments'] ?? null) ? $m['attachments'] : [];
+                        $messageAttachments = array_values(array_filter($messageAttachmentsRaw, static function ($att): bool {
+                            return empty($att['is_inline']);
+                        }));
+                        ?>
+                        <?php if (!empty($messageAttachments)): ?>
+                            <div class="message-attachments">
+                                <div class="message-attachments-title">Adjuntos</div>
+                                <div class="message-attachments-list">
+                                    <?php foreach ($messageAttachments as $adj): ?>
+                                        <?php
+                                        $adjId = (int) ($adj['id'] ?? 0);
+                                        $adjName = (string) ($adj['filename'] ?? 'Adjunto');
+                                        $adjSize = (int) ($adj['size'] ?? 0);
+                                        $adjMime = strtolower((string) ($adj['mime'] ?? 'application/octet-stream'));
+                                        $adjCanPreview = str_starts_with($adjMime, 'image/') || $adjMime === 'application/pdf' || str_starts_with($adjMime, 'text/');
+                                        $adjSizeText = $adjSize > 0 ? round($adjSize / 1024, 1) . ' KB' : 'Tamano no disponible';
+                                        $adjUrl = base_url('tickets/' . $ticketId . '/reply-attachment/' . $adjId);
+                                        $adjPreviewUrl = base_url('tickets/' . $ticketId . '/reply-attachment/' . $adjId . '?mode=inline');
+                                        ?>
+                                        <a class="message-attachment-link" href="<?= e($adjUrl) ?>">
+                                            <i class="bi bi-paperclip"></i>
+                                            <span><?= e($adjName) ?></span>
+                                            <small><?= e($adjSizeText) ?></small>
+                                        </a>
+                                        <?php if ($adjCanPreview): ?>
+                                            <a class="message-attachment-link" href="<?= e($adjPreviewUrl) ?>" target="_blank" rel="noopener noreferrer">
+                                                <i class="bi bi-eye"></i>
+                                                <span>Ver</span>
+                                            </a>
+                                        <?php endif; ?>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+                        <?php endif; ?>
                     </article>
                 <?php endforeach; ?>
+            </div>
+
+            <div class="ticket-compose">
+                <div class="compose-tabs">
+                    <button class="compose-tab active" id="tab-reply" type="button" data-compose-mode="reply">Responder</button>
+                    <button class="compose-tab" id="tab-note" type="button" data-compose-mode="note">Nota interna</button>
+                </div>
+
+                <div id="compose-reply">
+                    <form id="ticket-reply-form" method="POST" action="<?= e(base_url('tickets/' . $ticketId . '/reply')) ?>" enctype="multipart/form-data" data-editor-form="reply-editor:reply-body" data-reply-upload-form="true">
+                        <input type="hidden" name="_token" value="<?= csrf_token() ?>">
+                        <input type="hidden" name="cuerpo_html" id="reply-body">
+
+                        <?php if (!empty($mailAccounts)): ?>
+                            <div class="compose-row">
+                                <label>De:</label>
+                                <?php if ($responseAccountLocked): ?>
+                                    <?php
+                                    $lockedLabel = '';
+                                    foreach ($mailAccounts as $acc) {
+                                        if ((string) ($acc['alias'] ?? '') === $defaultAlias) {
+                                            $lockedLabel = (string) (($acc['name'] ?? '') . ' <' . ($acc['email'] ?? '') . '>');
+                                            break;
+                                        }
+                                    }
+                                    ?>
+                                    <input type="hidden" name="cuenta_alias" value="<?= e($defaultAlias) ?>">
+                                    <input type="text" value="<?= e($lockedLabel !== '' ? $lockedLabel : $defaultAlias) ?>" readonly>
+                                <?php else: ?>
+                                    <select name="cuenta_alias">
+                                        <?php foreach ($mailAccounts as $acc): ?>
+                                            <option value="<?= e((string) ($acc['alias'] ?? '')) ?>" <?= ((string) ($acc['alias'] ?? '') === $defaultAlias) ? 'selected' : '' ?>>
+                                                <?= e((string) (($acc['name'] ?? '') . ' <' . ($acc['email'] ?? '') . '>')) ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                <?php endif; ?>
+                            </div>
+                        <?php endif; ?>
+
+                        <div class="compose-row">
+                            <label>Para:</label>
+                            <input type="email" name="para" required value="<?= e($contactoEmail) ?>" placeholder="destino@correo.com">
+                        </div>
+
+                        <div class="compose-row">
+                            <label>CC:</label>
+                            <input type="text" name="cc" placeholder="cc1@correo.com, cc2@correo.com">
+                        </div>
+
+                        <div class="compose-row">
+                            <label>Asunto:</label>
+                            <input type="text" name="asunto" value="Re: <?= e($asunto) ?>">
+                        </div>
+
+                        <div class="compose-toolbar">
+                            <button type="button" data-editor-target="reply-editor" data-editor-cmd="bold"><strong>B</strong></button>
+                            <button type="button" data-editor-target="reply-editor" data-editor-cmd="italic"><em>I</em></button>
+                            <button type="button" data-editor-target="reply-editor" data-editor-cmd="underline"><u>U</u></button>
+                            <button type="button" data-editor-target="reply-editor" data-editor-link="true">Link</button>
+                        </div>
+                        <div class="compose-editor" id="reply-editor" contenteditable="true"></div>
+                        <div class="compose-editor-help">Tip: arrastra imagenes directamente al area de respuesta para insertarlas en el mensaje.</div>
+
+                        <div class="compose-dropzone" id="reply-dropzone" tabindex="0" role="button" aria-label="Arrastra archivos aqui o haz clic para seleccionarlos">
+                            <div class="dropzone-title">Adjuntar archivos</div>
+                            <div class="dropzone-help">Arrastra y suelta imagenes o documentos aqui, o haz clic para elegir archivos.</div>
+                            <input type="file" id="reply-attachments" name="adjuntos[]" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip,.rar" hidden>
+                        </div>
+                        <div class="compose-attachments-list" id="reply-attachments-list" aria-live="polite"></div>
+
+                        <div class="compose-actions">
+                            <button class="btn btn-outline-secondary btn-sm" type="button" data-editor-target="reply-editor" data-editor-clear="true">Limpiar</button>
+                            <button class="btn btn-primary btn-sm" type="submit">Enviar respuesta</button>
+                        </div>
+
+                        <div class="compose-upload-progress" id="reply-upload-progress" style="display:none;">
+                            <div class="compose-upload-progress-bar" id="reply-upload-progress-bar"></div>
+                            <div class="compose-upload-progress-text" id="reply-upload-progress-text">Subiendo adjuntos...</div>
+                        </div>
+                    </form>
+                </div>
+
+                <div id="compose-note" style="display:none;">
+                    <form method="POST" action="<?= e(base_url('tickets/' . $ticketId . '/note')) ?>" data-editor-form="note-editor:note-body">
+                        <input type="hidden" name="_token" value="<?= csrf_token() ?>">
+                        <input type="hidden" name="cuerpo_html" id="note-body">
+
+                        <div class="compose-toolbar">
+                            <button type="button" data-editor-target="note-editor" data-editor-cmd="bold"><strong>B</strong></button>
+                            <button type="button" data-editor-target="note-editor" data-editor-cmd="italic"><em>I</em></button>
+                            <button type="button" data-editor-target="note-editor" data-editor-cmd="underline"><u>U</u></button>
+                        </div>
+                        <div class="compose-editor" id="note-editor" contenteditable="true" style="background:#fffdf6;border-color:#f4dda8;"></div>
+
+                        <div class="compose-actions">
+                            <button class="btn btn-warning btn-sm" type="submit">Guardar nota</button>
+                        </div>
+                    </form>
+                </div>
             </div>
         </div>
 
