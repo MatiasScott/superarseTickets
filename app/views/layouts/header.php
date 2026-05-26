@@ -29,7 +29,7 @@
 			<div class="topbar-left">
 				<a class="brand-link" href="<?= e(base_url($homePath)) ?>">
 					<img class="brand-logo-img" src="<?= e(asset('img/atlas_ticket.jpeg')) ?>" alt="Atlas Ticket">
-					<span class="brand-name">Atlas Ticket</span>
+					<span class="brand-name">Atlas</span>
 				</a>
 			</div>
 			<div class="topbar-right">

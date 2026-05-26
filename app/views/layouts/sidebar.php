@@ -20,7 +20,7 @@ function sidebarActive(string $prefix, string $relPath): string {
 <aside class="sidebar">
 	<div class="sidebar-head">
 		<img class="sidebar-brand-img" src="<?= e(asset('img/atlas_ticket.jpeg')) ?>" alt="Atlas">
-		<span class="sidebar-brand-label">Atlas Ticket</span>
+		<span class="sidebar-brand-label">Atlas</span>
 	</div>
 
 	<nav class="sidebar-nav">

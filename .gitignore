@@ -7,6 +7,7 @@ storage/logs/*.php
 storage/backups/env/
 
 # Archivos subidos por usuarios
+storage/
 storage/uploads/
 /uploads/
 uploads/
