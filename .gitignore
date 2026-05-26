@@ -2,8 +2,7 @@
 .env
 
 # Logs y scripts temporales de depuración
-storage/logs/*.log
-storage/logs/*.php
+storage/logs/
 storage/backups/env/
 
 # Archivos subidos por usuarios
