@@ -6,7 +6,7 @@ class ConfiguracionController extends Controller
 	{
 		Auth::requireAuth();
 		$mailAccounts = $this->getMailAccounts();
-		$autoSyncSeconds = max(5, (int) env('MAIL_AUTO_SYNC_SECONDS', 5));
+		$autoSyncSeconds = max(10, (int) env('MAIL_AUTO_SYNC_SECONDS', 15));
 
 		$data = [
 			'mail' => [
@@ -337,6 +337,8 @@ class ConfiguracionController extends Controller
 			'auto_tickets_total' => 0,
 			'sync_rows_total' => 0,
 			'scheduler_status' => [],
+			'cron_sync_url' => base_url('cron/sync-mails.php') . '?token=' . rawurlencode((string) env('MAIL_AUTO_SYNC_INTERNAL_TOKEN', '')) . '&limit=20',
+			'cron_process_url' => base_url('cron/process-attachments.php') . '?token=' . rawurlencode((string) env('MAIL_AUTO_SYNC_INTERNAL_TOKEN', '')) . '&limit=20',
 		];
 
 		try {

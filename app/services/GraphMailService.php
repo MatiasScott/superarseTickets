@@ -260,7 +260,7 @@ class GraphMailService
 			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId),
 			['isRead' => true]
 		);
-		if (!$markSeen['ok']) {
+		if (!$markSeen['ok'] && stripos((string) ($markSeen['error'] ?? ''), 'ErrorAccessDenied') === false) {
 			error_log('Graph mark as read warning: ' . $markSeen['error']);
 		}
 
@@ -570,7 +570,12 @@ class GraphMailService
 				$bodyHtml = nl2br(htmlspecialchars((string) ($item['bodyPreview'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
 			}
 
-			$attachments = $this->fetchMessageAttachments($userPrincipalName, $rawId);
+			$attachments = [];
+			$hasCidInBody = stripos($bodyHtml, 'cid:') !== false;
+			$attachmentHeaders = [];
+			if (!empty($item['hasAttachments']) || $hasCidInBody) {
+				$attachmentHeaders = $this->fetchMessageAttachmentHeaders($userPrincipalName, $rawId);
+			}
 
 			$emails[] = [
 				'account_alias' => (string) ($account['alias'] ?? ''),
@@ -587,7 +592,100 @@ class GraphMailService
 				'body_text' => (string) ($item['bodyPreview'] ?? ''),
 				'body_html' => $bodyHtml,
 				'attachments' => $attachments,
+				'attachment_headers' => $attachmentHeaders,
+				'has_attachments' => !empty($item['hasAttachments']),
+				'has_cid_body' => $hasCidInBody,
 			];
+		}
+
+		return ['ok' => true, 'error' => null, 'emails' => $emails];
+	}
+
+	public function fetchDeltaForTicketing(array $account, int $limit = 20): array
+	{
+		$userPrincipalName = trim((string) ($account['email'] ?? ''));
+		if ($userPrincipalName === '') {
+			return ['ok' => false, 'error' => 'La cuenta no tiene email configurado para Graph.', 'emails' => []];
+		}
+
+		$alias = trim((string) ($account['alias'] ?? ''));
+		if ($alias === '') {
+			$alias = strtolower($userPrincipalName);
+		}
+
+		$limit = max(1, min(20, $limit));
+		$deltaUrl = $this->readDeltaState($alias, $userPrincipalName);
+
+		if ($deltaUrl !== '') {
+			$response = $this->requestAbsolute('GET', $deltaUrl);
+		} else {
+			$response = $this->request(
+				'GET',
+				'/users/' . rawurlencode($userPrincipalName) . '/mailFolders/inbox/messages/delta',
+				null,
+				[
+					'$top' => (string) $limit,
+					'$select' => 'id,subject,from,receivedDateTime,internetMessageId,conversationId,bodyPreview,body,hasAttachments,isRead',
+				]
+			);
+		}
+
+		if (!$response['ok']) {
+			return ['ok' => false, 'error' => $response['error'], 'emails' => []];
+		}
+
+		$emails = [];
+		$pages = 0;
+		$maxPages = 5;
+
+		for ($loop = 0; $loop < $maxPages; $loop++) {
+			$body = is_array($response['body'] ?? null) ? $response['body'] : [];
+			$items = is_array($body['value'] ?? null) ? $body['value'] : [];
+			$nextLink = trim((string) ($body['@odata.nextLink'] ?? ''));
+			$newDeltaLink = trim((string) ($body['@odata.deltaLink'] ?? ''));
+
+			foreach ($items as $item) {
+				if (!is_array($item)) {
+					continue;
+				}
+
+				if (isset($item['@removed'])) {
+					continue;
+				}
+
+				$email = $this->mapDeltaMessageToTicketEmail($account, $item, $userPrincipalName);
+				if ($email === null) {
+					continue;
+				}
+
+				$emails[] = $email;
+				if (count($emails) >= $limit) {
+					if ($nextLink !== '') {
+						$this->writeDeltaState($alias, $userPrincipalName, $nextLink);
+					} elseif ($newDeltaLink !== '') {
+						$this->writeDeltaState($alias, $userPrincipalName, $newDeltaLink);
+					}
+					return ['ok' => true, 'error' => null, 'emails' => $emails];
+				}
+			}
+
+			if ($nextLink === '') {
+				if ($newDeltaLink !== '') {
+					$this->writeDeltaState($alias, $userPrincipalName, $newDeltaLink);
+				}
+				break;
+			}
+
+			$pages++;
+			if ($pages >= $maxPages) {
+				$this->writeDeltaState($alias, $userPrincipalName, $nextLink);
+				break;
+			}
+
+			$response = $this->requestAbsolute('GET', $nextLink);
+			if (!$response['ok']) {
+				return ['ok' => false, 'error' => $response['error'], 'emails' => $emails];
+			}
 		}
 
 		return ['ok' => true, 'error' => null, 'emails' => $emails];
@@ -606,7 +704,7 @@ class GraphMailService
 			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId),
 			['isRead' => true]
 		);
-		if (!$result['ok']) {
+		if (!$result['ok'] && stripos((string) ($result['error'] ?? ''), 'ErrorAccessDenied') === false) {
 			error_log('Graph mark as read warning: ' . $result['error']);
 		}
 	}
@@ -719,13 +817,25 @@ class GraphMailService
 				$detailBody = is_array($item) ? $item : [];
 			}
 
+			$itemName = (string) ($item['name'] ?? '');
+			$itemMime = (string) ($item['contentType'] ?? '');
+			$itemSize = (int) ($item['size'] ?? 0);
+			$itemInline = !empty($item['isInline']);
+			$itemContentId = trim((string) ($item['contentId'] ?? ''));
+
+			$detailName = (string) ($detailBody['name'] ?? '');
+			$detailMime = (string) ($detailBody['contentType'] ?? '');
+			$detailSize = (int) ($detailBody['size'] ?? 0);
+			$detailInline = !empty($detailBody['isInline']);
+			$detailContentId = trim((string) ($detailBody['contentId'] ?? ''));
+
 			$result[] = [
 				'id' => $attachmentId,
-				'name' => (string) (($detailBody['name'] ?? $item['name']) ?? 'Adjunto'),
-				'mime' => (string) (($detailBody['contentType'] ?? $item['contentType']) ?? 'application/octet-stream'),
-				'size' => (int) (($detailBody['size'] ?? $item['size']) ?? 0),
-				'is_inline' => !empty($detailBody['isInline'] ?? $item['isInline']),
-				'content_id' => trim((string) (($detailBody['contentId'] ?? $item['contentId']) ?? '')),
+				'name' => $detailName !== '' ? $detailName : ($itemName !== '' ? $itemName : 'Adjunto'),
+				'mime' => $detailMime !== '' ? $detailMime : ($itemMime !== '' ? $itemMime : 'application/octet-stream'),
+				'size' => $detailSize > 0 ? $detailSize : $itemSize,
+				'is_inline' => $detailInline || $itemInline,
+				'content_id' => $detailContentId !== '' ? $detailContentId : $itemContentId,
 				'content' => $content,
 			];
 		}
@@ -762,6 +872,45 @@ class GraphMailService
 		}
 
 		return $this->encodeMessageId($rawId);
+	}
+
+	private function fetchMessageAttachmentHeaders(string $userPrincipalName, string $messageId): array
+	{
+		$list = $this->request(
+			'GET',
+			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId) . '/attachments',
+			null,
+			[
+				'$select' => 'id,name,contentType,size,isInline',
+			]
+		);
+		if (!$list['ok']) {
+			return [];
+		}
+
+		$items = is_array($list['body']['value'] ?? null) ? $list['body']['value'] : [];
+		$headers = [];
+		foreach ($items as $item) {
+			if (!is_array($item)) {
+				continue;
+			}
+
+			$attachmentId = trim((string) ($item['id'] ?? ''));
+			if ($attachmentId === '') {
+				continue;
+			}
+
+			$headers[] = [
+				'id' => $attachmentId,
+				'name' => (string) ($item['name'] ?? 'Adjunto'),
+				'mime' => (string) ($item['contentType'] ?? 'application/octet-stream'),
+				'size' => (int) ($item['size'] ?? 0),
+				'is_inline' => !empty($item['isInline']),
+				'content_id' => trim((string) ($item['contentId'] ?? '')),
+			];
+		}
+
+		return $headers;
 	}
 
 	private function escapeODataString(string $value): string
@@ -808,6 +957,48 @@ class GraphMailService
 		}
 
 		return $decoded;
+	}
+
+	private function mapDeltaMessageToTicketEmail(array $account, array $item, string $userPrincipalName): ?array
+	{
+		$rawId = trim((string) ($item['id'] ?? ''));
+		if ($rawId === '') {
+			return null;
+		}
+
+		$from = is_array($item['from']['emailAddress'] ?? null) ? $item['from']['emailAddress'] : [];
+		$fromEmail = trim((string) ($from['address'] ?? ''));
+		$fromName = trim((string) ($from['name'] ?? ''));
+		$bodyHtml = (string) ($item['body']['content'] ?? '');
+		if ($bodyHtml === '') {
+			$bodyHtml = nl2br(htmlspecialchars((string) ($item['bodyPreview'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
+		}
+
+		$hasCidInBody = stripos($bodyHtml, 'cid:') !== false;
+		$attachmentHeaders = [];
+		if (!empty($item['hasAttachments']) || $hasCidInBody) {
+			$attachmentHeaders = $this->fetchMessageAttachmentHeaders($userPrincipalName, $rawId);
+		}
+
+		return [
+			'account_alias' => (string) ($account['alias'] ?? ''),
+			'account_email' => $userPrincipalName,
+			'uid' => $this->encodeMessageId($rawId),
+			'graph_message_id' => $rawId,
+			'conversation_id' => (string) ($item['conversationId'] ?? ''),
+			'internet_message_id' => (string) ($item['internetMessageId'] ?? ''),
+			'message_id' => (string) ($item['internetMessageId'] ?? ''),
+			'date' => (string) ($item['receivedDateTime'] ?? ''),
+			'subject' => (string) ($item['subject'] ?? '(Sin asunto)'),
+			'from_email' => $fromEmail,
+			'from_name' => $fromName,
+			'body_text' => (string) ($item['bodyPreview'] ?? ''),
+			'body_html' => $bodyHtml,
+			'attachments' => [],
+			'attachment_headers' => $attachmentHeaders,
+			'has_attachments' => !empty($item['hasAttachments']),
+			'has_cid_body' => $hasCidInBody,
+		];
 	}
 
 	private function request(string $method, string $path, ?array $payload = null, array $query = [], array $extraHeaders = []): array
@@ -877,6 +1068,110 @@ class GraphMailService
 
 		$errorText = $this->extractGraphError($body, $status, $raw);
 		return ['ok' => false, 'status' => $status, 'error' => $errorText];
+	}
+
+	private function requestAbsolute(string $method, string $url, ?array $payload = null, array $extraHeaders = []): array
+	{
+		if (!function_exists('curl_init')) {
+			return ['ok' => false, 'error' => 'La extension cURL de PHP no esta habilitada.'];
+		}
+
+		$tokenResult = $this->getAccessToken();
+		if (!$tokenResult['ok']) {
+			return ['ok' => false, 'error' => $tokenResult['error']];
+		}
+
+		$ch = curl_init($url);
+		if ($ch === false) {
+			return ['ok' => false, 'error' => 'No se pudo inicializar cURL para Graph.'];
+		}
+
+		$headers = array_merge([
+			'Authorization: Bearer ' . $tokenResult['access_token'],
+			'Accept: application/json',
+			'Content-Type: application/json',
+		], $extraHeaders);
+
+		curl_setopt_array($ch, [
+			CURLOPT_RETURNTRANSFER => true,
+			CURLOPT_CUSTOMREQUEST => strtoupper($method),
+			CURLOPT_HTTPHEADER => $headers,
+			CURLOPT_TIMEOUT => (int) ($this->graph['timeout'] ?? 30),
+		]);
+
+		if ($payload !== null) {
+			$json = json_encode($payload);
+			if ($json === false) {
+				curl_close($ch);
+				return ['ok' => false, 'error' => 'No se pudo serializar payload Graph.'];
+			}
+			curl_setopt($ch, CURLOPT_POSTFIELDS, $json);
+		}
+
+		$raw = curl_exec($ch);
+		$status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+		$curlError = curl_error($ch);
+		curl_close($ch);
+
+		if ($raw === false) {
+			return ['ok' => false, 'error' => 'Error cURL Graph: ' . $curlError];
+		}
+
+		$body = null;
+		if ($raw !== '') {
+			$decoded = json_decode($raw, true);
+			if (is_array($decoded)) {
+				$body = $decoded;
+			}
+		}
+
+		if ($status >= 200 && $status < 300) {
+			return ['ok' => true, 'status' => $status, 'body' => $body];
+		}
+
+		$errorText = $this->extractGraphError($body, $status, $raw);
+		return ['ok' => false, 'status' => $status, 'error' => $errorText];
+	}
+
+	private function ensureDeltaStateTable(): void
+	{
+		$db = Database::getInstance()->connection();
+		$db->exec("CREATE TABLE IF NOT EXISTS mail_sync_state (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			account_alias VARCHAR(120) NOT NULL,
+			account_email VARCHAR(255) NOT NULL,
+			delta_link TEXT NULL,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uniq_mail_sync_state_alias (account_alias)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+	}
+
+	private function readDeltaState(string $accountAlias, string $accountEmail): string
+	{
+		$this->ensureDeltaStateTable();
+		$db = Database::getInstance()->connection();
+		$stmt = $db->prepare('SELECT delta_link FROM mail_sync_state WHERE account_alias = :alias LIMIT 1');
+		$stmt->execute(['alias' => $accountAlias]);
+		$value = trim((string) ($stmt->fetchColumn() ?: ''));
+		if ($value !== '') {
+			return $value;
+		}
+
+		$stmtFallback = $db->prepare('SELECT delta_link FROM mail_sync_state WHERE account_email = :email LIMIT 1');
+		$stmtFallback->execute(['email' => $accountEmail]);
+		return trim((string) ($stmtFallback->fetchColumn() ?: ''));
+	}
+
+	private function writeDeltaState(string $accountAlias, string $accountEmail, string $deltaLink): void
+	{
+		$this->ensureDeltaStateTable();
+		$db = Database::getInstance()->connection();
+		$stmt = $db->prepare('INSERT INTO mail_sync_state (account_alias, account_email, delta_link, updated_at) VALUES (:alias, :email, :delta_link, NOW()) ON DUPLICATE KEY UPDATE account_email = VALUES(account_email), delta_link = VALUES(delta_link), updated_at = NOW()');
+		$stmt->execute([
+			'alias' => $accountAlias,
+			'email' => $accountEmail,
+			'delta_link' => $deltaLink,
+		]);
 	}
 
 	private function getAccessToken(): array

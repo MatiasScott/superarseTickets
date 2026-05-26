@@ -119,4 +119,48 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
     });
+
+    const appLayout = document.querySelector('.app-layout[data-heartbeat-enabled]');
+    if (appLayout) {
+        const heartbeatEnabled = appLayout.getAttribute('data-heartbeat-enabled') === '1';
+        const heartbeatUrl = appLayout.getAttribute('data-heartbeat-url') || '';
+        const intervalRaw = Number(appLayout.getAttribute('data-heartbeat-interval-ms') || '60000');
+        const heartbeatInterval = Number.isFinite(intervalRaw) ? Math.max(60000, intervalRaw) : 60000;
+
+        if (heartbeatEnabled && heartbeatUrl !== '') {
+            let heartbeatInFlight = false;
+            const runHeartbeat = async () => {
+                if (heartbeatInFlight || document.hidden || !navigator.onLine) {
+                    return;
+                }
+
+                heartbeatInFlight = true;
+                try {
+                    await fetch(heartbeatUrl, {
+                        method: 'GET',
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest'
+                        },
+                        credentials: 'same-origin',
+                        cache: 'no-store',
+                    });
+                } catch (e) {
+                    // Heartbeat silencioso: no interrumpe UX si falla.
+                } finally {
+                    heartbeatInFlight = false;
+                }
+            };
+
+            runHeartbeat();
+            const heartbeatTimer = window.setInterval(runHeartbeat, heartbeatInterval);
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) {
+                    runHeartbeat();
+                }
+            });
+            window.addEventListener('beforeunload', () => {
+                window.clearInterval(heartbeatTimer);
+            });
+        }
+    }
 });

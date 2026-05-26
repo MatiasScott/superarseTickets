@@ -63,7 +63,5 @@ Auth::enforceRequestAccess($uri);
 
 $router->dispatch($method, $uri);
 
-// Ejecutar scheduler de auto-sync si el usuario está autenticado
-if (!empty($_SESSION['auth_user']['id'] ?? null)) {
-	AutoSyncScheduler::checkAndExecute();
-}
+// Ejecutar scheduler de auto-sync en cualquier request web para no depender de acciones manuales.
+AutoSyncScheduler::checkAndExecute();

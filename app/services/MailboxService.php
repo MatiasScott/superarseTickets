@@ -164,6 +164,24 @@ class MailboxService
 		return ['ok' => true, 'error' => null, 'emails' => $emails];
 	}
 
+	public function fetchForTicketing(?string $accountAlias, int $limit = 20): array
+	{
+		$account = $this->resolveAccount($accountAlias);
+		if ($account === null) {
+			return ['ok' => false, 'error' => 'No hay cuentas de correo habilitadas.', 'emails' => []];
+		}
+
+		if ($this->isGraphMode()) {
+			if ($this->graphService === null) {
+				return ['ok' => false, 'error' => 'No se pudo inicializar servicio Graph.', 'emails' => []];
+			}
+
+			return $this->graphService->fetchDeltaForTicketing($account, $limit);
+		}
+
+		return $this->fetchUnreadForTicketing($accountAlias, $limit);
+	}
+
 	public function markMessageAsSeen(?string $accountAlias, string $uid): void
 	{
 		$account = $this->resolveAccount($accountAlias);

@@ -60,7 +60,7 @@ class CorreoController extends Controller
 			'hasWhatsAppConnector' => $hasWhatsAppConnector,
 			'todaySeries' => $todaySeries,
 			'lastWeekSeries' => $lastWeekSeries,
-			'autoSyncEverySeconds' => max(5, (int) env('MAIL_AUTO_SYNC_SECONDS', 5)),
+			'autoSyncEverySeconds' => max(10, (int) env('MAIL_AUTO_SYNC_SECONDS', 15)),
 		], [
 			'title' => 'Chat - Dashboard',
 		]);
@@ -388,7 +388,7 @@ class CorreoController extends Controller
 		}
 
 		$accountAlias = trim((string) ($_POST['account_alias'] ?? ''));
-		$result = $this->runTicketSync($accountAlias !== '' ? $accountAlias : null);
+		$result = $this->runTicketSync($accountAlias !== '' ? $accountAlias : null, true);
 
 		if (($result['created'] ?? 0) <= 0 && ($result['updated'] ?? 0) <= 0 && ($result['skipped'] ?? 0) <= 0 && empty($result['sync_errors'] ?? [])) {
 			set_flash('success', 'No hay correos nuevos sin leer para convertir en tickets.');
@@ -420,7 +420,7 @@ class CorreoController extends Controller
 		}
 
 		$accountAlias = trim((string) ($_POST['account_alias'] ?? ''));
-		$result = $this->runTicketSync($accountAlias !== '' ? $accountAlias : null);
+		$result = $this->runTicketSync($accountAlias !== '' ? $accountAlias : null, false);
 
 		header('Content-Type: application/json; charset=UTF-8');
 		echo json_encode([
@@ -437,9 +437,92 @@ class CorreoController extends Controller
 		]);
 	}
 
-	private function runTicketSync(?string $accountAlias = null): array
+	public function processAttachmentsAuto(): void
+	{
+		$this->runAttachmentProcessorEndpoint();
+	}
+
+	public function cronSync(): void
+	{
+		$this->runCronSyncEndpoint();
+	}
+
+	public function cronProcessAttachments(): void
+	{
+		$this->runAttachmentProcessorEndpoint();
+	}
+
+	private function runCronSyncEndpoint(): void
+	{
+		if (!$this->isAuthorizedCronRequest()) {
+			http_response_code(403);
+			header('Content-Type: application/json; charset=UTF-8');
+			echo json_encode(['ok' => false, 'error' => 'Token invalido o faltante.']);
+			return;
+		}
+
+		$accountAlias = trim((string) ($_REQUEST['account_alias'] ?? ''));
+		$runFull = isset($_REQUEST['full']) && (string) $_REQUEST['full'] === '1';
+		$batchLimit = max(1, min(20, (int) ($_REQUEST['limit'] ?? 20)));
+
+		$db = Database::getInstance()->connection();
+		$this->ensureProcessQueueTable($db);
+		$processId = $this->createProcessQueueEntry($db, 'sync-mails', ['account_alias' => $accountAlias, 'limit' => $batchLimit, 'full' => $runFull ? 1 : 0]);
+
+		$result = $this->runTicketSync($accountAlias !== '' ? $accountAlias : null, $runFull, $batchLimit);
+		$this->finishProcessQueueEntry($db, $processId, 'procesado', $result);
+
+		header('Content-Type: application/json; charset=UTF-8');
+		echo json_encode([
+			'ok' => true,
+			'summary' => $this->buildSyncSummary($result),
+			'created' => (int) ($result['created'] ?? 0),
+			'updated' => (int) ($result['updated'] ?? 0),
+			'skipped' => (int) ($result['skipped'] ?? 0),
+			'by_group' => (array) ($result['created_by_group'] ?? []),
+			'updated_by_group' => (array) ($result['updated_by_group'] ?? []),
+			'omitted_breakdown' => (array) ($result['omitted_breakdown'] ?? []),
+			'has_errors' => !empty($result['sync_errors'] ?? []),
+			'errors' => (array) ($result['sync_errors'] ?? []),
+		]);
+	}
+
+	private function runAttachmentProcessorEndpoint(): void
+	{
+		if (!$this->isAuthorizedCronRequest()) {
+			http_response_code(403);
+			header('Content-Type: application/json; charset=UTF-8');
+			echo json_encode(['ok' => false, 'error' => 'Token invalido o faltante.']);
+			return;
+		}
+
+		$limit = max(1, min(20, (int) ($_REQUEST['limit'] ?? 20)));
+
+		$db = Database::getInstance()->connection();
+		$this->ensureProcessQueueTable($db);
+		$processId = $this->createProcessQueueEntry($db, 'process-attachments', ['limit' => $limit]);
+		$processor = new AttachmentProcessorService();
+		$stats = $processor->processPending($limit);
+		$this->finishProcessQueueEntry($db, $processId, 'procesado', $stats);
+
+		header('Content-Type: application/json; charset=UTF-8');
+		echo json_encode([
+			'ok' => true,
+			'stats' => $stats,
+		]);
+	}
+
+	private function isAuthorizedCronRequest(): bool
+	{
+		$token = trim((string) ($_REQUEST['token'] ?? ''));
+		$expected = trim((string) env('MAIL_AUTO_SYNC_INTERNAL_TOKEN', ''));
+		return $expected !== '' && $token !== '' && hash_equals($expected, $token);
+	}
+
+	private function runTicketSync(?string $accountAlias = null, bool $allowHistoricalReclassify = false, int $batchLimit = 20): array
 	{
 		$mailbox = new MailboxService();
+		$batchLimit = max(1, min(20, $batchLimit));
 
 		$aliasesToSync = [];
 		if ($accountAlias !== null && trim($accountAlias) !== '') {
@@ -485,7 +568,10 @@ class CorreoController extends Controller
 		$db = Database::getInstance()->connection();
 		$this->ensureMailSyncTable($db);
 		$this->ensureTicketMensajesThreadColumns($db);
+		$this->ensureTicketMensajesMessageCapacity($db);
 		$this->ensureReplyAttachmentsTable($db);
+		$this->ensureAttachmentQueueTable($db);
+		$this->ensureProcessQueueTable($db);
 		$ticketCfg = $this->resolveTicketDefaults($db);
 
 		$createdByGroup = [];
@@ -500,22 +586,25 @@ class CorreoController extends Controller
 		$updated = 0;
 		$skipped = 0;
 
-		$historical = $this->reclassifyHistoricalTicketGroups(
-			$db,
-			$aliasesToSync,
-			$accountEmailByAlias,
-			isset($ticketCfg['grupo_id']) ? (int) $ticketCfg['grupo_id'] : null
-		);
-		$updated += (int) ($historical['updated'] ?? 0);
-		$omittedBreakdown['grupo_actualizado'] += (int) ($historical['updated'] ?? 0);
-		foreach ((array) ($historical['updated_by_group'] ?? []) as $groupKey => $count) {
-			$updatedByGroup[(string) $groupKey] = (int) ($updatedByGroup[(string) $groupKey] ?? 0) + (int) $count;
+		if ($allowHistoricalReclassify && $this->shouldRunHistoricalReclassify()) {
+			$historical = $this->reclassifyHistoricalTicketGroups(
+				$db,
+				$aliasesToSync,
+				$accountEmailByAlias,
+				isset($ticketCfg['grupo_id']) ? (int) $ticketCfg['grupo_id'] : null
+			);
+			$updated += (int) ($historical['updated'] ?? 0);
+			$omittedBreakdown['grupo_actualizado'] += (int) ($historical['updated'] ?? 0);
+			foreach ((array) ($historical['updated_by_group'] ?? []) as $groupKey => $count) {
+				$updatedByGroup[(string) $groupKey] = (int) ($updatedByGroup[(string) $groupKey] ?? 0) + (int) $count;
+			}
+			$this->markHistoricalReclassifyRun();
 		}
 
 		$emails = [];
 		$syncErrors = [];
 		foreach ($aliasesToSync as $aliasToSync) {
-			$sync = $mailbox->fetchUnreadForTicketing($aliasToSync, 50);
+			$sync = $mailbox->fetchForTicketing($aliasToSync, $batchLimit);
 			if (!$sync['ok']) {
 				$syncErrors[] = '[' . $aliasToSync . '] ' . (string) ($sync['error'] ?? 'No se pudo sincronizar la bandeja.');
 				continue;
@@ -624,6 +713,45 @@ class CorreoController extends Controller
 		];
 	}
 
+	private function ensureProcessQueueTable(PDO $db): void
+	{
+		$db->exec("CREATE TABLE IF NOT EXISTS cola_procesos (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			tipo VARCHAR(80) NOT NULL,
+			estado VARCHAR(20) NOT NULL DEFAULT 'pendiente',
+			payload JSON NULL,
+			resultado JSON NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			processed_at DATETIME NULL,
+			INDEX idx_cola_procesos_tipo_estado (tipo, estado),
+			INDEX idx_cola_procesos_created (created_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+	}
+
+	private function createProcessQueueEntry(PDO $db, string $tipo, array $payload): int
+	{
+		$stmt = $db->prepare('INSERT INTO cola_procesos (tipo, estado, payload, created_at) VALUES (:tipo, "procesando", :payload, NOW())');
+		$stmt->execute([
+			'tipo' => substr($tipo, 0, 80),
+			'payload' => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+		]);
+		return (int) $db->lastInsertId();
+	}
+
+	private function finishProcessQueueEntry(PDO $db, int $id, string $estado, array $resultado): void
+	{
+		if ($id <= 0) {
+			return;
+		}
+
+		$stmt = $db->prepare('UPDATE cola_procesos SET estado = :estado, resultado = :resultado, processed_at = NOW() WHERE id = :id LIMIT 1');
+		$stmt->execute([
+			'estado' => substr($estado, 0, 20),
+			'resultado' => json_encode($resultado, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+			'id' => $id,
+		]);
+	}
+
 	private function reclassifyHistoricalTicketGroups(PDO $db, array $aliasesToSync, array $accountEmailByAlias, ?int $fallbackGroupId): array
 	{
 		$updated = 0;
@@ -690,6 +818,34 @@ class CorreoController extends Controller
 			'updated' => $updated,
 			'updated_by_group' => $updatedByGroup,
 		];
+	}
+
+	private function shouldRunHistoricalReclassify(): bool
+	{
+		$lockFile = STORAGE_PATH . '/logs/.historical_reclass_last_run';
+		$interval = max(300, (int) env('MAIL_HISTORICAL_RECLASS_INTERVAL_SECONDS', 21600));
+
+		if (!is_file($lockFile)) {
+			return true;
+		}
+
+		$lastRun = (int) @file_get_contents($lockFile);
+		if ($lastRun <= 0) {
+			return true;
+		}
+
+		return (time() - $lastRun) >= $interval;
+	}
+
+	private function markHistoricalReclassifyRun(): void
+	{
+		$lockFile = STORAGE_PATH . '/logs/.historical_reclass_last_run';
+		$dir = dirname($lockFile);
+		if (!is_dir($dir)) {
+			@mkdir($dir, 0755, true);
+		}
+
+		@file_put_contents($lockFile, (string) time(), LOCK_EX);
 	}
 
 	private function buildSyncSummary(array $result): string
@@ -778,6 +934,20 @@ class CorreoController extends Controller
 		$this->addColumnIfMissing($db, 'ticket_mensajes', 'internet_message_id', 'VARCHAR(255) NULL');
 	}
 
+	private function ensureTicketMensajesMessageCapacity(PDO $db): void
+	{
+		try {
+			$stmt = $db->query("SHOW COLUMNS FROM ticket_mensajes LIKE 'mensaje'");
+			$row = $stmt ? ($stmt->fetch() ?: null) : null;
+			$type = strtolower((string) ($row['Type'] ?? ''));
+			if ($type !== '' && $type !== 'mediumtext' && $type !== 'longtext') {
+				$db->exec('ALTER TABLE ticket_mensajes MODIFY mensaje MEDIUMTEXT NULL');
+			}
+		} catch (Throwable $e) {
+			// Evita romper sync si no se puede alterar esquema en runtime.
+		}
+	}
+
 	private function ensureReplyAttachmentsTable(PDO $db): void
 	{
 		$db->exec("CREATE TABLE IF NOT EXISTS ticket_mensaje_adjuntos (
@@ -796,6 +966,12 @@ class CorreoController extends Controller
 
 		$this->addColumnIfMissing($db, 'ticket_mensaje_adjuntos', 'is_inline', 'TINYINT(1) NOT NULL DEFAULT 0');
 		$this->addColumnIfMissing($db, 'ticket_mensaje_adjuntos', 'content_id', 'VARCHAR(255) NULL');
+	}
+
+	private function ensureAttachmentQueueTable(PDO $db): void
+	{
+		$queue = new AttachmentQueueService($db);
+		$queue->ensureTable();
 	}
 
 	private function addColumnIfMissing(PDO $db, string $table, string $column, string $definition): void
@@ -1234,7 +1410,11 @@ class CorreoController extends Controller
 		$fromName = trim((string) ($email['from_name'] ?? ''));
 		$bodyHtml = trim((string) ($email['body_html'] ?? ''));
 		$bodyText = trim((string) ($email['body_text'] ?? ''));
-		$attachments = is_array($email['attachments'] ?? null) ? $email['attachments'] : [];
+		$attachmentHeaders = is_array($email['attachment_headers'] ?? null) ? $email['attachment_headers'] : [];
+		$hasCidInBody = stripos($bodyHtml, 'cid:') !== false;
+		if (empty($attachmentHeaders) && (!empty($email['has_attachments']) || !empty($email['has_cid_body']) || $hasCidInBody)) {
+			$attachmentHeaders = $this->loadIncomingAttachmentHeaders($email);
+		}
 
 		if ($bodyHtml === '') {
 			$bodyHtml = '<p>' . nl2br(htmlspecialchars($bodyText, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')) . '</p>';
@@ -1258,15 +1438,8 @@ class CorreoController extends Controller
 		]);
 
 		$mensajeId = (int) $db->lastInsertId();
-		if ($mensajeId > 0 && !empty($attachments)) {
-			$updatedHtml = $this->storeIncomingAttachmentsAndResolveInline($db, $ticketId, $mensajeId, $messageHtml, $attachments);
-			if ($updatedHtml !== $messageHtml) {
-				$stmtUpdate = $db->prepare('UPDATE ticket_mensajes SET mensaje = :mensaje WHERE id = :id LIMIT 1');
-				$stmtUpdate->execute([
-					'mensaje' => $updatedHtml,
-					'id' => $mensajeId,
-				]);
-			}
+		if ($mensajeId > 0 && !empty($attachmentHeaders)) {
+			$this->enqueueIncomingAttachmentHeaders($db, $ticketId, $mensajeId, $email, $attachmentHeaders);
 		}
 
 		// Si el cliente responde de nuevo por correo, reabrir el ticket.
@@ -1359,6 +1532,56 @@ class CorreoController extends Controller
 		$cid = trim($contentId);
 		$cid = trim($cid, '<>');
 		return $cid;
+	}
+
+	private function loadIncomingAttachmentHeaders(array $email): array
+	{
+		try {
+			$mailbox = new MailboxService();
+			$accountAlias = trim((string) ($email['account_alias'] ?? ''));
+			$uid = trim((string) ($email['uid'] ?? ''));
+			if ($accountAlias === '' || $uid === '') {
+				return [];
+			}
+
+			$messageResult = $mailbox->getMessage($accountAlias, $uid);
+			if (empty($messageResult['ok']) || !is_array($messageResult['message'] ?? null)) {
+				return [];
+			}
+
+			$rows = is_array($messageResult['message']['attachments'] ?? null) ? $messageResult['message']['attachments'] : [];
+			$headers = [];
+			foreach ($rows as $att) {
+				if (!is_array($att)) {
+					continue;
+				}
+				$headers[] = [
+					'id' => (string) ($att['part_no'] ?? ''),
+					'name' => (string) ($att['filename'] ?? 'Adjunto'),
+					'mime' => (string) ($att['mime'] ?? 'application/octet-stream'),
+					'size' => (int) ($att['size'] ?? 0),
+					'is_inline' => !empty($att['is_inline']),
+					'content_id' => (string) ($att['content_id'] ?? ''),
+				];
+			}
+
+			return $headers;
+		} catch (Throwable $e) {
+			return [];
+		}
+	}
+
+	private function enqueueIncomingAttachmentHeaders(PDO $db, int $ticketId, int $mensajeId, array $email, array $attachmentHeaders): void
+	{
+		$alias = trim((string) ($email['account_alias'] ?? ''));
+		$uid = trim((string) ($email['uid'] ?? ''));
+		if ($alias === '' || $uid === '' || empty($attachmentHeaders)) {
+			return;
+		}
+
+		$queue = new AttachmentQueueService($db);
+		$queue->ensureTable();
+		$queue->enqueueIncomingAttachments($ticketId, $mensajeId, $alias, $uid, $attachmentHeaders);
 	}
 
 	private function findOrCreateContactFromEmail(PDO $db, array $email): int

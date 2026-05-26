@@ -77,6 +77,8 @@
 							<li>El scheduler se ejecuta automáticamente cada 5 minutos cuando un usuario accede al sistema</li>
 							<li>Verifica correos sin leer en todas las cuentas configuradas de Office 365</li>
 							<li>Crea tickets automáticamente con grupo asignado según palabras clave del asunto</li>
+							<li>Cron web sync: <strong><?= e((string) ($automation['cron_sync_url'] ?? '')) ?></strong></li>
+							<li>Cron web adjuntos: <strong><?= e((string) ($automation['cron_process_url'] ?? '')) ?></strong></li>
 						</ul>
 					</div>
 				</div>

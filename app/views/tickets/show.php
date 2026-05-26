@@ -377,7 +377,7 @@ $phones = array_values(array_unique($phones));
 
             <section class="sidebar-card" id="panel-contacto">
                 <div class="card-header-line">
-                    <h2 class="sidebar-title">Datos de contacto</h2>
+                    <h2 class="sidebar-title">Datos de estudiante</h2>
                     <button class="toggle-panel-btn" type="button" id="toggle-contacto" data-toggle-panel="contacto">Contraer</button>
                 </div>
                 <div id="panel-contacto-body">

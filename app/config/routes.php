@@ -50,6 +50,7 @@ return static function (Router $router): void {
 	$router->post('/change-password', 'AuthController@changePassword');
 
 	$router->get('/dashboard', 'DashboardController@index');
+	$router->get('/heartbeat', 'DashboardController@heartbeat');
 	$router->get('/tickets/dashboard', 'TicketController@dashboard');
 	$router->get('/tickets/dashboard/data', 'TicketController@dashboardData');
 	$router->get('/tickets/dashboard/grupos', 'TicketController@dashboardGroupDetails');
@@ -64,6 +65,9 @@ return static function (Router $router): void {
 	$router->get('/correo/verify', 'CorreoController@verify');
 	$router->post('/correo/sync-tickets', 'CorreoController@syncTickets');
 	$router->post('/correo/sync-tickets/auto', 'CorreoController@syncTicketsAuto');
+	$router->post('/correo/process-attachments/auto', 'CorreoController@processAttachmentsAuto');
+	$router->get('/cron/correo/sync', 'CorreoController@cronSync');
+	$router->get('/cron/correo/process-attachments', 'CorreoController@cronProcessAttachments');
 	$router->get('/correo/{uid}', 'CorreoController@show');
 	$router->post('/correo/{uid}/reply', 'CorreoController@reply');
 

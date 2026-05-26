@@ -31,6 +31,16 @@ class DashboardController extends Controller
 		]);
 	}
 
+	public function heartbeat(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=UTF-8');
+		echo json_encode([
+			'ok' => true,
+			'ts' => date('Y-m-d H:i:s'),
+		]);
+	}
+
 	private function getTableColumns(PDO $db, string $table): array
 	{
 		try {

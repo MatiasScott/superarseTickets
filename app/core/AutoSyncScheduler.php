@@ -3,7 +3,7 @@
 class AutoSyncScheduler
 {
 	private const LOCK_FILE = STORAGE_PATH . '/logs/.auto_sync_last_run';
-	private const INTERVAL_SECONDS = 300; // 5 minutos
+	private const DEFAULT_INTERVAL_SECONDS = 60;
 
 	/**
 	 * Verificar si debe ejecutarse el auto-sync y ejecutarlo si es necesario
@@ -44,8 +44,8 @@ class AutoSyncScheduler
 		$now = time();
 		$elapsed = $now - $lastRun;
 
-		// Ejecutar si han pasado 5 minutos o más
-		return $elapsed >= self::INTERVAL_SECONDS;
+		// Ejecutar de forma incremental por intervalo configurable.
+		return $elapsed >= self::getIntervalSeconds();
 	}
 
 	/**
@@ -58,45 +58,9 @@ class AutoSyncScheduler
 			// Actualizar lock file primero para evitar ejecuciones concurrentes
 			self::updateLockFile();
 
-			// Sin token interno configurado, ejecutar directamente para evitar bloqueo por Auth/CSRF.
-			$internalToken = trim((string) env('MAIL_AUTO_SYNC_INTERNAL_TOKEN', ''));
-			if ($internalToken === '') {
-				self::executeDirectly();
-				return;
-			}
-
-			// Obtener configuración de la aplicación
-			$host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-			$path = (string) app_config('url', '/istsTicket/public');
-
-			// Limpiar path para evitar duplicados
-			$path = rtrim($path, '/') . '/correo/sync-tickets/auto';
-
-			// Extraer host y puerto si está incluido
-			$hostParts = explode(':', $host);
-			$hostname = $hostParts[0];
-			$port = $hostParts[1] ?? 80;
-
-			$payload = http_build_query([
-				'_internal_token' => $internalToken,
-			]);
-
-			// Intenta usar fsockopen para request sin esperar (no bloqueante)
-			$fp = @fsockopen($hostname, $port, $errno, $errstr, 2);
-			if ($fp) {
-				$out = "POST $path HTTP/1.1\r\n";
-				$out .= "Host: $host\r\n";
-				$out .= "Connection: Close\r\n";
-				$out .= "Content-Type: application/x-www-form-urlencoded\r\n";
-				$out .= "Content-Length: " . strlen($payload) . "\r\n\r\n";
-				$out .= $payload;
-
-				fwrite($fp, $out);
-				fclose($fp);
-			} else {
-				// Si fsockopen falla, intentar ejecutar directamente
-				self::executeDirectly();
-			}
+			// Sin terminal ni cron CLI: ejecutar directamente dentro del request web.
+			// En hosting compartido el disparo debe venir por tráfico web o por un webhook/URL externa.
+			self::executeDirectly();
 		} catch (Throwable $e) {
 			error_log('AutoSyncScheduler error: ' . $e->getMessage());
 		}
@@ -115,12 +79,17 @@ class AutoSyncScheduler
 			// Usar reflection para acceder al método privado runTicketSync
 			$method = new ReflectionMethod('CorreoController', 'runTicketSync');
 			$method->setAccessible(true);
-			$result = $method->invoke($controller, null);
+			$result = $method->invoke($controller, null, false, 20);
+
+			$processor = new AttachmentProcessorService();
+			$attachmentStats = $processor->processPending(20);
 
 			// Log del resultado
 			$summary = "Auto-sync: Creados=" . ($result['created'] ?? 0)
 				. ", Actualizados=" . ($result['updated'] ?? 0)
-				. ", Omitidos=" . ($result['skipped'] ?? 0);
+				. ", Omitidos=" . ($result['skipped'] ?? 0)
+				. ", AdjuntosProc=" . ($attachmentStats['processed'] ?? 0)
+				. ", AdjuntosErr=" . ($attachmentStats['errors'] ?? 0);
 
 			error_log($summary);
 		} catch (Throwable $e) {
@@ -152,15 +121,21 @@ class AutoSyncScheduler
 		}
 
 		$now = time();
-		$nextRun = $lastRun + self::INTERVAL_SECONDS;
+		$intervalSeconds = self::getIntervalSeconds();
+		$nextRun = $lastRun + $intervalSeconds;
 
 		return [
 			'last_run' => $lastRun > 0 ? date('Y-m-d H:i:s', $lastRun) : 'Nunca',
 			'next_run' => date('Y-m-d H:i:s', $nextRun),
 			'seconds_until_next' => max(0, $nextRun - $now),
 			'enabled' => (string) env('BOT_EMAIL_ENABLED', 'true') === 'true',
-			'interval_seconds' => self::INTERVAL_SECONDS,
+			'interval_seconds' => $intervalSeconds,
 		];
+	}
+
+	private static function getIntervalSeconds(): int
+	{
+		return max(10, (int) env('MAIL_AUTO_SYNC_SECONDS', self::DEFAULT_INTERVAL_SECONDS));
 	}
 
 	/**

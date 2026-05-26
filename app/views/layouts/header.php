@@ -18,6 +18,11 @@
 </head>
 <body data-module="<?= e($layoutModule ?? 'dashboard') ?>" class="<?= !empty($showTopbar) ? '' : 'no-topbar' ?>">
 	<?php $homePath = Auth::check() ? Auth::homePath() : 'dashboard'; ?>
+	<?php
+		$heartbeatEnabled = (string) env('BOT_EMAIL_ENABLED', 'true') === 'true';
+		$heartbeatIntervalMs = max(60000, (int) env('MAIL_AUTO_SYNC_SECONDS', 60) * 1000);
+		$heartbeatUrl = base_url('heartbeat');
+	?>
 	<?php if (!empty($showTopbar)): ?>
 	<header class="topbar">
 		<div class="topbar-inner">
@@ -62,4 +67,4 @@
 	</header>
 	<?php endif; ?>
 
-	<div class="app-layout <?= !empty($showSidebar) ? '' : 'no-sidebar' ?>">
+	<div class="app-layout <?= !empty($showSidebar) ? '' : 'no-sidebar' ?>" data-heartbeat-enabled="<?= $heartbeatEnabled ? '1' : '0' ?>" data-heartbeat-url="<?= e($heartbeatUrl) ?>" data-heartbeat-interval-ms="<?= e((string) $heartbeatIntervalMs) ?>">
