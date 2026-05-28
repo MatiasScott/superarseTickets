@@ -4,13 +4,19 @@
 	<?php $periodoSeleccionado = $periodoSeleccionado ?? ''; ?>
 	<?php $sourceLabel = $sourceLabel ?? 'No disponible'; ?>
 	<?php $sourceError = $sourceError ?? ''; ?>
+	<?php $prospectosLocales = $prospectosLocales ?? []; ?>
 	<div class="container-fluid py-4">
 		<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
 			<div>
 				<h1 class="h3 mb-1"><i class="bi bi-people-fill"></i> CRM - Ver todo CRM</h1>
-				<p class="text-muted mb-0">Listado de clientes/estudiantes conectado a la base de Superarse.</p>
+				<p class="text-muted mb-0">Listado consolidado de prospectos CRM y estudiantes sincronizados.</p>
 			</div>
-			<a class="btn btn-outline-secondary" href="<?= e(base_url('crm/dashboard')) ?>"><i class="bi bi-arrow-left"></i> Volver al dashboard</a>
+			<div class="d-flex gap-2">
+				<button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createProspectModal">
+					<i class="bi bi-person-plus-fill"></i> Crear Cliente Potencial
+				</button>
+				<a class="btn btn-outline-secondary" href="<?= e(base_url('crm/dashboard')) ?>"><i class="bi bi-arrow-left"></i> Volver al dashboard</a>
+			</div>
 		</div>
 
 		<div class="alert alert-info py-2">
@@ -110,8 +116,97 @@
 				</tbody>
 			</table>
 		</div>
+
+		<div class="card border-0 shadow-sm mt-4">
+			<div class="card-header bg-white">
+				<h2 class="h5 mb-0"><i class="bi bi-person-badge"></i> Clientes potenciales creados en CRM</h2>
+			</div>
+			<div class="card-body p-0">
+				<div class="table-responsive" data-mobile-cards>
+					<table class="table table-hover align-middle mb-0" id="crmProspectsTable">
+						<thead>
+							<tr>
+								<th>ID</th>
+								<th>Contacto</th>
+								<th>Identificacion</th>
+								<th>Correo personal</th>
+								<th>Celular</th>
+								<th>Etapa</th>
+								<th>Origen</th>
+								<th>Creado</th>
+							</tr>
+						</thead>
+						<tbody>
+							<?php foreach ($prospectosLocales as $prospecto): ?>
+								<tr>
+									<td><?= e($prospecto['id'] ?? '-') ?></td>
+									<td><?= e(trim((string) (($prospecto['nombre'] ?? '') . ' ' . ($prospecto['apellido'] ?? '')))) ?></td>
+									<td><?= e($prospecto['cedula'] ?? '-') ?></td>
+									<td><?= e($prospecto['email'] ?? '-') ?></td>
+									<td><?= e($prospecto['celular'] ?? '-') ?></td>
+									<td><span class="badge text-bg-light border"><?= e($prospecto['etapa'] ?? 'Sin etapa') ?></span></td>
+									<td><?= e($prospecto['origen'] ?? '-') ?></td>
+									<td><?= e($prospecto['created_at'] ?? '-') ?></td>
+								</tr>
+							<?php endforeach; ?>
+							<?php if (empty($prospectosLocales)): ?>
+								<tr>
+									<td colspan="8" class="text-center text-muted py-4">No hay clientes potenciales CRM creados todavia.</td>
+								</tr>
+							<?php endif; ?>
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</div>
 	</div>
 </section>
+
+<div class="modal fade" id="createProspectModal" tabindex="-1" aria-labelledby="createProspectLabel" aria-hidden="true">
+	<div class="modal-dialog modal-lg">
+		<div class="modal-content">
+			<form method="post" action="<?= e(base_url('crm/prospectos')) ?>">
+				<div class="modal-header">
+					<h5 class="modal-title" id="createProspectLabel">Crear Cliente Potencial</h5>
+					<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+				</div>
+				<div class="modal-body">
+					<input type="hidden" name="_token" value="<?= e(csrf_token()) ?>">
+					<div class="row g-3">
+						<div class="col-md-6">
+							<label for="prospectNombres" class="form-label">Nombres</label>
+							<input type="text" id="prospectNombres" name="nombres" class="form-control" maxlength="150" required>
+						</div>
+						<div class="col-md-6">
+							<label for="prospectApellidos" class="form-label">Apellidos</label>
+							<input type="text" id="prospectApellidos" name="apellidos" class="form-control" maxlength="150" required>
+						</div>
+						<div class="col-md-4">
+							<label for="prospectIdentificacion" class="form-label">Identificacion / Cedula / Pasaporte</label>
+							<input type="text" id="prospectIdentificacion" name="identificacion" class="form-control" maxlength="30" required>
+						</div>
+						<div class="col-md-4">
+							<label for="prospectCelular" class="form-label">Celular</label>
+							<input type="text" id="prospectCelular" name="celular" class="form-control" maxlength="30" placeholder="Ej: 0999999999">
+						</div>
+						<div class="col-md-4">
+							<label for="prospectCorreoPersonal" class="form-label">Correo personal</label>
+							<input type="email" id="prospectCorreoPersonal" name="correo_personal" class="form-control" maxlength="255" placeholder="persona@correo.com">
+						</div>
+						<div class="col-md-6">
+							<label for="prospectOrigen" class="form-label">Origen</label>
+							<input type="text" id="prospectOrigen" name="origen" class="form-control" maxlength="100" value="crm_manual">
+						</div>
+					</div>
+				</div>
+				<div class="modal-footer">
+					<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+					<button type="submit" class="btn btn-primary"><i class="bi bi-check2-circle"></i> Crear cliente potencial</button>
+				</div>
+			</form>
+		</div>
+	</div>
+</div>
 
 <!-- Modal Contacto del Estudiante -->
 <div class="modal fade" id="studentContactModal" tabindex="-1" aria-labelledby="studentContactLabel" aria-hidden="true">

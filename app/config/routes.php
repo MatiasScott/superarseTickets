@@ -68,6 +68,7 @@ return static function (Router $router): void {
 	$router->post('/correo/process-attachments/auto', 'CorreoController@processAttachmentsAuto');
 	$router->get('/cron/correo/sync', 'CorreoController@cronSync');
 	$router->get('/cron/correo/process-attachments', 'CorreoController@cronProcessAttachments');
+	$router->get('/cron/crm/institutional-sync', 'CRMController@cronInstitutionalSync');
 	$router->get('/correo/{uid}', 'CorreoController@show');
 	$router->post('/correo/{uid}/reply', 'CorreoController@reply');
 
@@ -91,6 +92,7 @@ return static function (Router $router): void {
 
 	$router->get('/crm/dashboard', 'CRMController@dashboard');
 	$router->get('/crm/interesados', 'CRMController@interesados');
+	$router->post('/crm/prospectos', 'CRMController@createProspect');
 	$router->get('/crm/estudiantes', 'CRMController@estudiantes');
 	$router->get('/crm/getStudentDetail', 'CRMController@getStudentDetail');
 	$router->get('/crm/getStudentContactDetail', 'CRMController@getStudentContactDetail');

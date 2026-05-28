@@ -257,9 +257,11 @@ class CRMController extends Controller
 		$studentsData = $this->fetchSuperarseStudents(1000, $periodoFiltro);
 		$estudiantesSuperarse = is_array($studentsData['rows'] ?? null) ? $studentsData['rows'] : [];
 		$periodos = is_array($studentsData['periodos'] ?? null) ? $studentsData['periodos'] : [];
+		$prospectosLocales = $this->fetchLocalProspects();
 
 		$this->view('crm/interesados', [
 			'estudiantesSuperarse' => $estudiantesSuperarse,
+			'prospectosLocales' => $prospectosLocales,
 			'periodos' => $periodos,
 			'periodoSeleccionado' => $periodoFiltro,
 			'sourceLabel' => (string) ($studentsData['source'] ?? 'No disponible'),
@@ -267,6 +269,104 @@ class CRMController extends Controller
 		], [
 			'title' => 'CRM - Ver todo CRM',
 		]);
+	}
+
+	public function createProspect(): void
+	{
+		Auth::requireAuth();
+
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			set_flash('error', 'Token CSRF invalido.');
+			redirect('crm/interesados');
+		}
+
+		$nombres = trim((string) ($_POST['nombres'] ?? ''));
+		$apellidos = trim((string) ($_POST['apellidos'] ?? ''));
+		$identificacion = $this->normalizeIdentityValue((string) ($_POST['identificacion'] ?? ''));
+		$celular = $this->normalizePhoneValue((string) ($_POST['celular'] ?? ''));
+		$correoPersonal = $this->normalizeEmailValue((string) ($_POST['correo_personal'] ?? ''));
+		$origen = trim((string) ($_POST['origen'] ?? 'crm_manual'));
+
+		if ($nombres === '' || $apellidos === '' || $identificacion === '') {
+			set_flash('error', 'Nombres, apellidos e identificacion son obligatorios.');
+			redirect('crm/interesados');
+		}
+
+		try {
+			$this->ensureCrmSupportTables();
+			$db = Database::getInstance()->connection();
+			$db->beginTransaction();
+
+			$contactId = $this->findPrimaryContactIdForMerge($db, $identificacion);
+			$isNew = false;
+			if ($contactId === null) {
+				if ($correoPersonal !== '') {
+					$byEmail = $this->resolveContactByEmailFallback($db, $correoPersonal);
+					if ($byEmail !== null) {
+						$contactId = $byEmail;
+					}
+				}
+			}
+
+			if ($contactId === null) {
+				$emailToStore = $correoPersonal;
+				if ($emailToStore !== '' && !$this->canUseEmailAsPrimaryContact($db, $emailToStore, null)) {
+					$emailToStore = '';
+				}
+
+				$insertContact = $db->prepare('INSERT INTO contactos (nombre, apellido, cedula, email, tipo, estado, created_at, updated_at)
+					VALUES (:nombre, :apellido, :cedula, :email, "externo", "activo", NOW(), NOW())');
+				$insertContact->execute([
+					'nombre' => mb_substr($nombres, 0, 150),
+					'apellido' => mb_substr($apellidos, 0, 150),
+					'cedula' => mb_substr($identificacion, 0, 20),
+					'email' => $emailToStore !== '' ? $emailToStore : null,
+				]);
+				$contactId = (int) $db->lastInsertId();
+				$isNew = true;
+			} else {
+				$updateContact = $db->prepare('UPDATE contactos
+					SET nombre = :nombre,
+						apellido = :apellido,
+						cedula = :cedula,
+						estado = "activo",
+						updated_at = NOW()
+					WHERE id = :id
+					LIMIT 1');
+				$updateContact->execute([
+					'nombre' => mb_substr($nombres, 0, 150),
+					'apellido' => mb_substr($apellidos, 0, 150),
+					'cedula' => mb_substr($identificacion, 0, 20),
+					'id' => $contactId,
+				]);
+			}
+
+			if ($correoPersonal !== '') {
+				$this->upsertContactEmail($db, $contactId, $correoPersonal, 'personal');
+				$this->addContactChannel($db, $contactId, 'email', $correoPersonal, 'crm_manual');
+			}
+
+			if ($celular !== '') {
+				$this->upsertContactPhone($db, $contactId, $celular, 'principal');
+				$this->addContactChannel($db, $contactId, 'phone', $celular, 'crm_manual');
+			}
+
+			$estadoInicialId = $this->resolveInitialProspectStateId($db);
+			$this->upsertInteresado($db, $contactId, $estadoInicialId, $origen !== '' ? $origen : 'crm_manual');
+
+			$db->commit();
+
+			set_flash('success', $isNew
+				? 'Cliente potencial creado correctamente.'
+				: 'Cliente potencial actualizado y vinculado correctamente.');
+		} catch (Throwable $e) {
+			if (isset($db) && $db instanceof PDO && $db->inTransaction()) {
+				$db->rollBack();
+			}
+			set_flash('error', 'No se pudo crear el cliente potencial: ' . $e->getMessage());
+		}
+
+		redirect('crm/interesados');
 	}
 
 	public function estudiantes(): void
@@ -789,6 +889,71 @@ class CRMController extends Controller
 				INDEX idx_usuario_id (usuario_id)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
+			$db->exec("CREATE TABLE IF NOT EXISTS correos_contacto (
+				id BIGINT AUTO_INCREMENT PRIMARY KEY,
+				contacto_id INT NOT NULL,
+				correo VARCHAR(255) NOT NULL,
+				tipo VARCHAR(30) NOT NULL DEFAULT 'personal',
+				estado ENUM('activo','inactivo') NOT NULL DEFAULT 'activo',
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+				UNIQUE KEY uniq_contacto_correo (contacto_id, correo),
+				INDEX idx_correo (correo),
+				INDEX idx_contacto (contacto_id)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+			$db->exec("CREATE TABLE IF NOT EXISTS telefonos_contacto (
+				id BIGINT AUTO_INCREMENT PRIMARY KEY,
+				contacto_id INT NOT NULL,
+				telefono VARCHAR(40) NOT NULL,
+				tipo VARCHAR(30) NOT NULL DEFAULT 'principal',
+				estado ENUM('activo','inactivo') NOT NULL DEFAULT 'activo',
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+				UNIQUE KEY uniq_contacto_telefono (contacto_id, telefono),
+				INDEX idx_telefono (telefono),
+				INDEX idx_contacto (contacto_id)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+			$db->exec("CREATE TABLE IF NOT EXISTS crm_person_channels (
+				id BIGINT AUTO_INCREMENT PRIMARY KEY,
+				contacto_id INT NOT NULL,
+				channel_type ENUM('email','phone') NOT NULL,
+				channel_value VARCHAR(255) NOT NULL,
+				source VARCHAR(50) NOT NULL DEFAULT 'superarse',
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+				UNIQUE KEY uniq_contact_channel (contacto_id, channel_type, channel_value),
+				INDEX idx_channel_type_value (channel_type, channel_value),
+				INDEX idx_contacto_id (contacto_id)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+			$db->exec("CREATE TABLE IF NOT EXISTS crm_student_academic_history (
+				id BIGINT AUTO_INCREMENT PRIMARY KEY,
+				contacto_id INT NOT NULL,
+				source_user_id INT NOT NULL,
+				codigo_estudiante VARCHAR(80) NULL,
+				carrera VARCHAR(180) NULL,
+				matricula VARCHAR(120) NULL,
+				nivel VARCHAR(80) NULL,
+				estado_academico VARCHAR(80) NULL,
+				periodo VARCHAR(80) NULL,
+				payload JSON NULL,
+				last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE KEY uniq_contact_user (contacto_id, source_user_id),
+				INDEX idx_source_user_id (source_user_id),
+				INDEX idx_last_seen_at (last_seen_at)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+			$db->exec("CREATE TABLE IF NOT EXISTS crm_superarse_sync_state (
+				id TINYINT NOT NULL PRIMARY KEY,
+				last_user_id INT NOT NULL DEFAULT 0,
+				last_run_at DATETIME NULL,
+				last_status VARCHAR(20) NOT NULL DEFAULT 'idle',
+				last_summary JSON NULL,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
 			$countTipos = (int) $db->query("SELECT COUNT(*) FROM tipo_tarea_convenios")->fetchColumn();
 			if ($countTipos === 0) {
 				$db->exec("INSERT INTO tipo_tarea_convenios (nombre, orden) VALUES
@@ -800,9 +965,164 @@ class CRMController extends Controller
 				$db->exec("INSERT INTO resultados (nombre, orden) VALUES
 					('Exitoso', 1), ('Pendiente', 2), ('Sin respuesta', 3), ('Reagendado', 4), ('Cancelado', 5)");
 			}
+
+			$db->exec("INSERT IGNORE INTO crm_superarse_sync_state (id, last_user_id, last_status, updated_at)
+				VALUES (1, 0, 'idle', NOW())");
 		} catch (Throwable $e) {
 			// Evitar romper el flujo principal por auto-creacion auxiliar.
 		}
+	}
+
+	private function fetchLocalProspects(int $limit = 500): array
+	{
+		$limit = max(50, min(3000, $limit));
+		try {
+			$db = Database::getInstance()->connection();
+			$sql = "SELECT
+				i.id,
+				i.contacto_id,
+				i.origen,
+				i.convertido,
+				i.created_at,
+				COALESCE(pe.nombre, 'Sin etapa') AS etapa,
+				c.nombre,
+				c.apellido,
+				c.cedula,
+				c.email,
+				COALESCE(tc.telefono, '') AS celular
+			FROM interesados i
+			INNER JOIN contactos c ON c.id = i.contacto_id
+			LEFT JOIN pipeline_estados pe ON pe.id = i.estado_id
+			LEFT JOIN (
+				SELECT t1.contacto_id, t1.telefono
+				FROM telefonos_contacto t1
+				INNER JOIN (
+					SELECT contacto_id, MIN(id) AS first_id
+					FROM telefonos_contacto
+					WHERE estado = 'activo'
+					GROUP BY contacto_id
+				) tx ON tx.first_id = t1.id
+			) tc ON tc.contacto_id = i.contacto_id
+			WHERE i.estado = 'activo'
+			ORDER BY i.id DESC
+			LIMIT :limit";
+
+			$stmt = $db->prepare($sql);
+			$stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+			$stmt->execute();
+			return $stmt->fetchAll() ?: [];
+		} catch (Throwable $e) {
+			return [];
+		}
+	}
+
+	private function resolveInitialProspectStateId(PDO $db): ?int
+	{
+		$preferred = [
+			'1. etapa interesados',
+			'etapa interesados',
+			'interesado',
+			'interesados',
+		];
+
+		$stmt = $db->query("SELECT id, nombre FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC");
+		$rows = $stmt ? ($stmt->fetchAll() ?: []) : [];
+		if (empty($rows)) {
+			return null;
+		}
+
+		foreach ($rows as $row) {
+			$name = $this->dashboardNormalizeLabel((string) ($row['nombre'] ?? ''));
+			foreach ($preferred as $target) {
+				if ($name === $target || str_contains($name, $target)) {
+					$id = (int) ($row['id'] ?? 0);
+					if ($id > 0) {
+						return $id;
+					}
+				}
+			}
+		}
+
+		$fallbackId = (int) ($rows[0]['id'] ?? 0);
+		return $fallbackId > 0 ? $fallbackId : null;
+	}
+
+	private function upsertInteresado(PDO $db, int $contactId, ?int $estadoId, string $origen): void
+	{
+		if ($contactId <= 0) {
+			return;
+		}
+
+		$stmt = $db->prepare('SELECT id FROM interesados WHERE contacto_id = :contacto_id LIMIT 1');
+		$stmt->execute(['contacto_id' => $contactId]);
+		$existingId = (int) ($stmt->fetchColumn() ?: 0);
+
+		if ($existingId > 0) {
+			$update = $db->prepare('UPDATE interesados
+				SET estado_id = :estado_id,
+					origen = :origen,
+					convertido = 0,
+					estado = "activo",
+					updated_at = NOW()
+				WHERE id = :id
+				LIMIT 1');
+			$update->execute([
+				'estado_id' => $estadoId,
+				'origen' => mb_substr($origen, 0, 100),
+				'id' => $existingId,
+			]);
+			return;
+		}
+
+		$insert = $db->prepare('INSERT INTO interesados (contacto_id, estado_id, origen, convertido, estado, created_at, updated_at)
+			VALUES (:contacto_id, :estado_id, :origen, 0, "activo", NOW(), NOW())');
+		$insert->execute([
+			'contacto_id' => $contactId,
+			'estado_id' => $estadoId,
+			'origen' => mb_substr($origen, 0, 100),
+		]);
+	}
+
+	private function markProspectAsConverted(PDO $db, int $contactId): void
+	{
+		if ($contactId <= 0) {
+			return;
+		}
+
+		$stmt = $db->prepare('UPDATE interesados SET convertido = 1, updated_at = NOW() WHERE contacto_id = :contacto_id');
+		$stmt->execute(['contacto_id' => $contactId]);
+	}
+
+	private function upsertContactEmail(PDO $db, int $contactId, string $email, string $type = 'personal'): void
+	{
+		if ($contactId <= 0 || $email === '') {
+			return;
+		}
+
+		$stmt = $db->prepare('INSERT INTO correos_contacto (contacto_id, correo, tipo, estado, created_at, updated_at)
+			VALUES (:contacto_id, :correo, :tipo, "activo", NOW(), NOW())
+			ON DUPLICATE KEY UPDATE tipo = VALUES(tipo), estado = "activo", updated_at = NOW()');
+		$stmt->execute([
+			'contacto_id' => $contactId,
+			'correo' => mb_substr($email, 0, 255),
+			'tipo' => mb_substr($type, 0, 30),
+		]);
+	}
+
+	private function upsertContactPhone(PDO $db, int $contactId, string $phone, string $type = 'principal'): void
+	{
+		if ($contactId <= 0 || $phone === '') {
+			return;
+		}
+
+		$stmt = $db->prepare('INSERT INTO telefonos_contacto (contacto_id, telefono, tipo, estado, created_at, updated_at)
+			VALUES (:contacto_id, :telefono, :tipo, "activo", NOW(), NOW())
+			ON DUPLICATE KEY UPDATE tipo = VALUES(tipo), estado = "activo", updated_at = NOW()');
+		$stmt->execute([
+			'contacto_id' => $contactId,
+			'telefono' => mb_substr($phone, 0, 40),
+			'tipo' => mb_substr($type, 0, 30),
+		]);
 	}
 
 	private function attachPipelineData(array $rows): array
@@ -1853,6 +2173,712 @@ class CRMController extends Controller
 			echo json_encode(['success' => false, 'error' => 'Error: ' . $e->getMessage()]);
 		}
 		exit;
+	}
+
+	public function cronInstitutionalSync(): void
+	{
+		header('Content-Type: application/json; charset=utf-8');
+
+		if (!$this->isAuthorizedInstitutionalSyncRequest()) {
+			http_response_code(403);
+			echo json_encode(['ok' => false, 'error' => 'Token invalido o faltante.']);
+			exit;
+		}
+
+		$limit = max(20, min(500, (int) ($_GET['limit'] ?? $_POST['limit'] ?? 150)));
+
+		try {
+			$result = $this->runInstitutionalSyncBatch($limit);
+			echo json_encode([
+				'ok' => true,
+				'service' => 'crm-institutional-sync',
+				'batch_limit' => $limit,
+				'result' => $result,
+			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		} catch (Throwable $e) {
+			http_response_code(500);
+			echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+		}
+
+		exit;
+	}
+
+	private function isAuthorizedInstitutionalSyncRequest(): bool
+	{
+		$providedToken = trim((string) ($_GET['token'] ?? $_POST['token'] ?? $_REQUEST['token'] ?? ''));
+		$expectedToken = trim((string) env('CRM_SYNC_INTERNAL_TOKEN', ''));
+		if ($expectedToken === '') {
+			$expectedToken = trim((string) env('MAIL_AUTO_SYNC_INTERNAL_TOKEN', ''));
+		}
+
+		return $expectedToken !== '' && $providedToken !== '' && hash_equals($expectedToken, $providedToken);
+	}
+
+	private function runInstitutionalSyncBatch(int $limit): array
+	{
+		$this->ensureCrmSupportTables();
+		$db = Database::getInstance()->connection();
+
+		$remote = $this->connectSuperarseDatabase();
+		if ($remote === null) {
+			throw new RuntimeException('No se pudo conectar a la BD de SuperarseConectados.');
+		}
+
+		if ($this->resolveSuperarseStudentTable($remote) !== 'users') {
+			throw new RuntimeException('La integracion institucional requiere tabla users en SuperarseConectados.');
+		}
+
+		$stateStmt = $db->query('SELECT last_user_id FROM crm_superarse_sync_state WHERE id = 1 LIMIT 1');
+		$state = $stateStmt ? ($stateStmt->fetch() ?: ['last_user_id' => 0]) : ['last_user_id' => 0];
+		$cursor = max(0, (int) ($state['last_user_id'] ?? 0));
+
+		$rows = $this->fetchSuperarseUsersBatch($remote, $cursor, $limit);
+		$summary = [
+			'cursor_inicial' => $cursor,
+			'cursor_final' => $cursor,
+			'processed' => 0,
+			'matched_contacts' => 0,
+			'created_students' => 0,
+			'updated_students' => 0,
+			'created_matriculas' => 0,
+			'merged_duplicates' => 0,
+			'skipped_no_identity' => 0,
+			'skipped_not_found_in_crm' => 0,
+			'errors' => 0,
+			'error_samples' => [],
+			'has_more' => false,
+		];
+
+		$maxUserId = $cursor;
+		foreach ($rows as $row) {
+			$userId = (int) ($row['id'] ?? 0);
+			if ($userId <= 0) {
+				continue;
+			}
+
+			$maxUserId = max($maxUserId, $userId);
+			$summary['processed']++;
+
+			try {
+				$identity = $this->resolveIdentityDocument($row);
+				$personalEmail = $this->normalizeEmailValue($this->resolveFirstValue($row, [
+					'correo_personal',
+					'email_personal',
+					'personal_email',
+					'correo_alterno',
+					'email_alterno',
+				]));
+				$institutionalEmail = $this->normalizeEmailValue($this->resolveFirstValue($row, [
+					'correo_institucional',
+					'email_institucional',
+					'institutional_email',
+					'correo_electronico',
+					'email',
+				]));
+
+				if ($identity === '') {
+					$summary['skipped_no_identity']++;
+					continue;
+				}
+
+				$contactId = $this->findPrimaryContactIdForMerge($db, $identity);
+				if ($contactId === null) {
+					$summary['skipped_not_found_in_crm']++;
+					continue;
+				}
+
+				$this->updateContactFromInstitutionalData($db, $contactId, $row, $identity, $personalEmail, $institutionalEmail);
+				$summary['matched_contacts']++;
+
+				$summary['merged_duplicates'] += $this->mergeSecondaryContacts($db, $contactId, $identity);
+
+				if ($personalEmail !== '') {
+					$this->addContactChannel($db, $contactId, 'email', $personalEmail, 'superarse_personal');
+					$this->upsertContactEmail($db, $contactId, $personalEmail, 'personal');
+				}
+				if ($institutionalEmail !== '') {
+					$this->addContactChannel($db, $contactId, 'email', $institutionalEmail, 'superarse_institucional');
+					$this->upsertContactEmail($db, $contactId, $institutionalEmail, 'institucional');
+				}
+
+				foreach ([
+					$this->resolveFirstValue($row, ['celular', 'telefono_movil', 'movil']),
+					$this->resolveFirstValue($row, ['telefono', 'telefono_convencional', 'phone']),
+				] as $phone) {
+					$normalizedPhone = $this->normalizePhoneValue($phone);
+					if ($normalizedPhone !== '') {
+						$this->addContactChannel($db, $contactId, 'phone', $normalizedPhone, 'superarse');
+						$this->upsertContactPhone($db, $contactId, $normalizedPhone, 'secundario');
+					}
+				}
+
+				$codigoEstudiante = $this->resolveFirstValue($row, ['codigo_estudiante', 'codigo_matricula', 'matricula', 'codigo']);
+				$estadoAcademico = $this->resolveFirstValue($row, ['estado_academico', 'estado']);
+				$estudianteResult = $this->ensureStudentFromContact($db, $contactId, $codigoEstudiante, $estadoAcademico);
+				$this->markProspectAsConverted($db, $contactId);
+				if (!empty($estudianteResult['created'])) {
+					$summary['created_students']++;
+				} else {
+					$summary['updated_students']++;
+				}
+
+				$carreraNombre = $this->resolveFirstValue($row, ['carrera', 'programa']);
+				$carreraId = $this->ensureCareer($db, $carreraNombre);
+				if ($carreraId !== null && (int) ($estudianteResult['student_id'] ?? 0) > 0) {
+					$createdMatricula = $this->ensureMatricula(
+						$db,
+						(int) $estudianteResult['student_id'],
+						$carreraId,
+						$this->normalizeDateValue($this->resolveFirstValue($row, ['fecha_matricula', 'created_at'])),
+						$this->resolveFirstValue($row, ['estado_academico', 'estado'])
+					);
+					if ($createdMatricula) {
+						$summary['created_matriculas']++;
+					}
+				}
+
+				$this->upsertAcademicHistory($db, $contactId, $row);
+			} catch (Throwable $rowError) {
+				$summary['errors']++;
+				if (count($summary['error_samples']) < 5) {
+					$summary['error_samples'][] = 'user_id=' . $userId . ': ' . $rowError->getMessage();
+				}
+			}
+		}
+
+		$summary['cursor_final'] = $maxUserId;
+		$summary['has_more'] = count($rows) >= $limit;
+
+		$updateState = $db->prepare('UPDATE crm_superarse_sync_state SET last_user_id = :last_user_id, last_run_at = NOW(), last_status = :status, last_summary = :summary, updated_at = NOW() WHERE id = 1');
+		$updateState->execute([
+			'last_user_id' => $maxUserId,
+			'status' => $summary['errors'] > 0 ? 'warning' : 'ok',
+			'summary' => json_encode($summary, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+		]);
+
+		return $summary;
+	}
+
+	private function fetchSuperarseUsersBatch(PDO $remote, int $cursor, int $limit): array
+	{
+		$columnRows = $remote->query('SHOW COLUMNS FROM users')->fetchAll() ?: [];
+		$available = [];
+		foreach ($columnRows as $columnRow) {
+			$name = trim((string) ($columnRow['Field'] ?? ''));
+			if ($name !== '') {
+				$available[$name] = true;
+			}
+		}
+
+		if (!isset($available['id'])) {
+			throw new RuntimeException('La tabla users no tiene la columna id.');
+		}
+
+		$candidates = [
+			'id',
+			'primer_nombre',
+			'segundo_nombre',
+			'primer_apellido',
+			'segundo_apellido',
+			'nombre',
+			'nombres',
+			'apellido',
+			'apellidos',
+			'cedula',
+			'identificacion',
+			'numero_identificacion',
+			'documento',
+			'pasaporte',
+			'correo_electronico',
+			'email',
+			'correo_institucional',
+			'email_institucional',
+			'correo_personal',
+			'email_personal',
+			'telefono',
+			'celular',
+			'movil',
+			'programa',
+			'carrera',
+			'nivel',
+			'estado',
+			'estado_academico',
+			'codigo_matricula',
+			'codigo_estudiante',
+			'matricula',
+			'periodo',
+			'fecha_matricula',
+			'created_at',
+		];
+
+		$selectColumns = [];
+		foreach ($candidates as $candidate) {
+			if (isset($available[$candidate])) {
+				$selectColumns[] = '`' . $candidate . '`';
+			}
+		}
+
+		if (!in_array('`id`', $selectColumns, true)) {
+			$selectColumns[] = '`id`';
+		}
+
+		$sql = 'SELECT ' . implode(', ', array_unique($selectColumns)) . ' FROM users WHERE id > :cursor ORDER BY id ASC LIMIT :limit';
+		$stmt = $remote->prepare($sql);
+		$stmt->bindValue(':cursor', max(0, $cursor), PDO::PARAM_INT);
+		$stmt->bindValue(':limit', max(1, $limit), PDO::PARAM_INT);
+		$stmt->execute();
+
+		return $stmt->fetchAll() ?: [];
+	}
+
+	private function resolveFirstValue(array $row, array $keys): string
+	{
+		foreach ($keys as $key) {
+			$value = trim((string) ($row[$key] ?? ''));
+			if ($value !== '') {
+				return $value;
+			}
+		}
+
+		return '';
+	}
+
+	private function resolveIdentityDocument(array $row): string
+	{
+		$raw = $this->resolveFirstValue($row, [
+			'identificacion',
+			'cedula',
+			'numero_identificacion',
+			'documento',
+			'pasaporte',
+		]);
+
+		return $this->normalizeIdentityValue($raw);
+	}
+
+	private function normalizeIdentityValue(string $value): string
+	{
+		$value = strtoupper(trim($value));
+		if ($value === '') {
+			return '';
+		}
+
+		$value = preg_replace('/[^A-Z0-9]/', '', $value) ?: '';
+		return $value;
+	}
+
+	private function normalizeEmailValue(string $value): string
+	{
+		$value = strtolower(trim($value));
+		if ($value === '' || filter_var($value, FILTER_VALIDATE_EMAIL) === false) {
+			return '';
+		}
+
+		return $value;
+	}
+
+	private function normalizePhoneValue(string $value): string
+	{
+		$value = trim($value);
+		if ($value === '') {
+			return '';
+		}
+
+		$value = preg_replace('/[^0-9+]/', '', $value) ?: '';
+		if ($value === '' || strlen($value) < 7) {
+			return '';
+		}
+
+		return $value;
+	}
+
+	private function findPrimaryContactIdForMerge(PDO $db, string $identity): ?int
+	{
+		if ($identity === '') {
+			return null;
+		}
+
+		$stmt = $db->prepare("SELECT id
+			FROM contactos
+			WHERE REPLACE(REPLACE(REPLACE(UPPER(TRIM(COALESCE(cedula, ''))), '.', ''), '-', ''), ' ', '') = :identity
+			ORDER BY id ASC
+			LIMIT 1");
+		$stmt->execute(['identity' => $identity]);
+		$id = (int) ($stmt->fetchColumn() ?: 0);
+		return $id > 0 ? $id : null;
+	}
+
+	private function resolveContactByEmailFallback(PDO $db, string $email): ?int
+	{
+		if ($email === '') {
+			return null;
+		}
+
+		$stmt = $db->prepare('SELECT id FROM contactos WHERE LOWER(TRIM(COALESCE(email, ""))) = :email LIMIT 1');
+		$stmt->execute(['email' => $email]);
+		$id = (int) ($stmt->fetchColumn() ?: 0);
+		return $id > 0 ? $id : null;
+	}
+
+	private function createContactFromInstitutionalData(PDO $db, array $row, string $identity, string $personalEmail, string $institutionalEmail): int
+	{
+		$firstName = $this->resolveFirstValue($row, ['primer_nombre', 'nombres', 'nombre']);
+		$secondName = $this->resolveFirstValue($row, ['segundo_nombre']);
+		$nombre = trim($firstName . ' ' . $secondName);
+		if ($nombre === '') {
+			$nombre = 'SinNombre';
+		}
+
+		$lastName = $this->resolveFirstValue($row, ['primer_apellido', 'apellidos', 'apellido']);
+		$secondLastName = $this->resolveFirstValue($row, ['segundo_apellido']);
+		$apellido = trim($lastName . ' ' . $secondLastName);
+		if ($apellido === '') {
+			$apellido = 'SinApellido';
+		}
+
+		$primaryEmail = $personalEmail !== '' ? $personalEmail : $institutionalEmail;
+		if ($primaryEmail !== '' && !$this->canUseEmailAsPrimaryContact($db, $primaryEmail, null)) {
+			$primaryEmail = '';
+		}
+
+		$stmt = $db->prepare('INSERT INTO contactos (nombre, apellido, cedula, email, tipo, estado, created_at, updated_at)
+			VALUES (:nombre, :apellido, :cedula, :email, :tipo, :estado, NOW(), NOW())');
+		$stmt->execute([
+			'nombre' => mb_substr($nombre, 0, 150),
+			'apellido' => mb_substr($apellido, 0, 150),
+			'cedula' => $identity !== '' ? mb_substr($identity, 0, 20) : null,
+			'email' => $primaryEmail !== '' ? $primaryEmail : null,
+			'tipo' => 'estudiante',
+			'estado' => 'activo',
+		]);
+
+		return (int) $db->lastInsertId();
+	}
+
+	private function updateContactFromInstitutionalData(PDO $db, int $contactId, array $row, string $identity, string $personalEmail, string $institutionalEmail): void
+	{
+		$current = $this->getContactRow($db, $contactId);
+		if ($current === null) {
+			return;
+		}
+
+		$firstName = $this->resolveFirstValue($row, ['primer_nombre', 'nombres', 'nombre']);
+		$secondName = $this->resolveFirstValue($row, ['segundo_nombre']);
+		$newNombre = trim($firstName . ' ' . $secondName);
+
+		$lastName = $this->resolveFirstValue($row, ['primer_apellido', 'apellidos', 'apellido']);
+		$secondLastName = $this->resolveFirstValue($row, ['segundo_apellido']);
+		$newApellido = trim($lastName . ' ' . $secondLastName);
+
+		$targetEmail = $personalEmail !== '' ? $personalEmail : '';
+		$currentEmail = strtolower(trim((string) ($current['email'] ?? '')));
+		if ($targetEmail === '' && $currentEmail === '') {
+			$targetEmail = $institutionalEmail;
+		}
+
+		if ($targetEmail !== '' && !$this->canUseEmailAsPrimaryContact($db, $targetEmail, $contactId)) {
+			$targetEmail = $currentEmail;
+		}
+
+		$payload = [
+			'id' => $contactId,
+			'nombre' => $newNombre !== '' ? mb_substr($newNombre, 0, 150) : (string) ($current['nombre'] ?? ''),
+			'apellido' => $newApellido !== '' ? mb_substr($newApellido, 0, 150) : (string) ($current['apellido'] ?? ''),
+			'cedula' => $identity !== '' ? mb_substr($identity, 0, 20) : ((string) ($current['cedula'] ?? '') !== '' ? (string) ($current['cedula'] ?? '') : null),
+			'email' => $targetEmail !== '' ? $targetEmail : ((string) ($current['email'] ?? '') !== '' ? (string) ($current['email'] ?? '') : null),
+		];
+
+		$stmt = $db->prepare('UPDATE contactos
+			SET nombre = :nombre,
+				apellido = :apellido,
+				cedula = :cedula,
+				email = :email,
+				tipo = "estudiante",
+				estado = "activo",
+				updated_at = NOW()
+			WHERE id = :id
+			LIMIT 1');
+		$stmt->execute($payload);
+	}
+
+	private function getContactRow(PDO $db, int $contactId): ?array
+	{
+		$stmt = $db->prepare('SELECT id, nombre, apellido, cedula, email FROM contactos WHERE id = :id LIMIT 1');
+		$stmt->execute(['id' => $contactId]);
+		$row = $stmt->fetch();
+		return $row ?: null;
+	}
+
+	private function canUseEmailAsPrimaryContact(PDO $db, string $email, ?int $excludeContactId): bool
+	{
+		if ($email === '') {
+			return false;
+		}
+
+		$sql = 'SELECT id FROM contactos WHERE LOWER(TRIM(COALESCE(email, ""))) = :email';
+		$params = ['email' => strtolower(trim($email))];
+		if ($excludeContactId !== null && $excludeContactId > 0) {
+			$sql .= ' AND id <> :exclude_id';
+			$params['exclude_id'] = $excludeContactId;
+		}
+		$sql .= ' LIMIT 1';
+
+		$stmt = $db->prepare($sql);
+		$stmt->execute($params);
+
+		return !$stmt->fetchColumn();
+	}
+
+	private function addContactChannel(PDO $db, int $contactId, string $channelType, string $channelValue, string $source): void
+	{
+		$channelValue = trim($channelValue);
+		if ($contactId <= 0 || $channelValue === '') {
+			return;
+		}
+
+		$stmt = $db->prepare('INSERT INTO crm_person_channels (contacto_id, channel_type, channel_value, source, created_at, updated_at)
+			VALUES (:contacto_id, :channel_type, :channel_value, :source, NOW(), NOW())
+			ON DUPLICATE KEY UPDATE source = VALUES(source), updated_at = NOW()');
+		$stmt->execute([
+			'contacto_id' => $contactId,
+			'channel_type' => $channelType,
+			'channel_value' => mb_substr($channelValue, 0, 255),
+			'source' => mb_substr($source, 0, 50),
+		]);
+	}
+
+	private function ensureStudentFromContact(PDO $db, int $contactId, string $codigoEstudiante, string $estadoAcademico): array
+	{
+		$stmt = $db->prepare('SELECT id, codigo_estudiante FROM estudiantes WHERE contacto_id = :contacto_id LIMIT 1');
+		$stmt->execute(['contacto_id' => $contactId]);
+		$row = $stmt->fetch();
+
+		$estado = strtolower(trim($estadoAcademico));
+		$estado = $estado === 'inactivo' ? 'inactivo' : 'activo';
+
+		if ($row) {
+			$studentId = (int) ($row['id'] ?? 0);
+			$currentCode = trim((string) ($row['codigo_estudiante'] ?? ''));
+			$newCode = trim($codigoEstudiante);
+			if ($newCode === '') {
+				$newCode = $currentCode;
+			}
+
+			$update = $db->prepare('UPDATE estudiantes SET codigo_estudiante = :codigo, estado = :estado, updated_at = NOW() WHERE id = :id LIMIT 1');
+			$update->execute([
+				'codigo' => $newCode !== '' ? mb_substr($newCode, 0, 50) : null,
+				'estado' => $estado,
+				'id' => $studentId,
+			]);
+
+			return ['student_id' => $studentId, 'created' => false];
+		}
+
+		$insert = $db->prepare('INSERT INTO estudiantes (contacto_id, codigo_estudiante, estado, created_at, updated_at)
+			VALUES (:contacto_id, :codigo_estudiante, :estado, NOW(), NOW())');
+		$insert->execute([
+			'contacto_id' => $contactId,
+			'codigo_estudiante' => trim($codigoEstudiante) !== '' ? mb_substr(trim($codigoEstudiante), 0, 50) : null,
+			'estado' => $estado,
+		]);
+
+		return ['student_id' => (int) $db->lastInsertId(), 'created' => true];
+	}
+
+	private function ensureCareer(PDO $db, string $careerName): ?int
+	{
+		$careerName = trim($careerName);
+		if ($careerName === '') {
+			return null;
+		}
+
+		$stmt = $db->prepare('SELECT id FROM carreras WHERE LOWER(TRIM(COALESCE(nombre, ""))) = :nombre LIMIT 1');
+		$stmt->execute(['nombre' => strtolower($careerName)]);
+		$id = (int) ($stmt->fetchColumn() ?: 0);
+		if ($id > 0) {
+			return $id;
+		}
+
+		$insert = $db->prepare('INSERT INTO carreras (nombre, estado, created_at, updated_at) VALUES (:nombre, "activo", NOW(), NOW())');
+		$insert->execute(['nombre' => mb_substr($careerName, 0, 150)]);
+		return (int) $db->lastInsertId();
+	}
+
+	private function ensureMatricula(PDO $db, int $studentId, int $careerId, ?string $fecha, string $estadoMatricula): bool
+	{
+		if ($studentId <= 0 || $careerId <= 0) {
+			return false;
+		}
+
+		$estadoMatricula = trim($estadoMatricula);
+		if ($estadoMatricula === '') {
+			$estadoMatricula = 'activo';
+		}
+
+		$stmt = $db->prepare('SELECT id FROM matriculas
+			WHERE estudiante_id = :estudiante_id
+			  AND carrera_id = :carrera_id
+			  AND COALESCE(estado_matricula, "") = :estado_matricula
+			  AND ((fecha IS NULL AND :fecha IS NULL) OR fecha = :fecha)
+			LIMIT 1');
+		$stmt->execute([
+			'estudiante_id' => $studentId,
+			'carrera_id' => $careerId,
+			'estado_matricula' => mb_substr($estadoMatricula, 0, 50),
+			'fecha' => $fecha,
+		]);
+
+		if ($stmt->fetchColumn()) {
+			return false;
+		}
+
+		$insert = $db->prepare('INSERT INTO matriculas (estudiante_id, carrera_id, fecha, estado_matricula, estado, created_at, updated_at)
+			VALUES (:estudiante_id, :carrera_id, :fecha, :estado_matricula, "activo", NOW(), NOW())');
+		$insert->execute([
+			'estudiante_id' => $studentId,
+			'carrera_id' => $careerId,
+			'fecha' => $fecha,
+			'estado_matricula' => mb_substr($estadoMatricula, 0, 50),
+		]);
+
+		return true;
+	}
+
+	private function normalizeDateValue(string $raw): ?string
+	{
+		$raw = trim($raw);
+		if ($raw === '') {
+			return null;
+		}
+
+		$timestamp = strtotime($raw);
+		if ($timestamp === false) {
+			return null;
+		}
+
+		return date('Y-m-d', $timestamp);
+	}
+
+	private function upsertAcademicHistory(PDO $db, int $contactId, array $row): void
+	{
+		$userId = (int) ($row['id'] ?? 0);
+		if ($contactId <= 0 || $userId <= 0) {
+			return;
+		}
+
+		$stmt = $db->prepare('INSERT INTO crm_student_academic_history
+			(contacto_id, source_user_id, codigo_estudiante, carrera, matricula, nivel, estado_academico, periodo, payload, last_seen_at)
+			VALUES (:contacto_id, :source_user_id, :codigo_estudiante, :carrera, :matricula, :nivel, :estado_academico, :periodo, :payload, NOW())
+			ON DUPLICATE KEY UPDATE
+			codigo_estudiante = VALUES(codigo_estudiante),
+			carrera = VALUES(carrera),
+			matricula = VALUES(matricula),
+			nivel = VALUES(nivel),
+			estado_academico = VALUES(estado_academico),
+			periodo = VALUES(periodo),
+			payload = VALUES(payload),
+			last_seen_at = NOW()');
+
+		$stmt->execute([
+			'contacto_id' => $contactId,
+			'source_user_id' => $userId,
+			'codigo_estudiante' => mb_substr($this->resolveFirstValue($row, ['codigo_estudiante', 'codigo_matricula', 'matricula', 'codigo']), 0, 80),
+			'carrera' => mb_substr($this->resolveFirstValue($row, ['carrera', 'programa']), 0, 180),
+			'matricula' => mb_substr($this->resolveFirstValue($row, ['matricula', 'codigo_matricula']), 0, 120),
+			'nivel' => mb_substr($this->resolveFirstValue($row, ['nivel']), 0, 80),
+			'estado_academico' => mb_substr($this->resolveFirstValue($row, ['estado_academico', 'estado']), 0, 80),
+			'periodo' => mb_substr($this->resolveFirstValue($row, ['periodo']), 0, 80),
+			'payload' => json_encode($row, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+		]);
+	}
+
+	private function mergeSecondaryContacts(PDO $db, int $primaryContactId, string $identity): int
+	{
+		if ($primaryContactId <= 0 || $identity === '') {
+			return 0;
+		}
+
+		$stmt = $db->prepare("SELECT id
+			FROM contactos
+			WHERE id <> :primary_id
+			  AND REPLACE(REPLACE(REPLACE(UPPER(TRIM(COALESCE(cedula, ''))), '.', ''), '-', ''), ' ', '') = :identity
+			ORDER BY id ASC");
+		$stmt->execute([
+			'primary_id' => $primaryContactId,
+			'identity' => $identity,
+		]);
+
+		$rows = $stmt->fetchAll() ?: [];
+		$merged = 0;
+		foreach ($rows as $row) {
+			$secondaryId = (int) ($row['id'] ?? 0);
+			if ($secondaryId <= 0) {
+				continue;
+			}
+
+			if ($this->mergeOneSecondaryContact($db, $primaryContactId, $secondaryId)) {
+				$merged++;
+			}
+		}
+
+		return $merged;
+	}
+
+	private function mergeOneSecondaryContact(PDO $db, int $primaryContactId, int $secondaryContactId): bool
+	{
+		if ($primaryContactId <= 0 || $secondaryContactId <= 0 || $primaryContactId === $secondaryContactId) {
+			return false;
+		}
+
+		try {
+			$db->beginTransaction();
+
+			$db->prepare('UPDATE tickets SET contacto_id = :primary_id WHERE contacto_id = :secondary_id')
+				->execute(['primary_id' => $primaryContactId, 'secondary_id' => $secondaryContactId]);
+			$db->prepare('UPDATE interesados SET contacto_id = :primary_id WHERE contacto_id = :secondary_id')
+				->execute(['primary_id' => $primaryContactId, 'secondary_id' => $secondaryContactId]);
+			$db->prepare('UPDATE campana_destinatarios SET contacto_id = :primary_id WHERE contacto_id = :secondary_id')
+				->execute(['primary_id' => $primaryContactId, 'secondary_id' => $secondaryContactId]);
+			$db->prepare('UPDATE bot_conversaciones SET contacto_id = :primary_id WHERE contacto_id = :secondary_id')
+				->execute(['primary_id' => $primaryContactId, 'secondary_id' => $secondaryContactId]);
+
+			$db->prepare('INSERT IGNORE INTO crm_person_channels (contacto_id, channel_type, channel_value, source, created_at, updated_at)
+				SELECT :primary_id, channel_type, channel_value, source, NOW(), NOW()
+				FROM crm_person_channels
+				WHERE contacto_id = :secondary_id')
+				->execute(['primary_id' => $primaryContactId, 'secondary_id' => $secondaryContactId]);
+			$db->prepare('DELETE FROM crm_person_channels WHERE contacto_id = :secondary_id')
+				->execute(['secondary_id' => $secondaryContactId]);
+
+			$primaryStudentStmt = $db->prepare('SELECT id FROM estudiantes WHERE contacto_id = :contacto_id LIMIT 1');
+			$primaryStudentStmt->execute(['contacto_id' => $primaryContactId]);
+			$primaryStudentId = (int) ($primaryStudentStmt->fetchColumn() ?: 0);
+
+			$secondaryStudentStmt = $db->prepare('SELECT id FROM estudiantes WHERE contacto_id = :contacto_id LIMIT 1');
+			$secondaryStudentStmt->execute(['contacto_id' => $secondaryContactId]);
+			$secondaryStudentId = (int) ($secondaryStudentStmt->fetchColumn() ?: 0);
+
+			if ($secondaryStudentId > 0 && $primaryStudentId <= 0) {
+				$db->prepare('UPDATE estudiantes SET contacto_id = :primary_id, updated_at = NOW() WHERE id = :student_id LIMIT 1')
+					->execute(['primary_id' => $primaryContactId, 'student_id' => $secondaryStudentId]);
+			} elseif ($secondaryStudentId > 0 && $primaryStudentId > 0) {
+				$db->prepare('UPDATE matriculas SET estudiante_id = :primary_student WHERE estudiante_id = :secondary_student')
+					->execute(['primary_student' => $primaryStudentId, 'secondary_student' => $secondaryStudentId]);
+				$db->prepare('DELETE FROM estudiantes WHERE id = :student_id LIMIT 1')
+					->execute(['student_id' => $secondaryStudentId]);
+			}
+
+			$db->prepare('DELETE FROM contactos WHERE id = :secondary_id LIMIT 1')
+				->execute(['secondary_id' => $secondaryContactId]);
+
+			$db->commit();
+			return true;
+		} catch (Throwable $e) {
+			if ($db->inTransaction()) {
+				$db->rollBack();
+			}
+			return false;
+		}
 	}
 
 	private function getTableColumnsSafe(PDO $db, string $table): array

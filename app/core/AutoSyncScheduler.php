@@ -92,8 +92,19 @@ class AutoSyncScheduler
 				. ", AdjuntosErr=" . ($attachmentStats['errors'] ?? 0);
 
 			error_log($summary);
+			self::appendRunLog($summary, [
+				'created' => (int) ($result['created'] ?? 0),
+				'updated' => (int) ($result['updated'] ?? 0),
+				'skipped' => (int) ($result['skipped'] ?? 0),
+				'sync_errors' => (array) ($result['sync_errors'] ?? []),
+				'attachment_processed' => (int) ($attachmentStats['processed'] ?? 0),
+				'attachment_errors' => (int) ($attachmentStats['errors'] ?? 0),
+			]);
 		} catch (Throwable $e) {
 			error_log('AutoSyncScheduler direct execution error: ' . $e->getMessage());
+			self::appendRunLog('AutoSyncScheduler direct execution error: ' . $e->getMessage(), [
+				'exception' => $e->getMessage(),
+			]);
 		}
 	}
 
@@ -136,6 +147,25 @@ class AutoSyncScheduler
 	private static function getIntervalSeconds(): int
 	{
 		return max(10, (int) env('MAIL_AUTO_SYNC_SECONDS', self::DEFAULT_INTERVAL_SECONDS));
+	}
+
+	private static function appendRunLog(string $message, array $payload = []): void
+	{
+		$logFile = STORAGE_PATH . '/logs/auto_sync_runtime.log';
+		$logDir = dirname($logFile);
+		if (!is_dir($logDir)) {
+			@mkdir($logDir, 0755, true);
+		}
+
+		$line = '[' . date('Y-m-d H:i:s') . '] ' . $message;
+		if (!empty($payload)) {
+			$json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+			if (is_string($json) && $json !== '') {
+				$line .= ' | ' . $json;
+			}
+		}
+
+		@file_put_contents($logFile, $line . PHP_EOL, FILE_APPEND | LOCK_EX);
 	}
 
 	/**
