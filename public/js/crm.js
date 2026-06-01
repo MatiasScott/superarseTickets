@@ -387,11 +387,12 @@ document.addEventListener('DOMContentLoaded', () => {
 	pipelineLinks.forEach((link) => {
 		link.addEventListener('click', (e) => {
 			e.preventDefault();
-			const studentId = link.getAttribute('data-student-id');
-			if (!studentId) {
+			const entityId = link.getAttribute('data-student-id');
+			const entityType = String(link.getAttribute('data-entity-type') || 'student').toLowerCase() === 'contact' ? 'contact' : 'student';
+			if (!entityId) {
 				return;
 			}
-			loadStudentPipeline(studentId);
+			loadStudentPipeline(entityId, entityType);
 		});
 	});
 
@@ -474,12 +475,12 @@ document.addEventListener('DOMContentLoaded', () => {
 		});
 	};
 
-	const loadStudentPipeline = async (studentId) => {
+	const loadStudentPipeline = async (entityId, entityType = 'student') => {
 		try {
 			const body = document.getElementById('studentPipelineBody');
 			body.innerHTML = '<div class="text-center"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Cargando...</span></div></div>';
 
-			const response = await fetch(`${BASE_URL}crm/getStudentDetail?id=${studentId}`);
+			const response = await fetch(`${BASE_URL}crm/getStudentDetail?id=${encodeURIComponent(String(entityId || ''))}&entity_type=${encodeURIComponent(entityType)}`);
 			if (!response.ok) {
 				throw new Error('Error al cargar pipeline');
 			}
@@ -489,20 +490,26 @@ document.addEventListener('DOMContentLoaded', () => {
 				throw new Error(data.error || 'Error desconocido');
 			}
 
-			renderPipelineModal(data.student, data.estados, studentId, data.pipeline_history || []);
+			renderPipelineModal(data.student, data.estados, entityId, data.pipeline_history || [], entityType);
 		} catch (error) {
 			console.error('Error:', error);
 			document.getElementById('studentPipelineBody').innerHTML = `<div class="alert alert-danger">${escapeHtml(error.message)}</div>`;
 		}
 	};
 
-	const renderPipelineModal = (student, estados, studentId, pipelineHistory) => {
+	const renderPipelineModal = (student, estados, entityId, pipelineHistory, entityType = 'student') => {
 		const body = document.getElementById('studentPipelineBody');
 		const saveBtn = document.getElementById('saveStudentPipelineBtn');
-		saveBtn.setAttribute('data-student-id', String(studentId));
+		saveBtn.setAttribute('data-student-id', String(entityId));
+		saveBtn.setAttribute('data-entity-type', String(entityType));
 		saveBtn.textContent = 'Guardar etapa';
 
 		const currentStateId = Number(student.pipeline_estado_id || 0);
+		const isStudent = Number(student.is_student || 0) === 1;
+		const statusBadge = isStudent
+			? '<span class="badge text-bg-success">Estudiante Activo</span>'
+			: '<span class="badge text-bg-warning">Cliente Potencial</span>';
+		const statusMeta = isStudent ? 'Registro academico habilitado' : 'Aun sin registro academico';
 		const fullName = `${String(student.primer_nombre || '').trim()} ${String(student.segundo_nombre || '').trim()} ${String(student.primer_apellido || '').trim()} ${String(student.segundo_apellido || '').trim()}`.replace(/\s+/g, ' ').trim();
 		const options = ['<option value="">Seleccionar estado...</option>'];
 		const stageChips = [];
@@ -519,8 +526,8 @@ document.addEventListener('DOMContentLoaded', () => {
 				<div class="pipeline-topbar">
 					<div class="pipeline-avatar">${escapeHtml((fullName || 'E').charAt(0).toUpperCase())}</div>
 					<div>
-						<div class="pipeline-student-name">${escapeHtml(fullName || 'Estudiante')}</div>
-						<div class="pipeline-student-meta">Codigo ${escapeHtml(student.codigo_estudiante || '-')} • ${escapeHtml(student.carrera || 'Sin carrera')}</div>
+						<div class="pipeline-student-name d-flex align-items-center gap-2">${escapeHtml(fullName || 'Persona CRM')} ${statusBadge}</div>
+						<div class="pipeline-student-meta">${escapeHtml(statusMeta)} • Codigo ${escapeHtml(student.codigo_estudiante || '-')}</div>
 					</div>
 				</div>
 
@@ -567,6 +574,7 @@ document.addEventListener('DOMContentLoaded', () => {
 								<div class="pipeline-detail-label">Celular</div>
 								<div class="pipeline-detail-value">${escapeHtml(student.celular || student.telefono || '-')}</div>
 							</div>
+							${isStudent ? `
 							<div class="col-md-3">
 								<div class="pipeline-detail-label">Carrera</div>
 								<div class="pipeline-detail-value">${escapeHtml(student.carrera || '-')}</div>
@@ -583,6 +591,11 @@ document.addEventListener('DOMContentLoaded', () => {
 								<div class="pipeline-detail-label">Fecha matrícula</div>
 								<div class="pipeline-detail-value">${escapeHtml(student.fecha_matricula || '-')}</div>
 							</div>
+							` : `
+							<div class="col-md-12">
+								<div class="alert alert-light border mb-0">Aun no existe relacion academica en estudiantes. Se muestran solo datos CRM y seguimiento.</div>
+							</div>
+							`}
 						</div>
 					</div>
 
@@ -643,14 +656,22 @@ document.addEventListener('DOMContentLoaded', () => {
 		});
 
 		// Cargar datos en tabs
-		loadStudentHistory(studentId);
-		loadStudentTasks(studentId);
-		loadStudentTickets(studentId);
+		loadStudentHistory(entityId, entityType);
+		loadStudentTasks(entityId, entityType);
+		loadStudentTickets(entityId, entityType);
 	};
 
-	const loadStudentHistory = async (studentId) => {
+	const buildEntityQuery = (entityId, entityType = 'student') => {
+		const id = Number(entityId || 0);
+		if (String(entityType).toLowerCase() === 'contact') {
+			return `contacto_id=${encodeURIComponent(String(id))}`;
+		}
+		return `student_id=${encodeURIComponent(String(id))}`;
+	};
+
+	const loadStudentHistory = async (entityId, entityType = 'student') => {
 		try {
-			const response = await fetch(`${BASE_URL}crm/getCRMPipelineHistory?student_id=${studentId}`);
+			const response = await fetch(`${BASE_URL}crm/getCRMPipelineHistory?${buildEntityQuery(entityId, entityType)}`);
 			if (!response.ok) throw new Error('Error al cargar historial');
 
 			const data = await response.json();
@@ -845,7 +866,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		return select;
 	};
 
-	const renderStudentTasks = (payload, studentId) => {
+	const renderStudentTasks = (payload, entityId, entityType = 'student') => {
 		const container = document.getElementById('tareasList');
 		if (!container) return;
 
@@ -899,7 +920,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		container.innerHTML = `
 			<div class="crm-tasks-shell">
 				<form id="crmStudentTaskCreateForm" class="row g-2 mb-3">
-					<input type="hidden" name="student_id" value="${escapeHtml(studentId)}">
+					<input type="hidden" name="student_id" value="${escapeHtml(entityId)}">
 					<div class="col-md-3">
 						<label class="form-label mb-1">Tipo tarea</label>
 						<select name="tipo_tarea_id" class="form-select form-select-sm">${buildOptions(tipos, '', 'Sin tipo')}</select>
@@ -975,7 +996,11 @@ document.addEventListener('DOMContentLoaded', () => {
 			createForm.addEventListener('submit', async (event) => {
 				event.preventDefault();
 				const payload = new URLSearchParams();
-				payload.set('student_id', String(studentId));
+				if (String(entityType).toLowerCase() === 'contact') {
+					payload.set('contacto_id', String(entityId));
+				} else {
+					payload.set('student_id', String(entityId));
+				}
 				payload.set('tipo_tarea_id', String(createForm.querySelector('[name="tipo_tarea_id"]')?.value || ''));
 				payload.set('titulo', String(createForm.querySelector('[name="titulo"]')?.value || '').trim());
 				payload.set('propietario_id', String(createForm.querySelector('[name="propietario_id"]')?.value || ''));
@@ -997,8 +1022,8 @@ document.addEventListener('DOMContentLoaded', () => {
 						throw new Error(data.error || 'No se pudo crear la tarea');
 					}
 
-					await loadStudentTasks(studentId);
-					await loadStudentHistory(studentId);
+					await loadStudentTasks(entityId, entityType);
+					await loadStudentHistory(entityId, entityType);
 				} catch (error) {
 					alert(error.message || 'Error al guardar tarea');
 				}
@@ -1023,7 +1048,11 @@ document.addEventListener('DOMContentLoaded', () => {
 				setTaskRowStatus(row, 'pending', 'Cambios pendientes...');
 				saveTimers.set(timerKey, setTimeout(async () => {
 					const payload = new URLSearchParams();
-					payload.set('student_id', String(studentId));
+					if (String(entityType).toLowerCase() === 'contact') {
+						payload.set('contacto_id', String(entityId));
+					} else {
+						payload.set('student_id', String(entityId));
+					}
 					payload.set('task_id', String(taskId));
 					Array.from(row.querySelector('[data-task-rel-select]')?.selectedOptions || []).forEach((option) => payload.append('relacionados[]', String(option.value || '')));
 					Array.from(row.querySelector('[data-task-col-select]')?.selectedOptions || []).forEach((option) => payload.append('colaboradores[]', String(option.value || '')));
@@ -1039,7 +1068,7 @@ document.addEventListener('DOMContentLoaded', () => {
 						if (!response.ok || !data.success) throw new Error(data.error || 'No se pudo guardar.');
 						setTaskRowStatus(row, 'saved', 'Auto-guardado listo');
 						flashTaskRow(row, 'crm-task-row-saved');
-						await loadStudentHistory(studentId);
+						await loadStudentHistory(entityId, entityType);
 					} catch (error) {
 						setTaskRowStatus(row, 'error', 'Error al guardar');
 						flashTaskRow(row, 'crm-task-row-error');
@@ -1052,7 +1081,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
 			row.querySelector('[data-task-result-select]')?.addEventListener('change', async (event) => {
 				const payload = new URLSearchParams();
-				payload.set('student_id', String(studentId));
+				if (String(entityType).toLowerCase() === 'contact') {
+					payload.set('contacto_id', String(entityId));
+				} else {
+					payload.set('student_id', String(entityId));
+				}
 				payload.set('task_id', String(taskId));
 				payload.set('resultado_id', String(event.target.value || ''));
 				try {
@@ -1066,7 +1099,7 @@ document.addEventListener('DOMContentLoaded', () => {
 					if (!response.ok || !data.success) throw new Error(data.error || 'No se pudo guardar resultado.');
 					setTaskRowStatus(row, 'saved', 'Resultado guardado');
 					flashTaskRow(row, 'crm-task-row-saved');
-					await loadStudentHistory(studentId);
+					await loadStudentHistory(entityId, entityType);
 				} catch (error) {
 					setTaskRowStatus(row, 'error', 'Error al guardar resultado');
 					flashTaskRow(row, 'crm-task-row-error');
@@ -1075,7 +1108,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
 			row.querySelector('[data-task-complete-btn]')?.addEventListener('click', async () => {
 				const payload = new URLSearchParams();
-				payload.set('student_id', String(studentId));
+				if (String(entityType).toLowerCase() === 'contact') {
+					payload.set('contacto_id', String(entityId));
+				} else {
+					payload.set('student_id', String(entityId));
+				}
 				payload.set('task_id', String(taskId));
 				try {
 					setTaskRowStatus(row, 'saving', 'Cerrando tarea...');
@@ -1086,8 +1123,8 @@ document.addEventListener('DOMContentLoaded', () => {
 					});
 					const data = await response.json();
 					if (!response.ok || !data.success) throw new Error(data.error || 'No se pudo completar la tarea');
-					await loadStudentTasks(studentId);
-					await loadStudentHistory(studentId);
+					await loadStudentTasks(entityId, entityType);
+					await loadStudentHistory(entityId, entityType);
 				} catch (error) {
 					setTaskRowStatus(row, 'error', 'Error al completar');
 					flashTaskRow(row, 'crm-task-row-error');
@@ -1098,13 +1135,13 @@ document.addEventListener('DOMContentLoaded', () => {
 		renderCrmTaskCountdowns(container);
 	};
 
-	const loadStudentTasks = async (studentId) => {
+	const loadStudentTasks = async (entityId, entityType = 'student') => {
 		try {
-			const response = await fetch(`${BASE_URL}crm/getStudentTasks?student_id=${studentId}`);
+			const response = await fetch(`${BASE_URL}crm/getStudentTasks?${buildEntityQuery(entityId, entityType)}`);
 			if (!response.ok) throw new Error('Error al cargar tareas');
 			const data = await response.json();
 			if (!data.success) throw new Error(data.error || 'Error desconocido');
-			renderStudentTasks(data, studentId);
+			renderStudentTasks(data, entityId, entityType);
 		} catch (error) {
 			console.error('Error:', error);
 			const container = document.getElementById('tareasList');
@@ -1114,9 +1151,9 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 	};
 
-	const loadStudentTickets = async (studentId) => {
+	const loadStudentTickets = async (entityId, entityType = 'student') => {
 		try {
-			const response = await fetch(`${BASE_URL}crm/getStudentTicketsByEmail?student_id=${studentId}`);
+			const response = await fetch(`${BASE_URL}crm/getStudentTicketsByEmail?${buildEntityQuery(entityId, entityType)}`);
 			let data = null;
 			try {
 				data = await response.json();
@@ -1254,7 +1291,8 @@ document.addEventListener('DOMContentLoaded', () => {
 	const savePipelineBtn = document.getElementById('saveStudentPipelineBtn');
 	if (savePipelineBtn) {
 		savePipelineBtn.addEventListener('click', async () => {
-			const studentId = Number(savePipelineBtn.getAttribute('data-student-id') || 0);
+			const entityId = Number(savePipelineBtn.getAttribute('data-student-id') || 0);
+			const entityType = String(savePipelineBtn.getAttribute('data-entity-type') || 'student').toLowerCase() === 'contact' ? 'contact' : 'student';
 			const explicitState = Number(document.getElementById('pipelineStateId')?.value || 0);
 			const fallbackState = Number(document.getElementById('pipelineSelect')?.value || 0);
 			const estadoId = explicitState > 0 ? explicitState : fallbackState;
@@ -1264,7 +1302,7 @@ document.addEventListener('DOMContentLoaded', () => {
 				statusBox.className = 'd-none';
 				statusBox.textContent = '';
 			}
-			if (studentId <= 0 || estadoId <= 0) {
+			if (entityId <= 0 || estadoId <= 0) {
 				if (statusBox) {
 					statusBox.className = 'alert alert-warning py-2 mb-3';
 					statusBox.textContent = 'Selecciona una etapa de pipeline antes de guardar.';
@@ -1272,10 +1310,12 @@ document.addEventListener('DOMContentLoaded', () => {
 				return;
 			}
 
-			const payload = new URLSearchParams({
-				student_id: String(studentId),
-				estado_id: String(estadoId),
-			});
+			const payload = new URLSearchParams({ estado_id: String(estadoId) });
+			if (entityType === 'contact') {
+				payload.set('contacto_id', String(entityId));
+			} else {
+				payload.set('student_id', String(entityId));
+			}
 
 			try {
 				savePipelineBtn.disabled = true;
@@ -1289,7 +1329,7 @@ document.addEventListener('DOMContentLoaded', () => {
 					throw new Error(data.error || 'No se pudo actualizar pipeline');
 				}
 
-				const row = document.querySelector(`tr[data-student-id="${studentId}"]`);
+				const row = document.querySelector(`tr[data-student-id="${entityId}"]`);
 				if (row) {
 					const pipelineCell = row.querySelector('.pipeline-col');
 					if (pipelineCell) {
@@ -1297,7 +1337,7 @@ document.addEventListener('DOMContentLoaded', () => {
 					}
 				}
 
-				await loadStudentPipeline(studentId);
+				await loadStudentPipeline(entityId, entityType);
 				const refreshedStatusBox = document.getElementById('pipelineSaveStatus');
 				if (refreshedStatusBox) {
 					refreshedStatusBox.className = 'alert alert-success py-2 mb-3';

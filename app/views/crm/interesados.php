@@ -5,6 +5,9 @@
 	<?php $sourceLabel = $sourceLabel ?? 'No disponible'; ?>
 	<?php $sourceError = $sourceError ?? ''; ?>
 	<?php $prospectosLocales = $prospectosLocales ?? []; ?>
+	<?php $pPage = (int) ($pPage ?? 1); ?>
+	<?php $pPages = (int) ($pPages ?? 1); ?>
+	<?php $totalProspects = (int) ($totalProspects ?? 0); ?>
 	<div class="container-fluid py-4">
 		<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
 			<div>
@@ -59,8 +62,7 @@
 			<table class="table table-hover align-middle" id="crmStudentsTable">
 				<thead>
 					<tr>
-						<th>ID</th>
-						<th>Codigo</th>
+						<th>Nro. Identificación</th>
 						<th>Nombre</th>
 						<th>Email</th>
 						<th>Carrera</th>
@@ -78,8 +80,7 @@
 							data-student-name="<?= e(strtolower(trim((($item['nombre'] ?? '') . ' ' . ($item['apellido'] ?? '')))) ) ?>"
 							data-student-career="<?= e(strtolower((string) ($item['carrera'] ?? ''))) ?>"
 						>
-							<td><?= e($item['id'] ?? '-') ?></td>
-							<td><?= e($item['codigo_estudiante'] ?? '-') ?></td>
+							<td><?= e($item['numero_identificacion'] ?? '-') ?></td>
 							<td>
 								<a href="#" class="student-contact-link" data-student-id="<?= e($item['id'] ?? '') ?>" data-bs-toggle="modal" data-bs-target="#studentContactModal">
 									<?= e(trim((($item['nombre'] ?? '') . ' ' . ($item['apellido'] ?? '')))) ?>
@@ -98,12 +99,13 @@
 									type="button"
 									class="btn btn-sm btn-outline-primary student-pipeline-action"
 									data-student-id="<?= e($item['id'] ?? '') ?>"
+									data-entity-type="student"
 									data-bs-toggle="modal"
 									data-bs-target="#studentPipelineModal"
-									title="Editar pipeline"
-									aria-label="Editar pipeline"
+									title="Ver / Editar CRM"
+									aria-label="Ver / Editar CRM"
 								>
-									<i class="bi bi-pencil"></i>
+									<i class="bi bi-pencil-square"></i>
 								</button>
 							</td>
 						</tr>
@@ -134,6 +136,7 @@
 								<th>Etapa</th>
 								<th>Origen</th>
 								<th>Creado</th>
+								<th class="text-end">Acciones</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -147,11 +150,25 @@
 									<td><span class="badge text-bg-light border"><?= e($prospecto['etapa'] ?? 'Sin etapa') ?></span></td>
 									<td><?= e($prospecto['origen'] ?? '-') ?></td>
 									<td><?= e($prospecto['created_at'] ?? '-') ?></td>
+									<td class="text-end">
+										<button
+											type="button"
+											class="btn btn-sm btn-outline-primary student-pipeline-action"
+											data-student-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
+											data-entity-type="contact"
+											data-bs-toggle="modal"
+											data-bs-target="#studentPipelineModal"
+											title="Ver / Editar CRM"
+											aria-label="Ver / Editar CRM"
+										>
+											<i class="bi bi-pencil-square"></i> Ver / Editar CRM
+										</button>
+									</td>
 								</tr>
 							<?php endforeach; ?>
 							<?php if (empty($prospectosLocales)): ?>
 								<tr>
-									<td colspan="8" class="text-center text-muted py-4">No hay clientes potenciales CRM creados todavia.</td>
+									<td colspan="9" class="text-center text-muted py-4">No hay clientes potenciales CRM creados todavia.</td>
 								</tr>
 							<?php endif; ?>
 						</tbody>
@@ -159,6 +176,42 @@
 				</div>
 			</div>
 		</div>
+
+		<?php
+		$qBase = '';
+		if ($periodoSeleccionado !== '') {
+			$qBase .= 'periodo=' . rawurlencode($periodoSeleccionado) . '&';
+		}
+		?>
+		<?php if ($pPages > 1): ?>
+		<nav class="mt-3" aria-label="Paginacion clientes potenciales">
+			<ul class="pagination pagination-sm justify-content-center flex-wrap">
+				<li class="page-item <?= $pPage <= 1 ? 'disabled' : '' ?>">
+					<a class="page-link" href="<?= e(base_url('crm/interesados?' . $qBase . 'page=' . ($pPage - 1))) ?>">&#8249; Anterior</a>
+				</li>
+				<?php
+				$rangeStart = max(1, $pPage - 2);
+				$rangeEnd   = min($pPages, $pPage + 2);
+				if ($rangeStart > 1): ?>
+					<li class="page-item"><a class="page-link" href="<?= e(base_url('crm/interesados?' . $qBase . 'page=1')) ?>">1</a></li>
+					<?php if ($rangeStart > 2): ?><li class="page-item disabled"><span class="page-link">…</span></li><?php endif; ?>
+				<?php endif; ?>
+				<?php for ($p = $rangeStart; $p <= $rangeEnd; $p++): ?>
+					<li class="page-item <?= $p === $pPage ? 'active' : '' ?>">
+						<a class="page-link" href="<?= e(base_url('crm/interesados?' . $qBase . 'page=' . $p)) ?>"><?= $p ?></a>
+					</li>
+				<?php endfor; ?>
+				<?php if ($rangeEnd < $pPages): ?>
+					<?php if ($rangeEnd < $pPages - 1): ?><li class="page-item disabled"><span class="page-link">…</span></li><?php endif; ?>
+					<li class="page-item"><a class="page-link" href="<?= e(base_url('crm/interesados?' . $qBase . 'page=' . $pPages)) ?>"><?= $pPages ?></a></li>
+				<?php endif; ?>
+				<li class="page-item <?= $pPage >= $pPages ? 'disabled' : '' ?>">
+					<a class="page-link" href="<?= e(base_url('crm/interesados?' . $qBase . 'page=' . ($pPage + 1))) ?>">Siguiente &#8250;</a>
+				</li>
+			</ul>
+			<p class="text-center text-muted small">Página <?= $pPage ?> de <?= $pPages ?> &mdash; <?= $totalProspects ?> clientes potenciales</p>
+		</nav>
+		<?php endif; ?>
 	</div>
 </section>
 

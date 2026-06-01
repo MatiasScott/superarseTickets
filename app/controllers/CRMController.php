@@ -257,7 +257,13 @@ class CRMController extends Controller
 		$studentsData = $this->fetchSuperarseStudents(1000, $periodoFiltro);
 		$estudiantesSuperarse = is_array($studentsData['rows'] ?? null) ? $studentsData['rows'] : [];
 		$periodos = is_array($studentsData['periodos'] ?? null) ? $studentsData['periodos'] : [];
-		$prospectosLocales = $this->fetchLocalProspects();
+
+		$pPerPage = 25;
+		$pPage    = max(1, (int) ($_GET['page'] ?? 1));
+		$totalProspects = $this->countLocalProspects();
+		$pPages   = max(1, (int) ceil($totalProspects / $pPerPage));
+		$pPage    = min($pPage, $pPages);
+		$prospectosLocales = $this->fetchLocalProspects($pPerPage, ($pPage - 1) * $pPerPage);
 
 		$this->view('crm/interesados', [
 			'estudiantesSuperarse' => $estudiantesSuperarse,
@@ -266,6 +272,9 @@ class CRMController extends Controller
 			'periodoSeleccionado' => $periodoFiltro,
 			'sourceLabel' => (string) ($studentsData['source'] ?? 'No disponible'),
 			'sourceError' => (string) ($studentsData['error'] ?? ''),
+			'pPage'          => $pPage,
+			'pPages'         => $pPages,
+			'totalProspects' => $totalProspects,
 		], [
 			'title' => 'CRM - Ver todo CRM',
 		]);
@@ -356,6 +365,25 @@ class CRMController extends Controller
 
 			$db->commit();
 
+			// Registrar evento histórico inicial en el timeline CRM
+			try {
+				$origenLabel = $origen !== '' ? $origen : 'crm_manual';
+				$etapaLabel  = 'Sin etapa';
+				if ($estadoInicialId !== null) {
+					$etapaStmt = $db->prepare('SELECT nombre FROM pipeline_estados WHERE id = :id LIMIT 1');
+					$etapaStmt->execute([':id' => $estadoInicialId]);
+					$etapaLabel = (string) ($etapaStmt->fetchColumn() ?: 'Sin etapa');
+				}
+				$noteText = sprintf(
+					'Creó el cliente potencial. Etapa inicial: %s. Origen: %s.',
+					$etapaLabel,
+					$origenLabel
+				);
+				$this->crmHistoryNote($contactId, 'prospect_created', $noteText);
+			} catch (Throwable $ignore) {
+				// No interrumpir el flujo por el historial
+			}
+
 			set_flash('success', $isNew
 				? 'Cliente potencial creado correctamente.'
 				: 'Cliente potencial actualizado y vinculado correctamente.');
@@ -376,7 +404,7 @@ class CRMController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
-			$sql = "SELECT e.id, e.codigo_estudiante, e.estado,
+			$sql = "SELECT e.id, e.numero_identificacion, e.estado,
 					   c.nombre, c.apellido,
 					   ca.nombre AS carrera
 					FROM estudiantes e
@@ -434,7 +462,7 @@ class CRMController extends Controller
 
 				$sql = "SELECT
 						u.id,
-						u.codigo_matricula AS codigo_estudiante,
+						u.numero_identificacion AS numero_identificacion,
 						TRIM(CONCAT_WS(' ', u.primer_nombre, u.segundo_nombre)) AS nombre,
 						TRIM(CONCAT_WS(' ', u.primer_apellido, u.segundo_apellido)) AS apellido,
 						u.correo_electronico AS email,
@@ -973,9 +1001,10 @@ class CRMController extends Controller
 		}
 	}
 
-	private function fetchLocalProspects(int $limit = 500): array
+	private function fetchLocalProspects(int $perPage = 25, int $offset = 0): array
 	{
-		$limit = max(50, min(3000, $limit));
+		$perPage = max(10, min(200, $perPage));
+		$offset  = max(0, $offset);
 		try {
 			$db = Database::getInstance()->connection();
 			$sql = "SELECT
@@ -1005,14 +1034,25 @@ class CRMController extends Controller
 			) tc ON tc.contacto_id = i.contacto_id
 			WHERE i.estado = 'activo'
 			ORDER BY i.id DESC
-			LIMIT :limit";
+			LIMIT :perPage OFFSET :offset";
 
 			$stmt = $db->prepare($sql);
-			$stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+			$stmt->bindValue(':perPage', $perPage, PDO::PARAM_INT);
+			$stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
 			$stmt->execute();
 			return $stmt->fetchAll() ?: [];
 		} catch (Throwable $e) {
 			return [];
+		}
+	}
+
+	private function countLocalProspects(): int
+	{
+		try {
+			$db = Database::getInstance()->connection();
+			return (int) $db->query("SELECT COUNT(*) FROM interesados WHERE estado = 'activo'")->fetchColumn();
+		} catch (Throwable $e) {
+			return 0;
 		}
 	}
 
@@ -1379,8 +1419,13 @@ class CRMController extends Controller
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
 
-		$studentId = max(0, (int) ($_GET['id'] ?? 0));
-		if ($studentId <= 0) {
+		$entityId = max(0, (int) ($_GET['id'] ?? 0));
+		$entityType = strtolower(trim((string) ($_GET['entity_type'] ?? 'student')));
+		if ($entityType !== 'contact') {
+			$entityType = 'student';
+		}
+
+		if ($entityId <= 0) {
 			http_response_code(400);
 			echo json_encode(['success' => false, 'error' => 'ID inválido']);
 			exit;
@@ -1388,71 +1433,123 @@ class CRMController extends Controller
 
 		try {
 			$this->ensureCrmSupportTables();
-			$remote = $this->connectSuperarseDatabase();
-			if ($remote === null) {
-				throw new RuntimeException('No se pudo conectar a Superarse');
-			}
+			$db = Database::getInstance()->connection();
+			$student = null;
+			$pipelineKey = $entityId;
 
-			$sourceTable = $this->resolveSuperarseStudentTable($remote);
-			if ($sourceTable === null) {
-				throw new RuntimeException('Tabla de estudiantes no encontrada');
-			}
+			if ($entityType === 'contact') {
+				$stmtLocal = $db->prepare("SELECT
+					c.id AS id,
+					'' AS codigo_estudiante,
+					c.nombre AS primer_nombre,
+					'' AS segundo_nombre,
+					c.apellido AS primer_apellido,
+					'' AS segundo_apellido,
+					c.email AS email,
+					COALESCE(tp.telefono, '') AS telefono,
+					COALESCE(tp.telefono, '') AS celular,
+					'' AS carrera,
+					'' AS nivel,
+					'' AS sede,
+					COALESCE(c.estado, 'activo') AS estado,
+					c.created_at AS fecha_matricula,
+					COALESCE(i.origen, 'crm_manual') AS origen,
+					COALESCE(i.convertido, 0) AS convertido,
+					i.id AS interesado_id,
+					e.id AS estudiante_local_id
+				FROM contactos c
+				LEFT JOIN interesados i ON i.contacto_id = c.id
+				LEFT JOIN estudiantes e ON e.contacto_id = c.id
+				LEFT JOIN (
+					SELECT t1.contacto_id, t1.telefono
+					FROM telefonos_contacto t1
+					INNER JOIN (
+						SELECT contacto_id, MIN(id) AS first_id
+						FROM telefonos_contacto
+						WHERE estado = 'activo'
+						GROUP BY contacto_id
+					) tx ON tx.first_id = t1.id
+				) tp ON tp.contacto_id = c.id
+				WHERE c.id = :id
+				LIMIT 1");
+				$stmtLocal->bindValue(':id', $entityId, PDO::PARAM_INT);
+				$stmtLocal->execute();
+				$student = $stmtLocal->fetch();
+				if (!$student) {
+					throw new RuntimeException('Contacto no encontrado');
+				}
 
-			if ($sourceTable === 'users') {
-				$sql = "SELECT
-						u.id,
-						u.codigo_matricula AS codigo_estudiante,
-						u.primer_nombre,
-						u.segundo_nombre,
-						u.primer_apellido,
-						u.segundo_apellido,
-						u.correo_electronico AS email,
-						u.telefono,
-						u.celular,
-						u.programa AS carrera,
-						u.nivel,
-						u.sede,
-						u.estado,
-						u.fecha_matricula
-					FROM users u
-					WHERE u.id = :id
-					LIMIT 1";
+				$student['is_student'] = !empty($student['estudiante_local_id']) ? 1 : 0;
+				$student['entity_type'] = 'contact';
 			} else {
-				$sql = "SELECT
-						e.id,
-						e.codigo_estudiante,
-						c.nombre AS primer_nombre,
-						'' AS segundo_nombre,
-						c.apellido AS primer_apellido,
-						'' AS segundo_apellido,
-						c.email,
-						c.telefono,
-						'' AS celular,
-						ca.nombre AS carrera,
-						'' AS sede,
-						e.estado,
-						e.created_at AS fecha_matricula
-					FROM estudiantes e
-					LEFT JOIN contactos c ON c.id = e.contacto_id
-					LEFT JOIN matriculas m ON m.estudiante_id = e.id
-					LEFT JOIN carreras ca ON ca.id = m.carrera_id
-					WHERE e.id = :id
-					LIMIT 1";
-			}
+				$remote = $this->connectSuperarseDatabase();
+				if ($remote === null) {
+					throw new RuntimeException('No se pudo conectar a Superarse');
+				}
 
-			$stmt = $remote->prepare($sql);
-			$stmt->bindValue(':id', $studentId, PDO::PARAM_INT);
-			$stmt->execute();
-			$student = $stmt->fetch();
+				$sourceTable = $this->resolveSuperarseStudentTable($remote);
+				if ($sourceTable === null) {
+					throw new RuntimeException('Tabla de estudiantes no encontrada');
+				}
 
-			if (!$student) {
-				throw new RuntimeException('Estudiante no encontrado');
+				if ($sourceTable === 'users') {
+					$sql = "SELECT
+							u.id,
+							u.codigo_matricula AS codigo_estudiante,
+							u.primer_nombre,
+							u.segundo_nombre,
+							u.primer_apellido,
+							u.segundo_apellido,
+							u.correo_electronico AS email,
+							u.telefono,
+							u.celular,
+							u.programa AS carrera,
+							u.nivel,
+							u.sede,
+							u.estado,
+							u.fecha_matricula
+						FROM users u
+						WHERE u.id = :id
+						LIMIT 1";
+				} else {
+					$sql = "SELECT
+							e.id,
+							e.codigo_estudiante,
+							c.nombre AS primer_nombre,
+							'' AS segundo_nombre,
+							c.apellido AS primer_apellido,
+							'' AS segundo_apellido,
+							c.email,
+							c.telefono,
+							'' AS celular,
+							ca.nombre AS carrera,
+							'' AS sede,
+							e.estado,
+							e.created_at AS fecha_matricula
+						FROM estudiantes e
+						LEFT JOIN contactos c ON c.id = e.contacto_id
+						LEFT JOIN matriculas m ON m.estudiante_id = e.id
+						LEFT JOIN carreras ca ON ca.id = m.carrera_id
+						WHERE e.id = :id
+						LIMIT 1";
+				}
+
+				$stmt = $remote->prepare($sql);
+				$stmt->bindValue(':id', $entityId, PDO::PARAM_INT);
+				$stmt->execute();
+				$student = $stmt->fetch();
+
+				if (!$student) {
+					throw new RuntimeException('Estudiante no encontrado');
+				}
+
+				$student['is_student'] = 1;
+				$student['entity_type'] = 'student';
 			}
 
 			// Obtener estados del pipeline
-			$db = Database::getInstance()->connection();
 			$currentPipelineStmt = $db->prepare('SELECT estado_id FROM crm_student_pipeline WHERE student_id = :student_id LIMIT 1');
-			$currentPipelineStmt->execute([':student_id' => $studentId]);
+			$currentPipelineStmt->execute([':student_id' => $pipelineKey]);
 			$currentPipeline = $currentPipelineStmt->fetch();
 			$student['pipeline_estado_id'] = (int) ($currentPipeline['estado_id'] ?? 0);
 			$pipelineEstados = $db->query("SELECT id, nombre FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC")->fetchAll() ?: [];
@@ -1465,10 +1562,10 @@ class CRMController extends Controller
 				FROM crm_student_notes csn
 				LEFT JOIN usuarios u ON u.id = csn.created_by
 				WHERE csn.student_id = :student_id
-				AND csn.source_type IN ('estado_change', 'task_create', 'task_participants', 'task_result', 'task_complete')
+				AND csn.source_type IN ('prospect_created', 'estado_change', 'task_create', 'task_participants', 'task_result', 'task_complete')
 				ORDER BY csn.created_at DESC
 				LIMIT 30");
-			$historyStmt->execute([':student_id' => $studentId]);
+			$historyStmt->execute([':student_id' => $pipelineKey]);
 			$pipelineHistory = $historyStmt->fetchAll() ?: [];
 
 			echo json_encode([
@@ -1489,7 +1586,7 @@ class CRMController extends Controller
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
 
-		$studentId = max(0, (int) ($_POST['student_id'] ?? 0));
+		$studentId = max(0, (int) ($_POST['student_id'] ?? $_POST['contacto_id'] ?? 0));
 		$estadoId = max(0, (int) ($_POST['estado_id'] ?? 0));
 
 		if ($studentId <= 0 || $estadoId <= 0) {
@@ -1560,7 +1657,7 @@ class CRMController extends Controller
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
 
-		$studentId = max(0, (int) ($_GET['student_id'] ?? 0));
+		$studentId = max(0, (int) ($_GET['student_id'] ?? $_GET['contacto_id'] ?? 0));
 		if ($studentId <= 0) {
 			http_response_code(400);
 			echo json_encode(['success' => false, 'error' => 'ID inválido']);
@@ -1590,7 +1687,7 @@ class CRMController extends Controller
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
 
-		$studentId = max(0, (int) ($_POST['student_id'] ?? 0));
+		$studentId = max(0, (int) ($_POST['student_id'] ?? $_POST['contacto_id'] ?? 0));
 		$titulo = trim((string) ($_POST['titulo'] ?? ''));
 		$propietarioId = max(0, (int) ($_POST['propietario_id'] ?? 0));
 
@@ -1661,7 +1758,7 @@ class CRMController extends Controller
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
 
-		$studentId = max(0, (int) ($_POST['student_id'] ?? 0));
+		$studentId = max(0, (int) ($_POST['student_id'] ?? $_POST['contacto_id'] ?? 0));
 		$taskId = max(0, (int) ($_POST['task_id'] ?? 0));
 		if ($studentId <= 0 || $taskId <= 0) {
 			http_response_code(400);
@@ -1740,7 +1837,7 @@ class CRMController extends Controller
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
 
-		$studentId = max(0, (int) ($_POST['student_id'] ?? 0));
+		$studentId = max(0, (int) ($_POST['student_id'] ?? $_POST['contacto_id'] ?? 0));
 		$taskId = max(0, (int) ($_POST['task_id'] ?? 0));
 		if ($studentId <= 0 || $taskId <= 0) {
 			http_response_code(400);
@@ -1789,7 +1886,7 @@ class CRMController extends Controller
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
 
-		$studentId = max(0, (int) ($_POST['student_id'] ?? 0));
+		$studentId = max(0, (int) ($_POST['student_id'] ?? $_POST['contacto_id'] ?? 0));
 		$taskId = max(0, (int) ($_POST['task_id'] ?? 0));
 		if ($studentId <= 0 || $taskId <= 0) {
 			http_response_code(400);
@@ -2003,7 +2100,7 @@ class CRMController extends Controller
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
 
-		$studentId = max(0, (int) ($_GET['student_id'] ?? 0));
+		$studentId = max(0, (int) ($_GET['student_id'] ?? $_GET['contacto_id'] ?? 0));
 		if ($studentId <= 0) {
 			http_response_code(400);
 			echo json_encode(['success' => false, 'error' => 'ID inválido']);
@@ -2037,7 +2134,7 @@ class CRMController extends Controller
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
 
-		$studentId = max(0, (int) ($_GET['student_id'] ?? 0));
+		$studentId = max(0, (int) ($_GET['student_id'] ?? $_GET['contacto_id'] ?? 0));
 		if ($studentId <= 0) {
 			http_response_code(400);
 			echo json_encode(['success' => false, 'error' => 'ID inválido']);
@@ -2058,6 +2155,16 @@ class CRMController extends Controller
 				}
 			} catch (Throwable $e) {
 				// Fallback silencioso
+			}
+
+			if ($studentEmail === '') {
+				try {
+					$contactStmt = $db->prepare('SELECT email FROM contactos WHERE id = ? LIMIT 1');
+					$contactStmt->execute([$studentId]);
+					$studentEmail = (string) ($contactStmt->fetchColumn() ?? '');
+				} catch (Throwable $e) {
+					$studentEmail = '';
+				}
 			}
 
 			// Obtener extras desde tabla local
@@ -2081,6 +2188,20 @@ class CRMController extends Controller
 				if (!empty($e)) {
 					$emails[] = $e;
 				}
+			}
+
+			try {
+				$extraContactEmails = $db->prepare('SELECT correo FROM correos_contacto WHERE contacto_id = ? AND estado = "activo"');
+				$extraContactEmails->execute([$studentId]);
+				$extraRows = $extraContactEmails->fetchAll() ?: [];
+				foreach ($extraRows as $extraRow) {
+					$mail = trim((string) ($extraRow['correo'] ?? ''));
+					if ($mail !== '') {
+						$emails[] = $mail;
+					}
+				}
+			} catch (Throwable $e) {
+				// sin correos extra
 			}
 			$emails = array_unique(array_filter($emails));
 

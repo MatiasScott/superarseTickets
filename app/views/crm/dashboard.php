@@ -2,8 +2,6 @@
 	<?php $admisionesRows = $admisionesRows ?? []; ?>
 	<?php $matriculasRows = $matriculasRows ?? []; ?>
 	<?php $docenciaRows = $docenciaRows ?? []; ?>
-	<?php $kpiMatriculas3233 = $kpiMatriculas3233 ?? ['label' => '', 'levels' => ['1' => 0, '2' => 0, '3' => 0, '4' => 0], 'total' => 0]; ?>
-	<?php $kpiMatriculas45 = $kpiMatriculas45 ?? ['label' => '', 'levels' => ['1' => 0, '2' => 0, '3' => 0, '4' => 0], 'total' => 0]; ?>
 	<?php $matriculasTotales = ['1' => 0, '2' => 0, '3' => 0, '4' => 0, 'total' => 0]; ?>
 	<?php foreach ($matriculasRows as $row): ?>
 		<?php $matriculasTotales['1'] += (int) ($row['levels']['1'] ?? 0); ?>
@@ -33,7 +31,7 @@
 		</div>
 
 		<div class="card mb-3">
-			<div class="card-header"><i class="bi bi-person-badge"></i> Admisiones</div>
+			<div class="card-header"><i class="bi bi-person-badge"></i> CRM de Admisiones</div>
 			<div class="table-responsive">
 				<table class="table table-hover mb-0 crm-summary-table">
 					<thead>
@@ -60,65 +58,8 @@
 			</div>
 		</div>
 
-		<div class="row g-3 mb-3">
-			<div class="col-lg-6">
-				<div class="card h-100 crm-kpi-card">
-					<div class="card-header"><i class="bi bi-speedometer2"></i> <?= e((string) ($kpiMatriculas3233['label'] ?? 'KPI')) ?></div>
-					<div class="card-body p-0">
-						<table class="table mb-0 crm-level-table">
-							<thead>
-								<tr>
-									<th>N1</th>
-									<th>N2</th>
-									<th>N3</th>
-									<th>N4</th>
-									<th>TOTAL</th>
-								</tr>
-							</thead>
-							<tbody>
-								<tr>
-									<td><?= e((string) ((int) (($kpiMatriculas3233['levels']['1'] ?? 0)))) ?></td>
-									<td><?= e((string) ((int) (($kpiMatriculas3233['levels']['2'] ?? 0)))) ?></td>
-									<td><?= e((string) ((int) (($kpiMatriculas3233['levels']['3'] ?? 0)))) ?></td>
-									<td><?= e((string) ((int) (($kpiMatriculas3233['levels']['4'] ?? 0)))) ?></td>
-									<td class="fw-bold"><?= e((string) ((int) ($kpiMatriculas3233['total'] ?? 0))) ?></td>
-								</tr>
-							</tbody>
-						</table>
-					</div>
-				</div>
-			</div>
-			<div class="col-lg-6">
-				<div class="card h-100 crm-kpi-card accent-success">
-					<div class="card-header"><i class="bi bi-speedometer"></i> <?= e((string) ($kpiMatriculas45['label'] ?? 'KPI')) ?></div>
-					<div class="card-body p-0">
-						<table class="table mb-0 crm-level-table">
-							<thead>
-								<tr>
-									<th>N1</th>
-									<th>N2</th>
-									<th>N3</th>
-									<th>N4</th>
-									<th>TOTAL</th>
-								</tr>
-							</thead>
-							<tbody>
-								<tr>
-									<td><?= e((string) ((int) (($kpiMatriculas45['levels']['1'] ?? 0)))) ?></td>
-									<td><?= e((string) ((int) (($kpiMatriculas45['levels']['2'] ?? 0)))) ?></td>
-									<td><?= e((string) ((int) (($kpiMatriculas45['levels']['3'] ?? 0)))) ?></td>
-									<td><?= e((string) ((int) (($kpiMatriculas45['levels']['4'] ?? 0)))) ?></td>
-									<td class="fw-bold"><?= e((string) ((int) ($kpiMatriculas45['total'] ?? 0))) ?></td>
-								</tr>
-							</tbody>
-						</table>
-					</div>
-				</div>
-			</div>
-		</div>
-
 		<div class="card mb-3">
-			<div class="card-header"><i class="bi bi-journal-check"></i> Matriculas</div>
+			<div class="card-header"><i class="bi bi-journal-check"></i> CRM de Matriculas</div>
 			<div class="table-responsive">
 				<table class="table table-hover mb-0 crm-level-table">
 					<thead>

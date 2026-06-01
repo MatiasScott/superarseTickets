@@ -27,9 +27,7 @@ $convenios = $convenios ?? [];
                             <th>Tipo convenio</th>
                             <th>Tipo acuerdo</th>
                             <th>Tipo institución</th>
-                            <th>En ejecución</th>
                             <th>Estado convenio</th>
-                            <th>Estado</th>
                             <th class="text-end">Notas</th>
                             <th class="text-end">Tareas</th>
                             <th>Acciones</th>
@@ -55,10 +53,8 @@ $convenios = $convenios ?? [];
                                     <td><?= e($empresa !== '' ? $empresa : '-') ?></td>
                                     <td><?= e($tipo !== '' ? $tipo : '-') ?></td>
                                     <td><?= e($tipoAcuerdo !== '' ? $tipoAcuerdo : '-') ?></td>
-                                    <td><?= e($tipoInstitucion !== '' ? $tipoInstitucion : '-') ?></td>
-                                    <td><?= e($enEjecucion !== '' ? $enEjecucion : '-') ?></td>
+                                    <td><?= e($tipoInstitucion !== '' ? $tipoInstitucion : '-') ?></td>                                    
                                     <td><span class="badge text-bg-light border"><?= e($estadoConvenio !== '' ? $estadoConvenio : '-') ?></span></td>
-                                    <td><span class="badge text-bg-light border"><?= e($estado !== '' ? $estado : '-') ?></span></td>
                                     <td class="text-end"><?= (int) ($row['total_notas'] ?? 0) ?></td>
                                     <td class="text-end"><?= (int) ($row['total_tareas'] ?? 0) ?></td>
                                     <td>
