@@ -878,7 +878,6 @@ document.addEventListener('DOMContentLoaded', () => {
 		const taskRowsHtml = tasks.map((task) => {
 			const taskId = Number(task.id || 0);
 			const locked = Number(task.completado || 0) === 1 || String(task.estado || '').toLowerCase() === 'completada';
-			const relIds = parseTaskIds(task.relacionados_ids);
 			const colIds = parseTaskIds(task.colaboradores_ids);
 
 			return `
@@ -894,11 +893,6 @@ document.addEventListener('DOMContentLoaded', () => {
 						<span class="crm-deadline-pill" data-crm-task-countdown data-date="${escapeHtml(task.fecha_vencimiento || '')}" data-time="${escapeHtml(task.hora_vencimiento || '')}" data-status="${escapeHtml(task.estado || '')}" data-completed="${locked ? '1' : '0'}">Calculando...</span>
 					</td>
 					<td>
-						<input type="text" class="form-control form-control-sm mb-1" data-task-rel-search placeholder="Buscar por nombre..." ${locked ? 'disabled' : ''}>
-						<select class="form-select form-select-sm" data-task-rel-select multiple size="4" ${locked ? 'disabled' : ''}>${buildUserMultiOptions(usuarios, relIds)}</select>
-						<div class="crm-task-preview empty" data-task-rel-preview><span class="crm-task-empty-text">Sin seleccionados</span></div>
-					</td>
-					<td>
 						<input type="text" class="form-control form-control-sm mb-1" data-task-col-search placeholder="Buscar por nombre..." ${locked ? 'disabled' : ''}>
 						<select class="form-select form-select-sm" data-task-col-select multiple size="4" ${locked ? 'disabled' : ''}>${buildUserMultiOptions(usuarios, colIds)}</select>
 						<div class="crm-task-preview empty" data-task-col-preview><span class="crm-task-empty-text">Sin seleccionados</span></div>
@@ -910,7 +904,9 @@ document.addEventListener('DOMContentLoaded', () => {
 						<div class="crm-task-state-wrap">
 							<span class="crm-task-status-pill ${locked ? 'is-complete' : 'is-pending'}">Estado actual: ${locked ? 'Completada' : 'Pendiente'}</span>
 							<span class="crm-task-save-status" data-task-save-status="${locked ? 'saved' : 'idle'}">${locked ? 'Bloqueada por completado' : 'Auto-guardado activo'}</span>
-							${locked ? '<small class="text-muted">Tarea cerrada, sin edición.</small>' : '<button type="button" class="btn btn-outline-success btn-sm" data-task-complete-btn>Marcar completada</button>'}
+							${locked
+								? '<small class="text-muted">Tarea cerrada, sin edición.</small>'
+								: '<label class="form-check d-flex align-items-center gap-2 mb-0"><input type="checkbox" class="form-check-input" data-task-complete-check><span class="form-check-label text-success fw-semibold"><i class="bi bi-check2-square"></i> Marcar completada</span></label>'}
 						</div>
 					</td>
 				</tr>
@@ -923,7 +919,10 @@ document.addEventListener('DOMContentLoaded', () => {
 					<input type="hidden" name="student_id" value="${escapeHtml(entityId)}">
 					<div class="col-md-3">
 						<label class="form-label mb-1">Tipo tarea</label>
-						<select name="tipo_tarea_id" class="form-select form-select-sm">${buildOptions(tipos, '', 'Sin tipo')}</select>
+						<div class="position-relative">
+							<select name="tipo_tarea_id" class="form-select form-select-sm pe-5">${buildOptions(tipos, '', 'Seleccionar')}</select>
+							<span class="position-absolute top-50 end-0 translate-middle-y pe-2 text-muted"><i class="bi bi-chevron-down"></i></span>
+						</div>
 					</div>
 					<div class="col-md-5">
 						<label class="form-label mb-1">Titulo</label>
@@ -950,12 +949,6 @@ document.addEventListener('DOMContentLoaded', () => {
 						<select name="resultado_id" class="form-select form-select-sm">${buildOptions(resultados, '', 'Sin resultado')}</select>
 					</div>
 					<div class="col-md-3">
-						<label class="form-label mb-1">Relacionados</label>
-						<input type="text" class="form-control form-control-sm mb-1" data-create-rel-search placeholder="Buscar por nombre...">
-						<select name="relacionados[]" class="form-select form-select-sm" data-create-rel-select multiple size="4">${buildUserMultiOptions(usuarios, [])}</select>
-						<div class="crm-task-preview empty" data-create-rel-preview><span class="crm-task-empty-text">Sin seleccionados</span></div>
-					</div>
-					<div class="col-md-3">
 						<label class="form-label mb-1">Colaboradores</label>
 						<input type="text" class="form-control form-control-sm mb-1" data-create-col-search placeholder="Buscar por nombre...">
 						<select name="colaboradores[]" class="form-select form-select-sm" data-create-col-select multiple size="4">${buildUserMultiOptions(usuarios, [])}</select>
@@ -974,14 +967,13 @@ document.addEventListener('DOMContentLoaded', () => {
 								<th>Tipo</th>
 								<th>Propietario</th>
 								<th>Vence</th>
-								<th>Relacionados</th>
 								<th>Colaboradores</th>
 								<th>Resultado</th>
 								<th>Estado</th>
 							</tr>
 						</thead>
 						<tbody>
-							${taskRowsHtml || '<tr><td colspan="8" class="text-center text-muted py-4">Sin tareas registradas.</td></tr>'}
+							${taskRowsHtml || '<tr><td colspan="7" class="text-center text-muted py-4">Sin tareas registradas.</td></tr>'}
 						</tbody>
 					</table>
 				</div>
@@ -990,7 +982,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
 		const createForm = document.getElementById('crmStudentTaskCreateForm');
 		if (createForm) {
-			bindTaskSelectBlock(createForm, '[data-create-rel-search]', '[data-create-rel-select]', '[data-create-rel-preview]');
 			bindTaskSelectBlock(createForm, '[data-create-col-search]', '[data-create-col-select]', '[data-create-col-preview]');
 
 			createForm.addEventListener('submit', async (event) => {
@@ -1008,7 +999,6 @@ document.addEventListener('DOMContentLoaded', () => {
 				payload.set('fecha_vencimiento', String(createForm.querySelector('[name="fecha_vencimiento"]')?.value || ''));
 				payload.set('hora_vencimiento', String(createForm.querySelector('[name="hora_vencimiento"]')?.value || ''));
 				payload.set('resultado_id', String(createForm.querySelector('[name="resultado_id"]')?.value || ''));
-				Array.from(createForm.querySelector('[data-create-rel-select]')?.selectedOptions || []).forEach((option) => payload.append('relacionados[]', String(option.value || '')));
 				Array.from(createForm.querySelector('[data-create-col-select]')?.selectedOptions || []).forEach((option) => payload.append('colaboradores[]', String(option.value || '')));
 
 				try {
@@ -1034,7 +1024,6 @@ document.addEventListener('DOMContentLoaded', () => {
 		container.querySelectorAll('[data-task-row]').forEach((row) => {
 			const locked = row.getAttribute('data-locked') === '1';
 			const taskId = Number(row.getAttribute('data-task-id') || 0);
-			bindTaskSelectBlock(row, '[data-task-rel-search]', '[data-task-rel-select]', '[data-task-rel-preview]');
 			bindTaskSelectBlock(row, '[data-task-col-search]', '[data-task-col-select]', '[data-task-col-preview]');
 
 			if (locked || taskId <= 0) {
@@ -1054,7 +1043,6 @@ document.addEventListener('DOMContentLoaded', () => {
 						payload.set('student_id', String(entityId));
 					}
 					payload.set('task_id', String(taskId));
-					Array.from(row.querySelector('[data-task-rel-select]')?.selectedOptions || []).forEach((option) => payload.append('relacionados[]', String(option.value || '')));
 					Array.from(row.querySelector('[data-task-col-select]')?.selectedOptions || []).forEach((option) => payload.append('colaboradores[]', String(option.value || '')));
 
 					try {
@@ -1076,7 +1064,6 @@ document.addEventListener('DOMContentLoaded', () => {
 				}, 450));
 			};
 
-			row.querySelector('[data-task-rel-select]')?.addEventListener('change', scheduleParticipantsSave);
 			row.querySelector('[data-task-col-select]')?.addEventListener('change', scheduleParticipantsSave);
 
 			row.querySelector('[data-task-result-select]')?.addEventListener('change', async (event) => {
@@ -1106,7 +1093,10 @@ document.addEventListener('DOMContentLoaded', () => {
 				}
 			});
 
-			row.querySelector('[data-task-complete-btn]')?.addEventListener('click', async () => {
+			row.querySelector('[data-task-complete-check]')?.addEventListener('change', async (event) => {
+				if (!event.target.checked) {
+					return;
+				}
 				const payload = new URLSearchParams();
 				if (String(entityType).toLowerCase() === 'contact') {
 					payload.set('contacto_id', String(entityId));
@@ -1126,6 +1116,7 @@ document.addEventListener('DOMContentLoaded', () => {
 					await loadStudentTasks(entityId, entityType);
 					await loadStudentHistory(entityId, entityType);
 				} catch (error) {
+					event.target.checked = false;
 					setTaskRowStatus(row, 'error', 'Error al completar');
 					flashTaskRow(row, 'crm-task-row-error');
 				}

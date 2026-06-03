@@ -107,19 +107,9 @@ function sidebarActive(string $prefix, string $relPath): string {
 		</div>
 		<?php endif; ?>
 
-		<?php if ($canContactos || $canCrm || $canCampanas): ?>
+		<?php if ($canCampanas): ?>
 		<div class="sidebar-section">
 			<p class="sidebar-title">Académico</p>
-			<?php if ($canContactos): ?>
-			<a href="<?= e(base_url('contactos')) ?>" class="sidebar-link<?= sidebarActive('contactos', $relPath) ?>">
-				<span class="icon"><i class="bi bi-people"></i></span> Contactos
-			</a>
-			<?php endif; ?>
-			<?php if ($canCrm): ?>
-			<a href="<?= e(base_url('crm/estudiantes')) ?>" class="sidebar-link<?= sidebarActive('crm/estudiantes', $relPath) ?>">
-				<span class="icon"><i class="bi bi-mortarboard"></i></span> Estudiantes
-			</a>
-			<?php endif; ?>
 			<?php if ($canCampanas): ?>
 			<a href="<?= e(base_url('campanas')) ?>" class="sidebar-link<?= sidebarActive('campanas', $relPath) ?>">
 				<span class="icon"><i class="bi bi-megaphone"></i></span> Campañas

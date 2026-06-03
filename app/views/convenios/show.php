@@ -185,12 +185,15 @@ $convenioId = (int) ($convenio['id'] ?? 0);
 
                     <div class="col-md-3">
                         <label class="form-label">Tipo tarea</label>
-                        <select name="tipo_tarea_id" class="form-select form-select-sm">
-                            <option value="">Sin tipo</option>
-                            <?php foreach ($tiposTarea as $tipo): ?>
-                                <option value="<?= (int) ($tipo['id'] ?? 0) ?>"><?= e((string) ($tipo['nombre'] ?? '')) ?></option>
-                            <?php endforeach; ?>
-                        </select>
+                        <div class="position-relative">
+                            <select name="tipo_tarea_id" class="form-select form-select-sm pe-5">
+                                <option value="">Seleccionar</option>
+                                <?php foreach ($tiposTarea as $tipo): ?>
+                                    <option value="<?= (int) ($tipo['id'] ?? 0) ?>"><?= e((string) ($tipo['nombre'] ?? '')) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <span class="position-absolute top-50 end-0 translate-middle-y pe-2 text-muted"><i class="bi bi-chevron-down"></i></span>
+                        </div>
                     </div>
 
                     <div class="col-md-5">
@@ -234,32 +237,6 @@ $convenioId = (int) ($convenio['id'] ?? 0);
                     </div>
 
                     <div class="col-md-3">
-                        <label class="form-label">Relacionados</label>
-                        <input
-                            type="text"
-                            class="form-control form-control-sm mb-1"
-                            placeholder="Buscar por nombre..."
-                            data-multiselect-search="relacionados-select"
-                            autocomplete="off"
-                        >
-                        <select
-                            id="relacionados-select"
-                            name="relacionados[]"
-                            class="form-select form-select-sm"
-                            multiple
-                            size="4"
-                            data-multiselect-target
-                        >
-                            <?php foreach ($usuarios as $u): ?>
-                                <option value="<?= (int) ($u['id'] ?? 0) ?>"><?= e((string) ($u['nombre'] ?? '')) ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                        <div class="selected-preview empty" data-selected-preview="relacionados-select">
-                            <span class="selected-empty-text">Sin seleccionados</span>
-                        </div>
-                    </div>
-
-                    <div class="col-md-3">
                         <label class="form-label">Colaboradores</label>
                         <input
                             type="text"
@@ -300,7 +277,6 @@ $convenioId = (int) ($convenio['id'] ?? 0);
                                 <th>Tipo</th>
                                 <th>Propietario</th>
                                 <th>Vence</th>
-                                <th>Relacionados</th>
                                 <th>Colaboradores</th>
                                 <th>Resultado</th>
                                 <th>Estado</th>
@@ -309,7 +285,7 @@ $convenioId = (int) ($convenio['id'] ?? 0);
                         <tbody>
                             <?php if (empty($tareas)): ?>
                                 <tr>
-                                    <td colspan="8" class="text-center text-muted">Sin tareas registradas.</td>
+                                    <td colspan="7" class="text-center text-muted">Sin tareas registradas.</td>
                                 </tr>
                             <?php else: ?>
                                 <?php foreach ($tareas as $t): ?>
@@ -318,17 +294,6 @@ $convenioId = (int) ($convenio['id'] ?? 0);
                                     $estadoRaw = trim((string) ($t['estado'] ?? 'pendiente'));
                                     $isTaskCompleted = !empty($t['completado']) || $estadoRaw === 'completada';
                                     $estadoVisual = $isTaskCompleted ? 'completada' : 'pendiente';
-
-                                    $relacionadosSeleccionados = [];
-                                    $relIdsRaw = trim((string) ($t['relacionados_ids'] ?? ''));
-                                    if ($relIdsRaw !== '') {
-                                        foreach (explode(',', $relIdsRaw) as $relIdPart) {
-                                            $relIdValue = (int) $relIdPart;
-                                            if ($relIdValue > 0) {
-                                                $relacionadosSeleccionados[$relIdValue] = true;
-                                            }
-                                        }
-                                    }
 
                                     $colaboradoresSeleccionados = [];
                                     $colIdsRaw = trim((string) ($t['colaboradores_ids'] ?? ''));
@@ -361,37 +326,6 @@ $convenioId = (int) ($convenio['id'] ?? 0);
                                             >
                                                 Calculando...
                                             </span>
-                                        </td>
-                                        <td class="col-relacionados">
-                                            <input
-                                                type="text"
-                                                class="form-control form-control-sm mb-1"
-                                                placeholder="Buscar por nombre..."
-                                                data-multiselect-search="rel-row-<?= $taskId ?>"
-                                                autocomplete="off"
-                                                form="participants-form-<?= $taskId ?>"
-                                                <?= $isTaskCompleted ? 'disabled' : '' ?>
-                                            >
-                                            <select
-                                                id="rel-row-<?= $taskId ?>"
-                                                name="relacionados[]"
-                                                class="form-select form-select-sm"
-                                                multiple
-                                                size="5"
-                                                data-multiselect-target
-                                                form="participants-form-<?= $taskId ?>"
-                                                <?= $isTaskCompleted ? 'disabled' : '' ?>
-                                            >
-                                                <?php foreach ($usuarios as $u): ?>
-                                                    <?php $uid = (int) ($u['id'] ?? 0); ?>
-                                                    <option value="<?= $uid ?>" <?= isset($relacionadosSeleccionados[$uid]) ? 'selected' : '' ?>>
-                                                        <?= e((string) ($u['nombre'] ?? '')) ?>
-                                                    </option>
-                                                <?php endforeach; ?>
-                                            </select>
-                                            <div class="selected-preview empty" data-selected-preview="rel-row-<?= $taskId ?>">
-                                                <span class="selected-empty-text">Sin seleccionados</span>
-                                            </div>
                                         </td>
                                         <td class="col-colaboradores">
                                             <input
@@ -464,7 +398,10 @@ $convenioId = (int) ($convenio['id'] ?? 0);
                                                     Estado actual: <?= $isTaskCompleted ? 'Completada' : 'Pendiente' ?>
                                                 </span>
                                                 <?php if (!$isTaskCompleted): ?>
-                                                    <button type="button" class="btn btn-outline-success btn-sm" data-complete-btn>Marcar completada</button>
+                                                    <label class="form-check d-flex align-items-center gap-2 mb-0">
+                                                        <input type="checkbox" class="form-check-input" data-complete-check>
+                                                        <span class="form-check-label text-success fw-semibold"><i class="bi bi-check2-square"></i> Marcar completada</span>
+                                                    </label>
                                                 <?php else: ?>
                                                     <small class="text-muted">Tarea cerrada, sin edición.</small>
                                                 <?php endif; ?>
@@ -721,8 +658,8 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     stateForms.forEach((form) => {
-        const completeBtn = form.querySelector('[data-complete-btn]');
-        if (!completeBtn) return;
+        const completeCheck = form.querySelector('[data-complete-check]');
+        if (!completeCheck) return;
 
         const stateLabel = form.querySelector('.status-pill');
 
@@ -753,13 +690,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 flashRow(form, 'row-saved-flash');
                 setSaveStatus(form, 'saved', 'Estado guardado');
             } catch (error) {
+                completeCheck.checked = false;
                 flashRow(form, 'row-error-flash');
                 setSaveStatus(form, 'error', 'Error al guardar estado');
             }
         };
 
-        completeBtn.addEventListener('click', () => {
-            completeTask();
+        completeCheck.addEventListener('change', () => {
+            if (!completeCheck.checked) {
+                return;
+            }
+			completeTask();
         });
     });
 
