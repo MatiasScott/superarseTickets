@@ -9,9 +9,11 @@ class CRMController extends Controller
 		$admisionesRows = [
 			'adm_1' => ['label' => '1. Etapa interesados', 'count' => 0],
 			'adm_2' => ['label' => '2. Etapa seguimiento', 'count' => 0],
-			'adm_31' => ['label' => '3.1 Etapa nuevos siguiente paso', 'count' => 0],
+			'adm_no_legaliza' => ['label' => 'Siguiente periodo no legaliza matricula', 'count' => 0],
+			'adm_descalificado' => ['label' => 'Descalificado', 'count' => 0],
 		];
 		$matriculasRows = [
+			'mat_31' => ['label' => '3.1 Etapa nuevos siguiente paso', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
 			'mat_32' => ['label' => '3.2 Inscrito reingreso y homologacion siguiente paso', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
 			'mat_33' => ['label' => '3.3 Pendiente prematricula antiguos siguiente paso', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
 			'mat_4' => ['label' => '4. Prematricula nuevos y antiguos siguiente paso', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
@@ -21,11 +23,9 @@ class CRMController extends Controller
 			'doc_riesgo_financiero' => ['label' => 'Riesgo financiero', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
 			'doc_riesgo_academico' => ['label' => 'Riesgo academico', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
 			'doc_riesgo_af' => ['label' => 'Riesgo a+f', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
-			'doc_no_legaliza' => ['label' => 'Siguiente periodo no legaliza matricula', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
 			'doc_retiro_anulacion' => ['label' => 'Retiro y anulacion de matricula', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
 			'doc_egresado' => ['label' => 'Egresado', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
 			'doc_graduado' => ['label' => 'Graduado', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
-			'doc_descalificado' => ['label' => 'Descalificado', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
 		];
 
 		$kpiMatriculas3233 = [
@@ -158,7 +158,7 @@ class CRMController extends Controller
 		$byCode = [
 			'1' => 'adm_1',
 			'2' => 'adm_2',
-			'3.1' => 'adm_31',
+			'3.1' => 'mat_31',
 			'3.2' => 'mat_32',
 			'3.3' => 'mat_33',
 			'4' => 'mat_4',
@@ -176,7 +176,9 @@ class CRMController extends Controller
 		$aliases = [
 			'adm_1' => ['etapa interesados'],
 			'adm_2' => ['etapa seguimiento'],
-			'adm_31' => ['etapa nuevos siguiente paso', 'etapa nuevos siguiente pao'],
+			'adm_no_legaliza' => ['siguiente periodo no legaliza matricula'],
+			'adm_descalificado' => ['descalificado'],
+			'mat_31' => ['etapa nuevos siguiente paso', 'etapa nuevos siguiente pao'],
 			'mat_32' => ['inscrito reingreso y homologacion siguiente paso', 'inscrito reingreso y homologacion siguiente pao'],
 			'mat_33' => ['pendiente prematricula antiguos siguiente paso', 'pendiente prematricula antiguos siguiente pao'],
 			'mat_4' => ['prematricula nuevos y antiguos siguiente paso', 'prematricula nuevos y antiguos siguiente pao'],
@@ -184,11 +186,9 @@ class CRMController extends Controller
 			'doc_riesgo_financiero' => ['riesgo financiero'],
 			'doc_riesgo_academico' => ['riesgo academico'],
 			'doc_riesgo_af' => ['riesgo a f', 'riesgo af'],
-			'doc_no_legaliza' => ['siguiente periodo no legaliza matricula'],
 			'doc_retiro_anulacion' => ['retiro y anulacion de matricula'],
 			'doc_egresado' => ['egresado'],
 			'doc_graduado' => ['graduado'],
-			'doc_descalificado' => ['descalificado'],
 		];
 
 		foreach ($aliases as $key => $checks) {
