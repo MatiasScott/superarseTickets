@@ -1,3 +1,4 @@
+<?php if (false): ?>
 <div class="container-fluid py-4">
 	<div class="d-flex justify-content-between align-items-center mb-3">
 		<div>
@@ -127,3 +128,11 @@
 		</div>
 	<?php endif; ?>
 </div>
+<?php endif; ?>
+
+<section class="module-page">
+	<div class="container-fluid py-5 text-center">
+		<h1 class="display-3 fw-bold mb-3">PROXIMAMENTE</h1>
+		<p class="lead text-muted mb-0">Vista en construccion.</p>
+	</div>
+</section>

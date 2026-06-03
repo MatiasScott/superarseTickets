@@ -1,4 +1,5 @@
 <?php
+if (false):
 $visible = (int) ($visibleCount ?? 0);
 $unread = (int) ($unreadCount ?? 0);
 $total = (int) ($totalMessages ?? 0);
@@ -154,5 +155,13 @@ $whatsAppBadgeClass = $whatsAppConnected ? 'success' : 'warning';
 				</div>
 			</article>
 		</div>
+	</div>
+</section>
+<?php endif; ?>
+
+<section class="module-page">
+	<div class="container-fluid py-5 text-center">
+		<h1 class="display-3 fw-bold mb-3">PROXIMAMENTE</h1>
+		<p class="lead text-muted mb-0">Vista en construccion.</p>
 	</div>
 </section>
