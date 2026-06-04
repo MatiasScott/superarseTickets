@@ -355,6 +355,9 @@ class TicketController extends Controller
 				$stmtC = $db->prepare("SELECT * FROM contactos WHERE id = :cid LIMIT 1");
 				$stmtC->execute(['cid' => $ticket['contacto_id']]);
 				$contacto = $stmtC->fetch() ?: [];
+				if (!empty($contacto)) {
+					$contacto = $this->enrichTicketContactIdentification($contacto);
+				}
 
 				// Historial de tickets del contacto (excluyendo el actual)
 				$stmtH = $db->prepare("SELECT t.id, t.codigo, t.asunto, t.created_at,
@@ -1724,5 +1727,117 @@ class TicketController extends Controller
 		}
 
 		return null;
+	}
+
+	private function enrichTicketContactIdentification(array $contacto): array
+	{
+		$identityCandidates = ['numero_identificacion', 'identificacion', 'documento', 'cedula'];
+		foreach ($identityCandidates as $field) {
+			$value = trim((string) ($contacto[$field] ?? ''));
+			if ($value === '') {
+				continue;
+			}
+
+			if (stripos($value, 'MAIL') !== 0) {
+				return $contacto;
+			}
+		}
+
+		$email = '';
+		$emailCandidates = ['email', 'correo', 'correo_electronico'];
+		foreach ($emailCandidates as $field) {
+			$candidate = strtolower(trim((string) ($contacto[$field] ?? '')));
+			if ($candidate !== '' && MailService::isValidEmail($candidate)) {
+				$email = $candidate;
+				break;
+			}
+		}
+
+		if ($email === '') {
+			return $contacto;
+		}
+
+		$remote = $this->connectSuperarseDatabase();
+		if (!($remote instanceof PDO)) {
+			return $contacto;
+		}
+
+		$userColumns = $this->getTableColumnsSafe($remote, 'users');
+		if (empty($userColumns)) {
+			return $contacto;
+		}
+
+		$remoteEmailColumn = $this->detectEmailColumn($userColumns);
+		if ($remoteEmailColumn === null) {
+			return $contacto;
+		}
+
+		$selectColumns = [];
+		foreach ($identityCandidates as $field) {
+			if (in_array($field, $userColumns, true)) {
+				$selectColumns[] = $field;
+			}
+		}
+
+		if (empty($selectColumns)) {
+			return $contacto;
+		}
+
+		$sql = 'SELECT ' . implode(', ', $selectColumns) . ' FROM users WHERE LOWER(TRIM(' . $remoteEmailColumn . ')) = :email LIMIT 1';
+		try {
+			$stmt = $remote->prepare($sql);
+			$stmt->execute(['email' => $email]);
+			$row = $stmt->fetch() ?: [];
+		} catch (Throwable $e) {
+			return $contacto;
+		}
+
+		foreach ($identityCandidates as $field) {
+			$value = trim((string) ($row[$field] ?? ''));
+			if ($value === '' || stripos($value, 'MAIL') === 0) {
+				continue;
+			}
+
+			$contacto['numero_identificacion'] = $value;
+			if (trim((string) ($contacto['cedula'] ?? '')) === '' || stripos((string) ($contacto['cedula'] ?? ''), 'MAIL') === 0) {
+				$contacto['cedula'] = $value;
+			}
+			break;
+		}
+
+		return $contacto;
+	}
+
+	private function connectSuperarseDatabase(): ?PDO
+	{
+		$host = trim((string) env('SUPERARSE_DB_HOST', ''));
+		$port = trim((string) env('SUPERARSE_DB_PORT', '3306'));
+		$database = trim((string) env('SUPERARSE_DB_DATABASE', ''));
+		$username = trim((string) env('SUPERARSE_DB_USERNAME', ''));
+		$password = (string) env('SUPERARSE_DB_PASSWORD', '');
+		$charset = trim((string) env('SUPERARSE_DB_CHARSET', 'utf8mb4'));
+
+		if ($host === '' || $database === '' || $username === '') {
+			return null;
+		}
+
+		$dsn = 'mysql:host=' . $host . ';port=' . $port . ';dbname=' . $database . ';charset=' . $charset;
+		try {
+			return new PDO($dsn, $username, $password, [
+				PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+				PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+			]);
+		} catch (Throwable $e) {
+			return null;
+		}
+	}
+
+	private function getTableColumnsSafe(PDO $db, string $table): array
+	{
+		try {
+			return $this->getTableColumns($db, $table);
+		} catch (Throwable $e) {
+			return [];
+		}
 	}
 }

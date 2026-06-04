@@ -23,6 +23,28 @@ $contactoNombre = trim((string) (($contacto['nombre'] ?? '') . ' ' . ($contacto[
 $contactoEmail = (string) ($contacto['email'] ?? '');
 $createdAt = (string) ($ticket['created_at'] ?? '');
 
+$contactoIdentificacion = '';
+$idCandidates = [
+    'numero_identificacion',
+    'identificacion',
+    'documento',
+    'cedula',
+];
+foreach ($idCandidates as $idField) {
+    $value = trim((string) ($contacto[$idField] ?? ''));
+    if ($value === '') {
+        continue;
+    }
+
+    // Evita exponer identificadores técnicos temporales generados desde correo.
+    if (stripos($value, 'MAIL') === 0) {
+        continue;
+    }
+
+    $contactoIdentificacion = $value;
+    break;
+}
+
 $defaultAlias = $responseAccountAlias;
 if ($defaultAlias === '' && !empty($mailAccounts)) {
     $defaultAlias = (string) ($mailAccounts[0]['alias'] ?? '');
@@ -391,8 +413,8 @@ $phones = array_values(array_unique($phones));
                                 <div class="timeline-meta"><?= e($ph) ?></div>
                             <?php endforeach; ?>
                         <?php endif; ?>
-                        <?php if (!empty($contacto['cedula'])): ?>
-                            <div class="timeline-meta">CI: <?= e((string) $contacto['cedula']) ?></div>
+                        <?php if ($contactoIdentificacion !== ''): ?>
+                            <div class="timeline-meta">CI: <?= e($contactoIdentificacion) ?></div>
                         <?php endif; ?>
                     <?php else: ?>
                         <div class="timeline-meta">Sin contacto asociado.</div>
