@@ -210,6 +210,27 @@ class ConfiguracionController extends Controller
 			$total = 1;
 		}
 
+		$envPath = env_file_path();
+		if (is_file($envPath)) {
+			$content = (string) @file_get_contents($envPath);
+			if ($content !== '') {
+				$matches = [];
+				preg_match_all('/^\s*MAIL_ACCOUNT_(\d+)_/m', $content, $matches);
+				if (!empty($matches[1])) {
+					$detectedMax = 0;
+					foreach ($matches[1] as $rawIndex) {
+						$idx = (int) $rawIndex;
+						if ($idx > $detectedMax) {
+							$detectedMax = $idx;
+						}
+					}
+					if ($detectedMax > $total) {
+						$total = $detectedMax;
+					}
+				}
+			}
+		}
+
 		for ($i = 1; $i <= $total; $i++) {
 			$prefix = 'MAIL_ACCOUNT_' . $i . '_';
 			$accounts[] = [

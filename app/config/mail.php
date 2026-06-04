@@ -6,6 +6,27 @@ if ($accountsTotal < 1) {
 	$accountsTotal = 1;
 }
 
+$envPath = function_exists('env_file_path') ? env_file_path() : (dirname(APP_PATH) . '/.env');
+if (is_file($envPath)) {
+	$content = (string) @file_get_contents($envPath);
+	if ($content !== '') {
+		$matches = [];
+		preg_match_all('/^\s*MAIL_ACCOUNT_(\d+)_/m', $content, $matches);
+		if (!empty($matches[1])) {
+			$detectedMax = 0;
+			foreach ($matches[1] as $rawIndex) {
+				$idx = (int) $rawIndex;
+				if ($idx > $detectedMax) {
+					$detectedMax = $idx;
+				}
+			}
+			if ($detectedMax > $accountsTotal) {
+				$accountsTotal = $detectedMax;
+			}
+		}
+	}
+}
+
 for ($i = 1; $i <= $accountsTotal; $i++) {
 	$prefix = 'MAIL_ACCOUNT_' . $i . '_';
 	$email = trim((string) env($prefix . 'EMAIL', ''));
