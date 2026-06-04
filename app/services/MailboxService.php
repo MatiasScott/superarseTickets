@@ -179,7 +179,164 @@ class MailboxService
 			return $this->graphService->fetchDeltaForTicketing($account, $limit);
 		}
 
+		if ($this->isHistoricalBootstrapEnabled()) {
+			$historical = $this->fetchImapHistoricalForTicketing($account, $limit);
+			if (!$historical['ok']) {
+				return $historical;
+			}
+			if (!empty($historical['emails'])) {
+				return $historical;
+			}
+		}
+
 		return $this->fetchUnreadForTicketing($accountAlias, $limit);
+	}
+
+	private function isHistoricalBootstrapEnabled(): bool
+	{
+		$value = strtolower(trim((string) env('MAIL_TICKET_HISTORY_BOOTSTRAP_ENABLED', 'true')));
+		return $value !== 'false' && $value !== '0' && $value !== 'no';
+	}
+
+	private function historyYears(): int
+	{
+		$years = (int) env('MAIL_TICKET_HISTORY_YEARS', 3);
+		return max(1, min(10, $years));
+	}
+
+	private function historyStatePath(string $alias): string
+	{
+		$safe = preg_replace('/[^a-zA-Z0-9_\-]/', '_', strtolower(trim($alias))) ?: 'default';
+		return STORAGE_PATH . '/logs/.imap_history_bootstrap_' . $safe . '.json';
+	}
+
+	private function readHistoryState(string $alias): array
+	{
+		$path = $this->historyStatePath($alias);
+		if (!is_file($path)) {
+			return ['completed' => false, 'last_uid' => 0];
+		}
+
+		$raw = (string) @file_get_contents($path);
+		if ($raw === '') {
+			return ['completed' => false, 'last_uid' => 0];
+		}
+
+		$decoded = json_decode($raw, true);
+		if (!is_array($decoded)) {
+			return ['completed' => false, 'last_uid' => 0];
+		}
+
+		return [
+			'completed' => !empty($decoded['completed']),
+			'last_uid' => max(0, (int) ($decoded['last_uid'] ?? 0)),
+		];
+	}
+
+	private function writeHistoryState(string $alias, bool $completed, int $lastUid): void
+	{
+		$path = $this->historyStatePath($alias);
+		$dir = dirname($path);
+		if (!is_dir($dir)) {
+			@mkdir($dir, 0755, true);
+		}
+
+		$payload = [
+			'completed' => $completed,
+			'last_uid' => max(0, $lastUid),
+			'updated_at' => gmdate('c'),
+		];
+		@file_put_contents($path, json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
+	}
+
+	private function fetchImapHistoricalForTicketing(array $account, int $limit): array
+	{
+		if (!function_exists('imap_open')) {
+			return ['ok' => false, 'error' => 'La extension IMAP de PHP no esta habilitada. Activa extension=imap en php.ini.', 'emails' => []];
+		}
+
+		$alias = $this->getAccountAlias($account);
+		$state = $this->readHistoryState($alias);
+		if (!empty($state['completed'])) {
+			return ['ok' => true, 'error' => null, 'emails' => []];
+		}
+
+		$waitSeconds = $this->getImapBlockSeconds($alias);
+		if ($waitSeconds > 0) {
+			return ['ok' => false, 'error' => 'Proteccion local activa para evitar mas intentos fallidos. Espera ' . $waitSeconds . ' segundos y vuelve a intentar.', 'emails' => []];
+		}
+
+		$imap = $this->openInbox($account);
+		if (!is_resource($imap)) {
+			$error = $this->buildImapErrorMessage($this->lastImapError('No se pudo abrir la bandeja IMAP.'));
+			$this->registerImapFailure($alias, $error);
+			return ['ok' => false, 'error' => $error, 'emails' => []];
+		}
+
+		$this->clearImapFailure($alias);
+		$sinceDate = gmdate('d-M-Y', strtotime('-' . $this->historyYears() . ' years'));
+		$uids = imap_search($imap, 'SINCE "' . $sinceDate . '"', SE_UID);
+		if (!is_array($uids)) {
+			$uids = [];
+		}
+
+		sort($uids, SORT_NUMERIC);
+		$lastUid = max(0, (int) ($state['last_uid'] ?? 0));
+		$pending = array_values(array_filter($uids, static function ($uid) use ($lastUid): bool {
+			return (int) $uid > $lastUid;
+		}));
+
+		if (empty($pending)) {
+			$this->writeHistoryState($alias, true, $lastUid);
+			imap_close($imap);
+			return ['ok' => true, 'error' => null, 'emails' => []];
+		}
+
+		$slice = array_slice($pending, 0, max(1, $limit));
+		$emails = [];
+		$maxProcessedUid = $lastUid;
+
+		foreach ($slice as $uid) {
+			$msgNo = imap_msgno($imap, (int) $uid);
+			if ($msgNo <= 0) {
+				continue;
+			}
+
+			$overviewList = imap_fetch_overview($imap, (string) $uid, FT_UID);
+			$overview = is_array($overviewList) && isset($overviewList[0]) ? $overviewList[0] : null;
+			if ($overview === null) {
+				continue;
+			}
+
+			$headerInfo = imap_headerinfo($imap, $msgNo);
+			$bodyData = $this->extractBody($imap, (int) $uid);
+
+			$fromEmail = $this->extractAddressFromHeader($headerInfo->from ?? []);
+			$fromName = $this->extractPersonalFromHeader($headerInfo->from ?? []);
+			if ($fromName === '') {
+				$fromName = $this->decodeMime((string) ($overview->from ?? ''));
+			}
+
+			$emails[] = [
+				'account_alias' => $alias,
+				'account_email' => (string) ($account['email'] ?? ''),
+				'uid' => (int) $uid,
+				'message_id' => trim((string) ($overview->message_id ?? '')),
+				'date' => (string) ($overview->date ?? ''),
+				'subject' => $this->decodeMime((string) ($overview->subject ?? '(Sin asunto)')),
+				'from_email' => $fromEmail,
+				'from_name' => $fromName,
+				'body_text' => (string) ($bodyData['text'] ?? ''),
+			];
+
+			$maxProcessedUid = max($maxProcessedUid, (int) $uid);
+		}
+
+		$completed = count($pending) <= count($slice);
+		$this->writeHistoryState($alias, $completed, $maxProcessedUid);
+		imap_close($imap);
+
+		return ['ok' => true, 'error' => null, 'emails' => $emails];
 	}
 
 	public function markMessageAsSeen(?string $accountAlias, string $uid): void

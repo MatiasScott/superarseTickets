@@ -614,6 +614,16 @@ class GraphMailService
 		}
 
 		$limit = max(1, min(20, $limit));
+		if ($this->isHistoricalBootstrapEnabled()) {
+			$historical = $this->fetchHistoricalBootstrapForTicketing($account, $userPrincipalName, $alias, $limit);
+			if (!$historical['ok']) {
+				return $historical;
+			}
+			if (!empty($historical['emails'])) {
+				return $historical;
+			}
+		}
+
 		$deltaUrl = $this->readDeltaState($alias, $userPrincipalName);
 
 		if ($deltaUrl !== '') {
@@ -686,6 +696,150 @@ class GraphMailService
 			if (!$response['ok']) {
 				return ['ok' => false, 'error' => $response['error'], 'emails' => $emails];
 			}
+		}
+
+		return ['ok' => true, 'error' => null, 'emails' => $emails];
+	}
+
+	private function isHistoricalBootstrapEnabled(): bool
+	{
+		$value = strtolower(trim((string) env('MAIL_TICKET_HISTORY_BOOTSTRAP_ENABLED', 'true')));
+		return $value !== 'false' && $value !== '0' && $value !== 'no';
+	}
+
+	private function historyYears(): int
+	{
+		$years = (int) env('MAIL_TICKET_HISTORY_YEARS', 3);
+		return max(1, min(10, $years));
+	}
+
+	private function historyCutoffIsoUtc(): string
+	{
+		$years = $this->historyYears();
+		$cutoff = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+		$cutoff = $cutoff->modify('-' . $years . ' years');
+		return $cutoff->format('Y-m-d\TH:i:s\Z');
+	}
+
+	private function isWithinHistoryWindow(string $receivedDateTime): bool
+	{
+		$value = trim($receivedDateTime);
+		if ($value === '') {
+			return true;
+		}
+
+		$receivedTs = strtotime($value);
+		$cutoffTs = strtotime($this->historyCutoffIsoUtc());
+		if ($receivedTs === false || $cutoffTs === false) {
+			return true;
+		}
+
+		return $receivedTs >= $cutoffTs;
+	}
+
+	private function ensureHistoryStateTable(): void
+	{
+		$db = Database::getInstance()->connection();
+		$db->exec("CREATE TABLE IF NOT EXISTS mail_history_bootstrap_state (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			account_alias VARCHAR(120) NOT NULL,
+			account_email VARCHAR(255) NOT NULL,
+			next_link TEXT NULL,
+			completed TINYINT(1) NOT NULL DEFAULT 0,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uniq_mail_history_bootstrap_alias (account_alias)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+	}
+
+	private function readHistoryState(string $accountAlias, string $accountEmail): array
+	{
+		$this->ensureHistoryStateTable();
+		$db = Database::getInstance()->connection();
+
+		$stmt = $db->prepare('SELECT next_link, completed FROM mail_history_bootstrap_state WHERE account_alias = :alias LIMIT 1');
+		$stmt->execute(['alias' => $accountAlias]);
+		$row = $stmt->fetch();
+
+		if (!$row) {
+			$stmtFallback = $db->prepare('SELECT next_link, completed FROM mail_history_bootstrap_state WHERE account_email = :email LIMIT 1');
+			$stmtFallback->execute(['email' => $accountEmail]);
+			$row = $stmtFallback->fetch();
+		}
+
+		if (!$row) {
+			return ['next_link' => '', 'completed' => false];
+		}
+
+		return [
+			'next_link' => trim((string) ($row['next_link'] ?? '')),
+			'completed' => ((int) ($row['completed'] ?? 0)) === 1,
+		];
+	}
+
+	private function writeHistoryState(string $accountAlias, string $accountEmail, string $nextLink, bool $completed): void
+	{
+		$this->ensureHistoryStateTable();
+		$db = Database::getInstance()->connection();
+		$stmt = $db->prepare('INSERT INTO mail_history_bootstrap_state (account_alias, account_email, next_link, completed, updated_at) VALUES (:alias, :email, :next_link, :completed, NOW()) ON DUPLICATE KEY UPDATE account_email = VALUES(account_email), next_link = VALUES(next_link), completed = VALUES(completed), updated_at = NOW()');
+		$stmt->execute([
+			'alias' => $accountAlias,
+			'email' => $accountEmail,
+			'next_link' => $nextLink,
+			'completed' => $completed ? 1 : 0,
+		]);
+	}
+
+	private function fetchHistoricalBootstrapForTicketing(array $account, string $userPrincipalName, string $alias, int $limit): array
+	{
+		$state = $this->readHistoryState($alias, $userPrincipalName);
+		if (!empty($state['completed'])) {
+			return ['ok' => true, 'error' => null, 'emails' => []];
+		}
+
+		$nextLink = trim((string) ($state['next_link'] ?? ''));
+		if ($nextLink !== '') {
+			$response = $this->requestAbsolute('GET', $nextLink);
+		} else {
+			$response = $this->request(
+				'GET',
+				'/users/' . rawurlencode($userPrincipalName) . '/mailFolders/inbox/messages',
+				null,
+				[
+					'$top' => (string) $limit,
+					'$orderby' => 'receivedDateTime ASC',
+					'$filter' => 'receivedDateTime ge ' . $this->historyCutoffIsoUtc(),
+					'$select' => 'id,subject,from,receivedDateTime,internetMessageId,conversationId,bodyPreview,body,hasAttachments,isRead',
+				],
+				['ConsistencyLevel: eventual']
+			);
+		}
+
+		if (!$response['ok']) {
+			return ['ok' => false, 'error' => $response['error'], 'emails' => []];
+		}
+
+		$body = is_array($response['body'] ?? null) ? $response['body'] : [];
+		$items = is_array($body['value'] ?? null) ? $body['value'] : [];
+		$newNextLink = trim((string) ($body['@odata.nextLink'] ?? ''));
+
+		$emails = [];
+		foreach ($items as $item) {
+			if (!is_array($item) || isset($item['@removed'])) {
+				continue;
+			}
+
+			$email = $this->mapDeltaMessageToTicketEmail($account, $item, $userPrincipalName);
+			if ($email === null) {
+				continue;
+			}
+
+			$emails[] = $email;
+		}
+
+		if ($newNextLink !== '') {
+			$this->writeHistoryState($alias, $userPrincipalName, $newNextLink, false);
+		} else {
+			$this->writeHistoryState($alias, $userPrincipalName, '', true);
 		}
 
 		return ['ok' => true, 'error' => null, 'emails' => $emails];
@@ -966,6 +1120,11 @@ class GraphMailService
 			return null;
 		}
 
+		$receivedAt = (string) ($item['receivedDateTime'] ?? '');
+		if (!$this->isWithinHistoryWindow($receivedAt)) {
+			return null;
+		}
+
 		$from = is_array($item['from']['emailAddress'] ?? null) ? $item['from']['emailAddress'] : [];
 		$fromEmail = trim((string) ($from['address'] ?? ''));
 		$fromName = trim((string) ($from['name'] ?? ''));
@@ -988,7 +1147,7 @@ class GraphMailService
 			'conversation_id' => (string) ($item['conversationId'] ?? ''),
 			'internet_message_id' => (string) ($item['internetMessageId'] ?? ''),
 			'message_id' => (string) ($item['internetMessageId'] ?? ''),
-			'date' => (string) ($item['receivedDateTime'] ?? ''),
+			'date' => $receivedAt,
 			'subject' => (string) ($item['subject'] ?? '(Sin asunto)'),
 			'from_email' => $fromEmail,
 			'from_name' => $fromName,
