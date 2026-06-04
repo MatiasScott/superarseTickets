@@ -30,8 +30,14 @@ class AuthController extends Controller
 			redirect('login');
 		}
 
-		if (!Auth::attempt($credential, $password)) {
-			set_flash('error', 'Credenciales invalidas.');
+		try {
+			if (!Auth::attempt($credential, $password)) {
+				set_flash('error', 'Credenciales invalidas o problema de configuracion en el servidor.');
+				redirect('login');
+			}
+		} catch (Throwable $e) {
+			error_log('AuthController@login error: ' . $e->getMessage());
+			set_flash('error', 'Error interno al iniciar sesion. Revisa configuracion de BD/roles en produccion.');
 			redirect('login');
 		}
 
