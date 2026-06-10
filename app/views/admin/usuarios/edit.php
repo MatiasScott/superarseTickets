@@ -1,5 +1,9 @@
 <div class="main-content">
 	<div class="admin-section">
+		<?php $usuario = $usuario ?? []; ?>
+		<?php $roles = $roles ?? []; ?>
+		<?php $grupos = $grupos ?? []; ?>
+		<?php $usuarioGrupos = $usuarioGrupos ?? []; ?>
 		<!-- Header -->
 		<div class="admin-header">
 			<div>
@@ -48,6 +52,24 @@
 						<?php endforeach; ?>
 					</select>
 					<small class="form-text text-muted">Selecciona el rol que tendrá el usuario</small>
+				</div>
+
+				<div class="form-group">
+					<label><i class="bi bi-diagram-3"></i> Grupos</label>
+					<small class="form-text text-muted">Opcional: asigna uno o varios grupos al usuario.</small>
+					<?php $idsUsuarioGrupos = array_map(function ($g) { return (int) ($g['id'] ?? 0); }, $usuarioGrupos ?? []); ?>
+					<div class="border rounded p-3 bg-light">
+						<?php if (!empty($grupos)): ?>
+							<?php foreach ($grupos as $grupo): ?>
+								<div class="form-check mb-2">
+									<input class="form-check-input" type="checkbox" id="grupo_<?= e($grupo['id']) ?>" name="grupos[]" value="<?= e($grupo['id']) ?>" <?= in_array((int) $grupo['id'], $idsUsuarioGrupos, true) ? 'checked' : '' ?>>
+									<label class="form-check-label" for="grupo_<?= e($grupo['id']) ?>"><?= e($grupo['nombre']) ?></label>
+								</div>
+							<?php endforeach; ?>
+						<?php else: ?>
+							<p class="mb-0 text-muted">No hay grupos disponibles</p>
+						<?php endif; ?>
+					</div>
 				</div>
 
 				<div class="admin-form-actions">

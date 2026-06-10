@@ -210,7 +210,8 @@ class AdminController extends Controller
 		Auth::requireAuth();
 		$db = Database::getInstance()->connection();
 		$roles = $db->query("SELECT id, nombre FROM roles WHERE estado = 'activo' ORDER BY nombre")->fetchAll() ?: [];
-		$this->view('admin/usuarios/create', compact('roles'), ['title' => 'Crear Usuario']);
+		$grupos = (new Grupo())->allGrupos();
+		$this->view('admin/usuarios/create', compact('roles', 'grupos'), ['title' => 'Crear Usuario']);
 	}
 
 	public function usuariosStore(): void
@@ -222,6 +223,7 @@ class AdminController extends Controller
 		$email = trim($_POST['email'] ?? '');
 		$nombre = trim($_POST['nombre'] ?? '');
 		$rol_id = (int)($_POST['rol_id'] ?? 0);
+		$grupos = isset($_POST['grupos']) && is_array($_POST['grupos']) ? array_map('intval', $_POST['grupos']) : [];
 
 		if (empty($email) || empty($nombre) || $rol_id <= 0) {
 			set_flash('error', 'Todos los campos son obligatorios.');
@@ -232,6 +234,9 @@ class AdminController extends Controller
 			$stmt = $db->prepare("INSERT INTO usuarios (email, nombre, rol_id, estado) VALUES (:email, :nombre, :rol_id, 'activo')");
 			$stmt->execute(['email' => $email, 'nombre' => $nombre, 'rol_id' => $rol_id]);
 			$id = (int) $db->lastInsertId();
+			if ($id > 0 && !empty($grupos)) {
+				(new Usuario())->setGrupos($id, $grupos);
+			}
 			$this->audit('CREATE', 'usuarios', $id, null, ['email' => $email, 'nombre' => $nombre, 'rol_id' => $rol_id, 'estado' => 'activo']);
 			set_flash('success', 'Usuario creado correctamente.');
 		} catch (Throwable $e) {
@@ -252,7 +257,9 @@ class AdminController extends Controller
 			redirect('admin/usuarios');
 		}
 		$roles = $db->query("SELECT id, nombre FROM roles WHERE estado = 'activo' ORDER BY nombre")->fetchAll() ?: [];
-		$this->view('admin/usuarios/edit', compact('usuario', 'roles'), ['title' => 'Editar Usuario']);
+		$grupos = (new Grupo())->allGrupos();
+		$usuarioGrupos = (new Usuario())->getGrupos($id);
+		$this->view('admin/usuarios/edit', compact('usuario', 'roles', 'grupos', 'usuarioGrupos'), ['title' => 'Editar Usuario']);
 	}
 
 	public function usuariosUpdate(int $id): void
@@ -263,6 +270,7 @@ class AdminController extends Controller
 		$db = Database::getInstance()->connection();
 		$nombre = trim($_POST['nombre'] ?? '');
 		$rol_id = (int)($_POST['rol_id'] ?? 0);
+		$grupos = isset($_POST['grupos']) && is_array($_POST['grupos']) ? array_map('intval', $_POST['grupos']) : [];
 
 		if (empty($nombre) || $rol_id <= 0) {
 			set_flash('error', 'Todos los campos son obligatorios.');
@@ -276,6 +284,7 @@ class AdminController extends Controller
 
 			$stmt = $db->prepare("UPDATE usuarios SET nombre = :nombre, rol_id = :rol_id WHERE id = :id");
 			$stmt->execute(['nombre' => $nombre, 'rol_id' => $rol_id, 'id' => $id]);
+			(new Usuario())->setGrupos($id, $grupos);
 
 			$afterStmt = $db->prepare("SELECT id, nombre, rol_id, estado FROM usuarios WHERE id = :id");
 			$afterStmt->execute(['id' => $id]);
