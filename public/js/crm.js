@@ -1,7 +1,21 @@
 // Exponer BASE_URL si no existe
 if (typeof BASE_URL === 'undefined') {
 	const pathParts = window.location.pathname.split('/').filter(p => p.length > 0);
-	window.BASE_URL = pathParts.length > 0 ? '/' + pathParts[0] + '/' : '/';
+	const moduleRoots = new Set([
+		'dashboard', 'tickets', 'chat', 'correo', 'crm', 'contactos', 'academico',
+		'campanas', 'convenios', 'bot', 'relaciones', 'auditoria', 'admin',
+		'usuarios', 'catalogos', 'configuracion', 'login', 'logout'
+	]);
+
+	if (pathParts.length === 0) {
+		window.BASE_URL = '/';
+	} else if (moduleRoots.has(String(pathParts[0] || '').toLowerCase())) {
+		// Cuando la app vive en la raiz (ej: /crm/interesados), la base debe ser '/'.
+		window.BASE_URL = '/';
+	} else {
+		// Cuando la app vive en subcarpeta (ej: /istsTicket/crm/interesados), usar esa carpeta.
+		window.BASE_URL = '/' + pathParts[0] + '/';
+	}
 }
 
 document.addEventListener('DOMContentLoaded', () => {

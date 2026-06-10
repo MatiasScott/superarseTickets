@@ -15,6 +15,9 @@
 	<?php foreach ($styles as $style): ?>
 		<link rel="stylesheet" href="<?= e(asset('css/' . $style)) ?>">
 	<?php endforeach; ?>
+	<script>
+		window.BASE_URL = <?= json_encode(rtrim(base_url(''), '/') . '/', JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
+	</script>
 </head>
 <body data-module="<?= e($layoutModule ?? 'dashboard') ?>" class="<?= !empty($showTopbar) ? '' : 'no-topbar' ?>">
 	<?php $homePath = Auth::check() ? Auth::homePath() : 'dashboard'; ?>

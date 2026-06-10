@@ -1277,44 +1277,83 @@ class CRMController extends Controller
 		try {
 			$this->ensureCrmSupportTables();
 			$remote = $this->connectSuperarseDatabase();
-			if ($remote === null) {
-				throw new RuntimeException('No se pudo conectar a Superarse');
+			$student = null;
+			if ($remote instanceof PDO) {
+				$sourceTable = $this->resolveSuperarseStudentTable($remote);
+				if ($sourceTable === 'users') {
+					$sql = "SELECT
+							u.id,
+							u.codigo_matricula AS codigo_estudiante,
+							TRIM(CONCAT_WS(' ', u.primer_nombre, u.segundo_nombre, u.primer_apellido, u.segundo_apellido)) AS nombre_completo,
+							u.correo_electronico AS email,
+							u.telefono,
+							u.celular
+						FROM users u
+						WHERE u.id = :id
+						LIMIT 1";
+				} elseif ($sourceTable === 'estudiantes') {
+					$sql = "SELECT
+							e.id,
+							e.codigo_estudiante,
+							TRIM(CONCAT_WS(' ', c.nombre, c.apellido)) AS nombre_completo,
+							c.email,
+							COALESCE(tp.telefono, '') AS telefono,
+							COALESCE(tp.telefono, '') AS celular
+						FROM estudiantes e
+						LEFT JOIN contactos c ON c.id = e.contacto_id
+						LEFT JOIN (
+							SELECT t1.contacto_id, t1.telefono
+							FROM telefonos_contacto t1
+							INNER JOIN (
+								SELECT contacto_id, MIN(id) AS first_id
+								FROM telefonos_contacto
+								WHERE estado = 'activo'
+								GROUP BY contacto_id
+							) tx ON tx.first_id = t1.id
+						) tp ON tp.contacto_id = e.contacto_id
+						WHERE e.id = :id
+						LIMIT 1";
+				} else {
+					$sql = null;
+				}
+
+				if ($sql !== null) {
+					$stmt = $remote->prepare($sql);
+					$stmt->bindValue(':id', $studentId, PDO::PARAM_INT);
+					$stmt->execute();
+					$student = $stmt->fetch() ?: null;
+				}
 			}
 
-			$sourceTable = $this->resolveSuperarseStudentTable($remote);
-			if ($sourceTable === null) {
-				throw new RuntimeException('Tabla de estudiantes no encontrada');
-			}
-
-			if ($sourceTable === 'users') {
-				$sql = "SELECT
-						u.id,
-						u.codigo_matricula AS codigo_estudiante,
-						TRIM(CONCAT_WS(' ', u.primer_nombre, u.segundo_nombre, u.primer_apellido, u.segundo_apellido)) AS nombre_completo,
-						u.correo_electronico AS email,
-						u.telefono,
-						u.celular
-					FROM users u
-					WHERE u.id = :id
-					LIMIT 1";
-			} else {
+			if (!$student) {
+				$db = Database::getInstance()->connection();
 				$sql = "SELECT
 						e.id,
 						e.codigo_estudiante,
 						TRIM(CONCAT_WS(' ', c.nombre, c.apellido)) AS nombre_completo,
 						c.email,
-						c.telefono,
-						'' AS celular
+						COALESCE(tp.telefono, '') AS telefono,
+						COALESCE(tp.telefono, '') AS celular
 					FROM estudiantes e
 					LEFT JOIN contactos c ON c.id = e.contacto_id
+					LEFT JOIN (
+						SELECT t1.contacto_id, t1.telefono
+						FROM telefonos_contacto t1
+						INNER JOIN (
+							SELECT contacto_id, MIN(id) AS first_id
+							FROM telefonos_contacto
+							WHERE estado = 'activo'
+							GROUP BY contacto_id
+						) tx ON tx.first_id = t1.id
+					) tp ON tp.contacto_id = e.contacto_id
 					WHERE e.id = :id
 					LIMIT 1";
+				$stmt = $db->prepare($sql);
+				$stmt->bindValue(':id', $studentId, PDO::PARAM_INT);
+				$stmt->execute();
+				$student = $stmt->fetch() ?: null;
 			}
 
-			$stmt = $remote->prepare($sql);
-			$stmt->bindValue(':id', $studentId, PDO::PARAM_INT);
-			$stmt->execute();
-			$student = $stmt->fetch();
 			if (!$student) {
 				throw new RuntimeException('Estudiante no encontrado');
 			}
@@ -1365,27 +1404,57 @@ class CRMController extends Controller
 		try {
 			$this->ensureCrmSupportTables();
 			$remote = $this->connectSuperarseDatabase();
-			if ($remote === null) {
-				throw new RuntimeException('No se pudo conectar a Superarse');
+			$updated = false;
+			if ($remote instanceof PDO) {
+				$sourceTable = $this->resolveSuperarseStudentTable($remote);
+				if ($sourceTable === 'users') {
+					$updateSql = "UPDATE users
+							 SET correo_electronico = :email,
+								 telefono = :telefono,
+								 celular = :celular
+							 WHERE id = :id";
+					$updateStmt = $remote->prepare($updateSql);
+					$updateStmt->execute([
+						':email' => $email,
+						':telefono' => $telefono,
+						':celular' => $celular,
+						':id' => $studentId,
+					]);
+					$updated = true;
+				} elseif ($sourceTable === 'estudiantes') {
+					$contactoIdStmt = $remote->prepare('SELECT contacto_id FROM estudiantes WHERE id = :id LIMIT 1');
+					$contactoIdStmt->execute([':id' => $studentId]);
+					$contactoId = (int) ($contactoIdStmt->fetchColumn() ?: 0);
+					if ($contactoId > 0) {
+						$updateContact = $remote->prepare('UPDATE contactos SET email = :email, updated_at = NOW() WHERE id = :id LIMIT 1');
+						$updateContact->execute([
+							':email' => $email !== '' ? $email : null,
+							':id' => $contactoId,
+						]);
+						$updated = true;
+					}
+				}
 			}
 
-			$sourceTable = $this->resolveSuperarseStudentTable($remote);
-			if ($sourceTable !== 'users') {
-				throw new RuntimeException('La edicion de contacto requiere tabla users en Superarse');
-			}
+			if (!$updated) {
+				$db = Database::getInstance()->connection();
+				$contactStmt = $db->prepare('SELECT contacto_id FROM estudiantes WHERE id = :id LIMIT 1');
+				$contactStmt->execute([':id' => $studentId]);
+				$contactoId = (int) ($contactStmt->fetchColumn() ?: 0);
+				if ($contactoId <= 0) {
+					throw new RuntimeException('Estudiante no encontrado');
+				}
 
-			$updateSql = "UPDATE users
-						 SET correo_electronico = :email,
-							 telefono = :telefono,
-							 celular = :celular
-						 WHERE id = :id";
-			$updateStmt = $remote->prepare($updateSql);
-			$updateStmt->execute([
-				':email' => $email,
-				':telefono' => $telefono,
-				':celular' => $celular,
-				':id' => $studentId,
-			]);
+				$updateContact = $db->prepare('UPDATE contactos
+					SET email = :email,
+						updated_at = NOW()
+					WHERE id = :id
+					LIMIT 1');
+				$updateContact->execute([
+					':email' => $email !== '' ? $email : null,
+					':id' => $contactoId,
+				]);
+			}
 
 			$db = Database::getInstance()->connection();
 			$extraSql = "INSERT INTO crm_student_contact_extras (student_id, extra_emails, extra_phones, updated_by, updated_at)
