@@ -4,11 +4,15 @@ class GraphMailService
 {
 	private array $config;
 	private array $graph;
+	private GraphTokenService $tokenService;
+	private GraphClient $graphClient;
 
 	public function __construct(array $mailConfig)
 	{
 		$this->config = $mailConfig;
 		$this->graph = is_array($mailConfig['graph'] ?? null) ? $mailConfig['graph'] : [];
+		$this->tokenService = new GraphTokenService($this->graph);
+		$this->graphClient = new GraphClient($this->graph, $this->tokenService);
 	}
 
 	public function isEnabled(): bool
@@ -573,9 +577,6 @@ class GraphMailService
 			$attachments = [];
 			$hasCidInBody = stripos($bodyHtml, 'cid:') !== false;
 			$attachmentHeaders = [];
-			if (!empty($item['hasAttachments']) || $hasCidInBody) {
-				$attachmentHeaders = $this->fetchMessageAttachmentHeaders($userPrincipalName, $rawId);
-			}
 
 			$emails[] = [
 				'account_alias' => (string) ($account['alias'] ?? ''),
@@ -603,6 +604,10 @@ class GraphMailService
 
 	public function fetchDeltaForTicketing(array $account, int $limit = 20): array
 	{
+		$receivedCount = 0;
+		$discardedCount = 0;
+		$addedCount = 0;
+
 		$userPrincipalName = trim((string) ($account['email'] ?? ''));
 		if ($userPrincipalName === '') {
 			return ['ok' => false, 'error' => 'La cuenta no tiene email configurado para Graph.', 'emails' => []];
@@ -613,7 +618,7 @@ class GraphMailService
 			$alias = strtolower($userPrincipalName);
 		}
 
-		$limit = max(1, min(20, $limit));
+		$limit = max(1, min(3, $limit));
 		if ($this->isHistoricalBootstrapEnabled()) {
 			$historical = $this->fetchHistoricalBootstrapForTicketing($account, $userPrincipalName, $alias, $limit);
 			if (!$historical['ok']) {
@@ -646,35 +651,43 @@ class GraphMailService
 
 		$emails = [];
 		$pages = 0;
-		$maxPages = 5;
+			$maxPages = 10;
 
 		for ($loop = 0; $loop < $maxPages; $loop++) {
 			$body = is_array($response['body'] ?? null) ? $response['body'] : [];
 			$items = is_array($body['value'] ?? null) ? $body['value'] : [];
 			$nextLink = trim((string) ($body['@odata.nextLink'] ?? ''));
 			$newDeltaLink = trim((string) ($body['@odata.deltaLink'] ?? ''));
+			error_log(print_r($body, true));
+			error_log('[GraphMailService] fetchDeltaForTicketing page=' . ($loop + 1) . ' items=' . count($items) . ' nextLink=' . ($nextLink !== '' ? 'yes' : 'no') . ' deltaLink=' . ($newDeltaLink !== '' ? 'yes' : 'no'));
 
 			foreach ($items as $item) {
+				$receivedCount++;
 				if (!is_array($item)) {
+					$discardedCount++;
 					continue;
 				}
 
 				if (isset($item['@removed'])) {
+					$discardedCount++;
 					continue;
 				}
 
 				$email = $this->mapDeltaMessageToTicketEmail($account, $item, $userPrincipalName);
 				if ($email === null) {
+					$discardedCount++;
 					continue;
 				}
 
 				$emails[] = $email;
+				$addedCount++;
 				if (count($emails) >= $limit) {
 					if ($nextLink !== '') {
 						$this->writeDeltaState($alias, $userPrincipalName, $nextLink);
 					} elseif ($newDeltaLink !== '') {
 						$this->writeDeltaState($alias, $userPrincipalName, $newDeltaLink);
 					}
+					error_log('[GraphMailService] fetchDeltaForTicketing summary received=' . $receivedCount . ' discarded=' . $discardedCount . ' added=' . $addedCount . ' emails=' . count($emails));
 					return ['ok' => true, 'error' => null, 'emails' => $emails];
 				}
 			}
@@ -698,6 +711,7 @@ class GraphMailService
 			}
 		}
 
+		error_log('[GraphMailService] fetchDeltaForTicketing summary received=' . $receivedCount . ' discarded=' . $discardedCount . ' added=' . $addedCount . ' emails=' . count($emails));
 		return ['ok' => true, 'error' => null, 'emails' => $emails];
 	}
 
@@ -791,6 +805,10 @@ class GraphMailService
 
 	private function fetchHistoricalBootstrapForTicketing(array $account, string $userPrincipalName, string $alias, int $limit): array
 	{
+		$receivedCount = 0;
+		$discardedCount = 0;
+		$addedCount = 0;
+
 		$state = $this->readHistoryState($alias, $userPrincipalName);
 		if (!empty($state['completed'])) {
 			return ['ok' => true, 'error' => null, 'emails' => []];
@@ -821,20 +839,28 @@ class GraphMailService
 		$body = is_array($response['body'] ?? null) ? $response['body'] : [];
 		$items = is_array($body['value'] ?? null) ? $body['value'] : [];
 		$newNextLink = trim((string) ($body['@odata.nextLink'] ?? ''));
+		error_log(print_r($body, true));
+		error_log('[GraphMailService] fetchHistoricalBootstrapForTicketing items=' . count($items) . ' nextLink=' . ($newNextLink !== '' ? 'yes' : 'no'));
 
 		$emails = [];
 		foreach ($items as $item) {
+			$receivedCount++;
 			if (!is_array($item) || isset($item['@removed'])) {
+				$discardedCount++;
 				continue;
 			}
 
 			$email = $this->mapDeltaMessageToTicketEmail($account, $item, $userPrincipalName);
 			if ($email === null) {
+				$discardedCount++;
 				continue;
 			}
 
 			$emails[] = $email;
+			$addedCount++;
 		}
+
+		error_log('[GraphMailService] fetchHistoricalBootstrapForTicketing summary received=' . $receivedCount . ' discarded=' . $discardedCount . ' added=' . $addedCount . ' emails=' . count($emails));
 
 		if ($newNextLink !== '') {
 			$this->writeHistoryState($alias, $userPrincipalName, $newNextLink, false);
@@ -1117,11 +1143,13 @@ class GraphMailService
 	{
 		$rawId = trim((string) ($item['id'] ?? ''));
 		if ($rawId === '') {
+			error_log('[GraphMailService] mapDeltaMessageToTicketEmail discard: missing id');
 			return null;
 		}
 
 		$receivedAt = (string) ($item['receivedDateTime'] ?? '');
 		if (!$this->isWithinHistoryWindow($receivedAt)) {
+			error_log('[GraphMailService] mapDeltaMessageToTicketEmail discard: out of history window id=' . $rawId . ' received=' . $receivedAt);
 			return null;
 		}
 
@@ -1135,9 +1163,9 @@ class GraphMailService
 
 		$hasCidInBody = stripos($bodyHtml, 'cid:') !== false;
 		$attachmentHeaders = [];
-		if (!empty($item['hasAttachments']) || $hasCidInBody) {
+		/*if (!empty($item['hasAttachments']) || $hasCidInBody) {
 			$attachmentHeaders = $this->fetchMessageAttachmentHeaders($userPrincipalName, $rawId);
-		}
+		}*/
 
 		return [
 			'account_alias' => (string) ($account['alias'] ?? ''),
@@ -1162,134 +1190,12 @@ class GraphMailService
 
 	private function request(string $method, string $path, ?array $payload = null, array $query = [], array $extraHeaders = []): array
 	{
-		if (!function_exists('curl_init')) {
-			return ['ok' => false, 'error' => 'La extension cURL de PHP no esta habilitada.'];
-		}
-
-		$tokenResult = $this->getAccessToken();
-		if (!$tokenResult['ok']) {
-			return ['ok' => false, 'error' => $tokenResult['error']];
-		}
-
-		$baseUrl = rtrim((string) ($this->graph['base_url'] ?? 'https://graph.microsoft.com/v1.0'), '/');
-		$url = $baseUrl . $path;
-		if (!empty($query)) {
-			$url .= '?' . http_build_query($query);
-		}
-
-		$ch = curl_init($url);
-		if ($ch === false) {
-			return ['ok' => false, 'error' => 'No se pudo inicializar cURL para Graph.'];
-		}
-
-		$headers = array_merge([
-			'Authorization: Bearer ' . $tokenResult['access_token'],
-			'Accept: application/json',
-			'Content-Type: application/json',
-		], $extraHeaders);
-
-		curl_setopt_array($ch, [
-			CURLOPT_RETURNTRANSFER => true,
-			CURLOPT_CUSTOMREQUEST => strtoupper($method),
-			CURLOPT_HTTPHEADER => $headers,
-			CURLOPT_TIMEOUT => (int) ($this->graph['timeout'] ?? 30),
-		]);
-
-		if ($payload !== null) {
-			$json = json_encode($payload);
-			if ($json === false) {
-				curl_close($ch);
-				return ['ok' => false, 'error' => 'No se pudo serializar payload Graph.'];
-			}
-			curl_setopt($ch, CURLOPT_POSTFIELDS, $json);
-		}
-
-		$raw = curl_exec($ch);
-		$status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-		$curlError = curl_error($ch);
-		curl_close($ch);
-
-		if ($raw === false) {
-			return ['ok' => false, 'error' => 'Error cURL Graph: ' . $curlError];
-		}
-
-		$body = null;
-		if ($raw !== '') {
-			$decoded = json_decode($raw, true);
-			if (is_array($decoded)) {
-				$body = $decoded;
-			}
-		}
-
-		if ($status >= 200 && $status < 300) {
-			return ['ok' => true, 'status' => $status, 'body' => $body];
-		}
-
-		$errorText = $this->extractGraphError($body, $status, $raw);
-		return ['ok' => false, 'status' => $status, 'error' => $errorText];
+		return $this->graphClient->request($method, $path, $payload, $query, $extraHeaders);
 	}
 
 	private function requestAbsolute(string $method, string $url, ?array $payload = null, array $extraHeaders = []): array
 	{
-		if (!function_exists('curl_init')) {
-			return ['ok' => false, 'error' => 'La extension cURL de PHP no esta habilitada.'];
-		}
-
-		$tokenResult = $this->getAccessToken();
-		if (!$tokenResult['ok']) {
-			return ['ok' => false, 'error' => $tokenResult['error']];
-		}
-
-		$ch = curl_init($url);
-		if ($ch === false) {
-			return ['ok' => false, 'error' => 'No se pudo inicializar cURL para Graph.'];
-		}
-
-		$headers = array_merge([
-			'Authorization: Bearer ' . $tokenResult['access_token'],
-			'Accept: application/json',
-			'Content-Type: application/json',
-		], $extraHeaders);
-
-		curl_setopt_array($ch, [
-			CURLOPT_RETURNTRANSFER => true,
-			CURLOPT_CUSTOMREQUEST => strtoupper($method),
-			CURLOPT_HTTPHEADER => $headers,
-			CURLOPT_TIMEOUT => (int) ($this->graph['timeout'] ?? 30),
-		]);
-
-		if ($payload !== null) {
-			$json = json_encode($payload);
-			if ($json === false) {
-				curl_close($ch);
-				return ['ok' => false, 'error' => 'No se pudo serializar payload Graph.'];
-			}
-			curl_setopt($ch, CURLOPT_POSTFIELDS, $json);
-		}
-
-		$raw = curl_exec($ch);
-		$status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-		$curlError = curl_error($ch);
-		curl_close($ch);
-
-		if ($raw === false) {
-			return ['ok' => false, 'error' => 'Error cURL Graph: ' . $curlError];
-		}
-
-		$body = null;
-		if ($raw !== '') {
-			$decoded = json_decode($raw, true);
-			if (is_array($decoded)) {
-				$body = $decoded;
-			}
-		}
-
-		if ($status >= 200 && $status < 300) {
-			return ['ok' => true, 'status' => $status, 'body' => $body];
-		}
-
-		$errorText = $this->extractGraphError($body, $status, $raw);
-		return ['ok' => false, 'status' => $status, 'error' => $errorText];
+		return $this->graphClient->requestAbsolute($method, $url, $payload, $extraHeaders);
 	}
 
 	private function ensureDeltaStateTable(): void
@@ -1335,102 +1241,6 @@ class GraphMailService
 
 	private function getAccessToken(): array
 	{
-		$tenantId = trim((string) ($this->graph['tenant_id'] ?? ''));
-		$clientId = trim((string) ($this->graph['client_id'] ?? ''));
-		$clientSecret = trim((string) ($this->graph['client_secret'] ?? ''));
-
-		if ($tenantId === '' || $clientId === '' || $clientSecret === '') {
-			return [
-				'ok' => false,
-				'error' => 'Faltan GRAPH_TENANT_ID, GRAPH_CLIENT_ID o GRAPH_CLIENT_SECRET en .env.',
-			];
-		}
-
-		if (
-			isset($_SESSION['_graph_access_token'], $_SESSION['_graph_access_token_expires']) &&
-			is_string($_SESSION['_graph_access_token']) &&
-			(int) $_SESSION['_graph_access_token_expires'] > time() + 30
-		) {
-			return ['ok' => true, 'access_token' => $_SESSION['_graph_access_token']];
-		}
-
-		if (!function_exists('curl_init')) {
-			return ['ok' => false, 'error' => 'La extension cURL de PHP no esta habilitada.'];
-		}
-
-		$tokenUrl = 'https://login.microsoftonline.com/' . rawurlencode($tenantId) . '/oauth2/v2.0/token';
-		$postData = http_build_query([
-			'grant_type' => 'client_credentials',
-			'client_id' => $clientId,
-			'client_secret' => $clientSecret,
-			'scope' => 'https://graph.microsoft.com/.default',
-		]);
-
-		$ch = curl_init($tokenUrl);
-		if ($ch === false) {
-			return ['ok' => false, 'error' => 'No se pudo inicializar cURL para token Graph.'];
-		}
-
-		curl_setopt_array($ch, [
-			CURLOPT_RETURNTRANSFER => true,
-			CURLOPT_POST => true,
-			CURLOPT_POSTFIELDS => $postData,
-			CURLOPT_HTTPHEADER => ['Content-Type: application/x-www-form-urlencoded'],
-			CURLOPT_TIMEOUT => (int) ($this->graph['timeout'] ?? 30),
-		]);
-
-		$raw = curl_exec($ch);
-		$status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-		$curlError = curl_error($ch);
-		curl_close($ch);
-
-		if ($raw === false) {
-			return ['ok' => false, 'error' => 'Error cURL token Graph: ' . $curlError];
-		}
-
-		$decoded = json_decode($raw, true);
-		if (!is_array($decoded)) {
-			return ['ok' => false, 'error' => 'Respuesta invalida de token Graph.'];
-		}
-
-		if ($status < 200 || $status >= 300 || empty($decoded['access_token'])) {
-			$error = $this->extractGraphError($decoded, $status, $raw);
-			return ['ok' => false, 'error' => $error];
-		}
-
-		$expiresIn = (int) ($decoded['expires_in'] ?? 3600);
-		$_SESSION['_graph_access_token'] = (string) $decoded['access_token'];
-		$_SESSION['_graph_access_token_expires'] = time() + max(60, $expiresIn - 60);
-
-		return ['ok' => true, 'access_token' => (string) $decoded['access_token']];
-	}
-
-	private function extractGraphError($body, int $status, string $raw): string
-	{
-		if (is_array($body)) {
-			if (isset($body['error_description']) && is_string($body['error_description'])) {
-				return trim($body['error_description']);
-			}
-
-			if (isset($body['error'])) {
-				$errorNode = $body['error'];
-				if (is_array($errorNode)) {
-					$code = trim((string) ($errorNode['code'] ?? ''));
-					$message = trim((string) ($errorNode['message'] ?? 'Error Graph no especificado.'));
-					return ($code !== '' ? $code . ': ' : '') . $message;
-				}
-
-				if (is_string($errorNode)) {
-					return trim($errorNode);
-				}
-			}
-		}
-
-		$fallback = trim($raw);
-		if ($fallback === '') {
-			$fallback = 'Error HTTP ' . $status . ' en Microsoft Graph.';
-		}
-
-		return $fallback;
+		return $this->tokenService->getAccessToken();
 	}
 }

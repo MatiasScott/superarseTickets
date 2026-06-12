@@ -148,7 +148,14 @@ function env(string $key, mixed $default = null): mixed
 		}
 
 		foreach ($_SERVER as $serverKey => $value) {
-			if (str_starts_with($serverKey, 'APP_') || str_starts_with($serverKey, 'DB_') || str_starts_with($serverKey, 'MAIL_')) {
+			if (
+				str_starts_with($serverKey, 'APP_') ||
+				str_starts_with($serverKey, 'DB_') ||
+				str_starts_with($serverKey, 'MAIL_') ||
+				str_starts_with($serverKey, 'INTERNAL_') ||
+				str_starts_with($serverKey, 'REDIS_') ||
+				str_starts_with($serverKey, 'QUEUE_')
+			) {
 				$env[$serverKey] = $value;
 			}
 		}

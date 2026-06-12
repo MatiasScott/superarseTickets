@@ -63,5 +63,7 @@ Auth::enforceRequestAccess($uri);
 
 $router->dispatch($method, $uri);
 
-// Ejecutar scheduler de auto-sync en cualquier request web para no depender de acciones manuales.
-AutoSyncScheduler::checkAndExecute();
+// Mantener desacoplado el request web: solo ejecutar autosync si se habilita explicitamente.
+if ((string) env('APP_WEB_AUTOSYNC_ENABLED', 'false') === 'true') {
+	AutoSyncScheduler::checkAndExecute();
+}

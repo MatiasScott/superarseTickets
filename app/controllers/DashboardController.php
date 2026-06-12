@@ -5,27 +5,45 @@ class DashboardController extends Controller
 	public function index(): void
 	{
 		Auth::requireAuth();
-		$db = Database::getInstance()->connection();
-		$ticketColumns = $this->getTableColumns($db, 'tickets');
+		$cache = new CacheService();
+		$payload = $cache->remember('dashboard:index', 300, function (): array {
+			$db = Database::getInstance()->connection();
+			$ticketColumns = $this->getTableColumns($db, 'tickets');
 
-		$kpis = $this->buildTicketMetrics($db);
-		$agentPanel = $this->buildAgentPanel($db, $ticketColumns);
-		$inboxPanel = $this->buildInboxPanel($db, $ticketColumns);
-		$slaPanel = $this->buildSlaPanel($db, $ticketColumns);
-		$satisfaction = $this->buildSatisfactionPanel($db, $ticketColumns);
-		$conversations = $this->buildConversationSeries($db, $ticketColumns);
-		$grupos = $this->buildUnresolvedByGroup($db);
-		$ranking = $this->buildRankingPanel($db);
+			return [
+				'kpis' => $this->buildTicketMetrics($db),
+				'agentPanel' => $this->buildAgentPanel($db, $ticketColumns),
+				'inboxPanel' => $this->buildInboxPanel($db, $ticketColumns),
+				'slaPanel' => $this->buildSlaPanel($db, $ticketColumns),
+				'satisfaction' => $this->buildSatisfactionPanel($db, $ticketColumns),
+				'conversations' => $this->buildConversationSeries($db, $ticketColumns),
+				'grupos' => $this->buildUnresolvedByGroup($db),
+				'ranking' => $this->buildRankingPanel($db),
+			];
+		});
+
+		if (!is_array($payload)) {
+			$payload = [
+				'kpis' => [],
+				'agentPanel' => [],
+				'inboxPanel' => [],
+				'slaPanel' => [],
+				'satisfaction' => [],
+				'conversations' => [],
+				'grupos' => [],
+				'ranking' => [],
+			];
+		}
 
 		$this->view('dashboard/index', [
-			'kpis' => $kpis,
-			'agentPanel' => $agentPanel,
-			'inboxPanel' => $inboxPanel,
-			'slaPanel' => $slaPanel,
-			'satisfaction' => $satisfaction,
-			'conversations' => $conversations,
-			'grupos' => $grupos,
-			'ranking' => $ranking,
+			'kpis' => $payload['kpis'] ?? [],
+			'agentPanel' => $payload['agentPanel'] ?? [],
+			'inboxPanel' => $payload['inboxPanel'] ?? [],
+			'slaPanel' => $payload['slaPanel'] ?? [],
+			'satisfaction' => $payload['satisfaction'] ?? [],
+			'conversations' => $payload['conversations'] ?? [],
+			'grupos' => $payload['grupos'] ?? [],
+			'ranking' => $payload['ranking'] ?? [],
 		], [
 			'title' => 'Dashboard',
 		]);

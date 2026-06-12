@@ -51,6 +51,24 @@ return static function (Router $router): void {
 
 	$router->get('/dashboard', 'DashboardController@index');
 	$router->get('/heartbeat', 'DashboardController@heartbeat');
+	$router->get('/api/health', 'InternalApiController@health');
+	$router->get('/api/internal/sync-mails', 'InternalApiController@syncMails');
+	$router->post('/api/internal/sync-mails', 'InternalApiController@syncMails');
+	$router->get('/api/internal/process-campaigns', 'InternalApiController@processCampaigns');
+	$router->post('/api/internal/process-campaigns', 'InternalApiController@processCampaigns');
+
+	$router->get('/api/internal/crm-sync', 'InternalApiController@crmSync');
+	$router->post('/api/internal/crm-sync', 'InternalApiController@crmSync');
+
+	$router->get('/api/internal/process-attachments', 'InternalApiController@processAttachments');
+	$router->post('/api/internal/process-attachments', 'InternalApiController@processAttachments');
+
+	$router->post('/api/internal/generate-preview', 'InternalApiController@generatePreview');
+	$router->get('/api/internal/dashboard-metrics', 'InternalApiController@dashboardMetrics');
+	$router->post('/api/internal/dashboard-metrics', 'InternalApiController@dashboardMetrics');
+
+	$router->get('/api/internal/run-worker', 'InternalApiController@runWorker');
+	$router->post('/api/internal/run-worker', 'InternalApiController@runWorker');
 	$router->get('/tickets/dashboard', 'TicketController@dashboard');
 	$router->get('/tickets/dashboard/data', 'TicketController@dashboardData');
 	$router->get('/tickets/dashboard/grupos', 'TicketController@dashboardGroupDetails');

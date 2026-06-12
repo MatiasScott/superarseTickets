@@ -425,6 +425,10 @@ class Auth
 
 	private static function isAlwaysAllowedPath(string $path): bool
 	{
+		if ($path === '/api/health' || str_starts_with($path, '/api/internal/')) {
+			return true;
+		}
+
 		$alwaysAllowed = [
 			'/login',
 			'/logout',
