@@ -187,6 +187,11 @@ class MailboxService
 			if (!empty($historical['emails'])) {
 				return $historical;
 			}
+
+			// Mientras el bootstrap historico no termine, no mezclar con correos nuevos.
+			if (empty($historical['history_completed'])) {
+				return ['ok' => true, 'error' => null, 'emails' => []];
+			}
 		}
 
 		return $this->fetchUnreadForTicketing($accountAlias, $limit);
@@ -252,25 +257,25 @@ class MailboxService
 	private function fetchImapHistoricalForTicketing(array $account, int $limit): array
 	{
 		if (!function_exists('imap_open')) {
-			return ['ok' => false, 'error' => 'La extension IMAP de PHP no esta habilitada. Activa extension=imap en php.ini.', 'emails' => []];
+			return ['ok' => false, 'error' => 'La extension IMAP de PHP no esta habilitada. Activa extension=imap en php.ini.', 'emails' => [], 'history_completed' => false];
 		}
 
 		$alias = $this->getAccountAlias($account);
 		$state = $this->readHistoryState($alias);
 		if (!empty($state['completed'])) {
-			return ['ok' => true, 'error' => null, 'emails' => []];
+			return ['ok' => true, 'error' => null, 'emails' => [], 'history_completed' => true];
 		}
 
 		$waitSeconds = $this->getImapBlockSeconds($alias);
 		if ($waitSeconds > 0) {
-			return ['ok' => false, 'error' => 'Proteccion local activa para evitar mas intentos fallidos. Espera ' . $waitSeconds . ' segundos y vuelve a intentar.', 'emails' => []];
+			return ['ok' => false, 'error' => 'Proteccion local activa para evitar mas intentos fallidos. Espera ' . $waitSeconds . ' segundos y vuelve a intentar.', 'emails' => [], 'history_completed' => false];
 		}
 
 		$imap = $this->openInbox($account);
 		if (!is_resource($imap)) {
 			$error = $this->buildImapErrorMessage($this->lastImapError('No se pudo abrir la bandeja IMAP.'));
 			$this->registerImapFailure($alias, $error);
-			return ['ok' => false, 'error' => $error, 'emails' => []];
+			return ['ok' => false, 'error' => $error, 'emails' => [], 'history_completed' => false];
 		}
 
 		$this->clearImapFailure($alias);
@@ -289,7 +294,7 @@ class MailboxService
 		if (empty($pending)) {
 			$this->writeHistoryState($alias, true, $lastUid);
 			imap_close($imap);
-			return ['ok' => true, 'error' => null, 'emails' => []];
+			return ['ok' => true, 'error' => null, 'emails' => [], 'history_completed' => true];
 		}
 
 		$slice = array_slice($pending, 0, max(1, $limit));
@@ -336,7 +341,7 @@ class MailboxService
 		$this->writeHistoryState($alias, $completed, $maxProcessedUid);
 		imap_close($imap);
 
-		return ['ok' => true, 'error' => null, 'emails' => $emails];
+		return ['ok' => true, 'error' => null, 'emails' => $emails, 'history_completed' => $completed];
 	}
 
 	public function markMessageAsSeen(?string $accountAlias, string $uid): void
