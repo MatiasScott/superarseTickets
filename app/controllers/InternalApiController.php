@@ -162,6 +162,27 @@ class InternalApiController extends Controller
         $this->authorizeInternalToken();
 
         if (!$this->queue->isAvailable()) {
+            if ($this->isQueueSyncFallbackEnabled()) {
+                try {
+                    $runner = new AsyncTaskRunnerService();
+                    $result = $runner->run($queueName, $payload);
+
+                    $this->jsonResponse([
+                        'ok' => true,
+                        'queue' => $queueName,
+                        'status' => 'processed_sync_fallback',
+                        'result' => $result,
+                    ]);
+                    return;
+                } catch (Throwable $e) {
+                    $this->jsonResponse([
+                        'ok' => false,
+                        'error' => 'Redis no disponible y el fallback directo fallo: ' . $e->getMessage(),
+                    ], 500);
+                    return;
+                }
+            }
+
             $this->jsonResponse([
                 'ok' => false,
                 'error' => 'Redis no disponible. No se puede encolar la tarea.',
@@ -190,6 +211,12 @@ class InternalApiController extends Controller
             'queue' => $queueName,
             'status' => 'queued',
         ], 202);
+    }
+
+    private function isQueueSyncFallbackEnabled(): bool
+    {
+        $value = strtolower(trim((string) env('QUEUE_SYNC_FALLBACK_ENABLED', 'false')));
+        return $value === '1' || $value === 'true' || $value === 'yes';
     }
 
     private function authorizeInternalToken(): void
