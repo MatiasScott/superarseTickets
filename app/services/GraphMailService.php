@@ -627,6 +627,11 @@ class GraphMailService
 			if (!empty($historical['emails'])) {
 				return $historical;
 			}
+
+			// Mientras no termine bootstrap historico, no pasar a delta (correos nuevos).
+			if (empty($historical['history_completed'])) {
+				return ['ok' => true, 'error' => null, 'emails' => []];
+			}
 		}
 
 		$deltaUrl = $this->readDeltaState($alias, $userPrincipalName);
@@ -811,7 +816,7 @@ class GraphMailService
 
 		$state = $this->readHistoryState($alias, $userPrincipalName);
 		if (!empty($state['completed'])) {
-			return ['ok' => true, 'error' => null, 'emails' => []];
+			return ['ok' => true, 'error' => null, 'emails' => [], 'history_completed' => true];
 		}
 
 		$nextLink = trim((string) ($state['next_link'] ?? ''));
@@ -833,7 +838,7 @@ class GraphMailService
 		}
 
 		if (!$response['ok']) {
-			return ['ok' => false, 'error' => $response['error'], 'emails' => []];
+			return ['ok' => false, 'error' => $response['error'], 'emails' => [], 'history_completed' => false];
 		}
 
 		$body = is_array($response['body'] ?? null) ? $response['body'] : [];
@@ -868,7 +873,12 @@ class GraphMailService
 			$this->writeHistoryState($alias, $userPrincipalName, '', true);
 		}
 
-		return ['ok' => true, 'error' => null, 'emails' => $emails];
+		return [
+			'ok' => true,
+			'error' => null,
+			'emails' => $emails,
+			'history_completed' => $newNextLink === '',
+		];
 	}
 
 	public function markMessageAsSeen(array $account, string $messageToken): void
