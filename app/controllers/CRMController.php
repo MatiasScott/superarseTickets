@@ -63,6 +63,14 @@ class CRMController extends Controller
 				FROM crm_student_pipeline p
 				LEFT JOIN pipeline_estados pe ON pe.id = p.estado_id")->fetchAll() ?: [];
 
+			$prospectPipelineRows = $db->query("SELECT i.contacto_id AS student_id, i.estado_id, COALESCE(pe.nombre, '') AS estado_nombre
+				FROM interesados i
+				LEFT JOIN pipeline_estados pe ON pe.id = i.estado_id
+				WHERE i.estado = 'activo' AND COALESCE(i.convertido, 0) = 0")->fetchAll() ?: [];
+			if (!empty($prospectPipelineRows)) {
+				$pipelineRows = array_merge($pipelineRows, $prospectPipelineRows);
+			}
+
 			$userLevels = [];
 			$remote = $this->connectSuperarseDatabase();
 			if ($remote instanceof PDO && $this->resolveSuperarseStudentTable($remote) === 'users') {
@@ -328,6 +336,11 @@ class CRMController extends Controller
 	{
 		Auth::requireAuth();
 		$this->ensureCrmSupportTables();
+		try {
+			$this->reconcileProspectsWithSuperarseUsers();
+		} catch (Throwable $e) {
+			// Evitar romper la vista por reconciliacion.
+		}
 		$periodoFiltro = $this->sanitizePeriodoKey((string) ($_GET['periodo'] ?? ''));
 
 		$studentsPerPage = 25;
@@ -335,6 +348,7 @@ class CRMController extends Controller
 		$studentOffset = ($studentPage - 1) * $studentsPerPage;
 		$studentsData = $this->fetchSuperarseStudents($studentsPerPage, $periodoFiltro, $studentOffset);
 		$estudiantesSuperarse = is_array($studentsData['rows'] ?? null) ? $studentsData['rows'] : [];
+		$programas = is_array($studentsData['programas'] ?? null) ? $studentsData['programas'] : [];
 		$periodos = is_array($studentsData['periodos'] ?? null) ? $studentsData['periodos'] : [];
 		$totalStudents = max(0, (int) ($studentsData['total'] ?? count($estudiantesSuperarse)));
 		$studentPages = max(1, (int) ceil($totalStudents / $studentsPerPage));
@@ -360,6 +374,7 @@ class CRMController extends Controller
 			'studentsPerPage'  => $studentsPerPage,
 			'totalStudents'    => $totalStudents,
 			'prospectosLocales' => $prospectosLocales,
+			'programas' => $programas,
 			'periodos' => $periodos,
 			'periodoSeleccionado' => $periodoFiltro,
 			'sourceLabel' => (string) ($studentsData['source'] ?? 'No disponible'),
@@ -387,6 +402,9 @@ class CRMController extends Controller
 		$celular = $this->normalizePhoneValue((string) ($_POST['celular'] ?? ''));
 		$correoPersonal = $this->normalizeEmailValue((string) ($_POST['correo_personal'] ?? ''));
 		$origen = trim((string) ($_POST['origen'] ?? 'crm_manual'));
+		$carrera = trim((string) ($_POST['carrera'] ?? ''));
+		$provincia = trim((string) ($_POST['provincia'] ?? ''));
+		$ciudad = trim((string) ($_POST['ciudad'] ?? ''));
 
 		if ($nombres === '' || $apellidos === '' || $identificacion === '') {
 			set_flash('error', 'Nombres, apellidos e identificacion son obligatorios.');
@@ -453,7 +471,15 @@ class CRMController extends Controller
 			}
 
 			$estadoInicialId = $this->resolveInitialProspectStateId($db);
-			$this->upsertInteresado($db, $contactId, $estadoInicialId, $origen !== '' ? $origen : 'crm_manual');
+			$this->upsertInteresado(
+				$db,
+				$contactId,
+				$estadoInicialId,
+				$origen !== '' ? $origen : 'crm_manual',
+				$carrera,
+				$provincia,
+				$ciudad
+			);
 
 			$db->commit();
 
@@ -529,10 +555,12 @@ class CRMController extends Controller
 				$fallbackRows = $this->attachPipelineData($fallbackRows);
 				$fallbackTotal = $this->countLocalStudents($periodoFiltro);
 				$periodos = $this->fetchLocalPeriodOptions();
+				$programas = $this->fetchLocalCareerOptions();
 				return [
 					'rows' => $fallbackRows,
 					'total' => $fallbackTotal > 0 ? $fallbackTotal : count($fallbackRows),
 					'periodos' => $periodos,
+					'programas' => $programas,
 					'source' => 'Local (fallback)',
 					'error' => 'No se pudo conectar a la BD Superarse. Revisa SUPERARSE_DB_* en .env.',
 				];
@@ -544,6 +572,7 @@ class CRMController extends Controller
 			}
 
 			$periodos = $this->fetchRemotePeriodOptions($remote, $sourceTable);
+			$programas = $sourceTable === 'users' ? $this->fetchRemoteProgramOptions($remote) : $this->fetchLocalCareerOptions();
 			$params = [];
 
 			if ($sourceTable === 'users') {
@@ -630,6 +659,7 @@ class CRMController extends Controller
 				'rows' => $rows,
 				'total' => $total,
 				'periodos' => $periodos,
+				'programas' => $programas,
 				'source' => 'Superarse (' . $sourceTable . ')',
 				'error' => '',
 			];
@@ -638,13 +668,53 @@ class CRMController extends Controller
 			$fallbackRows = $this->attachPipelineData($fallbackRows);
 			$fallbackTotal = $this->countLocalStudents($periodoFiltro);
 			$periodos = $this->fetchLocalPeriodOptions();
+			$programas = $this->fetchLocalCareerOptions();
 			return [
 				'rows' => $fallbackRows,
 				'total' => $fallbackTotal > 0 ? $fallbackTotal : count($fallbackRows),
 				'periodos' => $periodos,
+				'programas' => $programas,
 				'source' => 'Local (fallback)',
 				'error' => 'No se pudo leer estudiantes de Superarse: ' . $e->getMessage(),
 			];
+		}
+	}
+
+	private function fetchRemoteProgramOptions(PDO $remote): array
+	{
+		try {
+			$rows = $remote->query("SELECT DISTINCT TRIM(COALESCE(programa, '')) AS programa
+				FROM users
+				WHERE programa IS NOT NULL AND TRIM(programa) <> ''
+				ORDER BY programa ASC")->fetchAll() ?: [];
+			$programas = [];
+			foreach ($rows as $row) {
+				$programa = trim((string) ($row['programa'] ?? ''));
+				if ($programa !== '') {
+					$programas[] = $programa;
+				}
+			}
+			return array_values(array_unique($programas));
+		} catch (Throwable $e) {
+			return [];
+		}
+	}
+
+	private function fetchLocalCareerOptions(): array
+	{
+		try {
+			$db = Database::getInstance()->connection();
+			$rows = $db->query("SELECT nombre FROM carreras WHERE estado = 'activo' ORDER BY nombre ASC")->fetchAll() ?: [];
+			$programas = [];
+			foreach ($rows as $row) {
+				$nombre = trim((string) ($row['nombre'] ?? ''));
+				if ($nombre !== '') {
+					$programas[] = $nombre;
+				}
+			}
+			return array_values(array_unique($programas));
+		} catch (Throwable $e) {
+			return [];
 		}
 	}
 
@@ -1092,6 +1162,17 @@ class CRMController extends Controller
 
 			$db->exec("INSERT IGNORE INTO crm_superarse_sync_state (id, last_user_id, last_status, updated_at)
 				VALUES (1, 0, 'idle', NOW())");
+
+			$interesadosColumns = $this->getTableColumnsSafe($db, 'interesados');
+			if (!in_array('carrera', $interesadosColumns, true)) {
+				$db->exec('ALTER TABLE interesados ADD COLUMN carrera VARCHAR(180) NULL AFTER origen');
+			}
+			if (!in_array('provincia', $interesadosColumns, true)) {
+				$db->exec('ALTER TABLE interesados ADD COLUMN provincia VARCHAR(120) NULL AFTER carrera');
+			}
+			if (!in_array('ciudad', $interesadosColumns, true)) {
+				$db->exec('ALTER TABLE interesados ADD COLUMN ciudad VARCHAR(120) NULL AFTER provincia');
+			}
 		} catch (Throwable $e) {
 			// Evitar romper el flujo principal por auto-creacion auxiliar.
 		}
@@ -1108,12 +1189,16 @@ class CRMController extends Controller
 				i.contacto_id,
 				i.origen,
 				i.convertido,
+				i.carrera,
+				i.provincia,
+				i.ciudad,
 				i.created_at,
 				COALESCE(pe.nombre, 'Sin etapa') AS etapa,
 				c.nombre,
 				c.apellido,
 				c.cedula,
 				c.email,
+				CASE WHEN COALESCE(i.convertido, 0) = 1 THEN 'Estudiante' ELSE 'Cliente potencial' END AS estado_cliente,
 				COALESCE(tc.telefono, '') AS celular
 			FROM interesados i
 			INNER JOIN contactos c ON c.id = i.contacto_id
@@ -1128,7 +1213,7 @@ class CRMController extends Controller
 					GROUP BY contacto_id
 				) tx ON tx.first_id = t1.id
 			) tc ON tc.contacto_id = i.contacto_id
-			WHERE i.estado = 'activo'
+			WHERE i.estado = 'activo' AND COALESCE(i.convertido, 0) = 0
 			ORDER BY i.id DESC
 			LIMIT :perPage OFFSET :offset";
 
@@ -1146,7 +1231,7 @@ class CRMController extends Controller
 	{
 		try {
 			$db = Database::getInstance()->connection();
-			return (int) $db->query("SELECT COUNT(*) FROM interesados WHERE estado = 'activo'")->fetchColumn();
+			return (int) $db->query("SELECT COUNT(*) FROM interesados WHERE estado = 'activo' AND COALESCE(convertido, 0) = 0")->fetchColumn();
 		} catch (Throwable $e) {
 			return 0;
 		}
@@ -1183,7 +1268,7 @@ class CRMController extends Controller
 		return $fallbackId > 0 ? $fallbackId : null;
 	}
 
-	private function upsertInteresado(PDO $db, int $contactId, ?int $estadoId, string $origen): void
+	private function upsertInteresado(PDO $db, int $contactId, ?int $estadoId, string $origen, string $carrera = '', string $provincia = '', string $ciudad = ''): void
 	{
 		if ($contactId <= 0) {
 			return;
@@ -1197,6 +1282,9 @@ class CRMController extends Controller
 			$update = $db->prepare('UPDATE interesados
 				SET estado_id = :estado_id,
 					origen = :origen,
+					carrera = :carrera,
+					provincia = :provincia,
+					ciudad = :ciudad,
 					convertido = 0,
 					estado = "activo",
 					updated_at = NOW()
@@ -1205,17 +1293,23 @@ class CRMController extends Controller
 			$update->execute([
 				'estado_id' => $estadoId,
 				'origen' => mb_substr($origen, 0, 100),
+				'carrera' => $carrera !== '' ? mb_substr($carrera, 0, 180) : null,
+				'provincia' => $provincia !== '' ? mb_substr($provincia, 0, 120) : null,
+				'ciudad' => $ciudad !== '' ? mb_substr($ciudad, 0, 120) : null,
 				'id' => $existingId,
 			]);
 			return;
 		}
 
-		$insert = $db->prepare('INSERT INTO interesados (contacto_id, estado_id, origen, convertido, estado, created_at, updated_at)
-			VALUES (:contacto_id, :estado_id, :origen, 0, "activo", NOW(), NOW())');
+		$insert = $db->prepare('INSERT INTO interesados (contacto_id, estado_id, origen, carrera, provincia, ciudad, convertido, estado, created_at, updated_at)
+			VALUES (:contacto_id, :estado_id, :origen, :carrera, :provincia, :ciudad, 0, "activo", NOW(), NOW())');
 		$insert->execute([
 			'contacto_id' => $contactId,
 			'estado_id' => $estadoId,
 			'origen' => mb_substr($origen, 0, 100),
+			'carrera' => $carrera !== '' ? mb_substr($carrera, 0, 180) : null,
+			'provincia' => $provincia !== '' ? mb_substr($provincia, 0, 120) : null,
+			'ciudad' => $ciudad !== '' ? mb_substr($ciudad, 0, 120) : null,
 		]);
 	}
 
@@ -1225,8 +1319,71 @@ class CRMController extends Controller
 			return;
 		}
 
-		$stmt = $db->prepare('UPDATE interesados SET convertido = 1, updated_at = NOW() WHERE contacto_id = :contacto_id');
+		$stmt = $db->prepare('UPDATE interesados SET convertido = 1, estado = "inactivo", updated_at = NOW() WHERE contacto_id = :contacto_id');
 		$stmt->execute(['contacto_id' => $contactId]);
+	}
+
+	private function migrateProspectCrmDataToStudent(PDO $db, int $contactId, int $studentKey): void
+	{
+		if ($contactId <= 0 || $studentKey <= 0 || $contactId === $studentKey) {
+			return;
+		}
+
+		$sourcePipeline = $db->prepare('SELECT estado_id FROM crm_student_pipeline WHERE student_id = :id LIMIT 1');
+		$sourcePipeline->execute([':id' => $contactId]);
+		$sourceEstadoId = (int) ($sourcePipeline->fetchColumn() ?: 0);
+
+		$targetPipeline = $db->prepare('SELECT estado_id FROM crm_student_pipeline WHERE student_id = :id LIMIT 1');
+		$targetPipeline->execute([':id' => $studentKey]);
+		$targetEstadoId = (int) ($targetPipeline->fetchColumn() ?: 0);
+
+		if ($sourceEstadoId > 0 && $targetEstadoId <= 0) {
+			$upsert = $db->prepare('INSERT INTO crm_student_pipeline (student_id, estado_id, updated_by, updated_at)
+				VALUES (:student_id, :estado_id, :updated_by, NOW())
+				ON DUPLICATE KEY UPDATE estado_id = VALUES(estado_id), updated_by = VALUES(updated_by), updated_at = NOW()');
+			$upsert->execute([
+				':student_id' => $studentKey,
+				':estado_id' => $sourceEstadoId,
+				':updated_by' => $this->currentUserId() ?: null,
+			]);
+		}
+
+		$db->prepare('UPDATE crm_student_notes SET student_id = :target_id WHERE student_id = :source_id')
+			->execute([':target_id' => $studentKey, ':source_id' => $contactId]);
+		$db->prepare('UPDATE crm_student_tasks SET student_id = :target_id WHERE student_id = :source_id')
+			->execute([':target_id' => $studentKey, ':source_id' => $contactId]);
+
+		$sourceExtrasStmt = $db->prepare('SELECT extra_emails, extra_phones FROM crm_student_contact_extras WHERE student_id = :id LIMIT 1');
+		$sourceExtrasStmt->execute([':id' => $contactId]);
+		$sourceExtras = $sourceExtrasStmt->fetch() ?: null;
+		if ($sourceExtras) {
+			$targetExtrasStmt = $db->prepare('SELECT extra_emails, extra_phones FROM crm_student_contact_extras WHERE student_id = :id LIMIT 1');
+			$targetExtrasStmt->execute([':id' => $studentKey]);
+			$targetExtras = $targetExtrasStmt->fetch() ?: ['extra_emails' => '', 'extra_phones' => ''];
+
+			$mergeCsv = static function (string $a, string $b): string {
+				$items = preg_split('/\s*,\s*/', trim($a . ',' . $b), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+				$items = array_values(array_unique(array_map('trim', $items)));
+				return implode(', ', array_filter($items, static fn($x) => $x !== ''));
+			};
+
+			$mergedEmails = $mergeCsv((string) ($targetExtras['extra_emails'] ?? ''), (string) ($sourceExtras['extra_emails'] ?? ''));
+			$mergedPhones = $mergeCsv((string) ($targetExtras['extra_phones'] ?? ''), (string) ($sourceExtras['extra_phones'] ?? ''));
+
+			$db->prepare('INSERT INTO crm_student_contact_extras (student_id, extra_emails, extra_phones, updated_by, updated_at)
+				VALUES (:student_id, :extra_emails, :extra_phones, :updated_by, NOW())
+				ON DUPLICATE KEY UPDATE extra_emails = VALUES(extra_emails), extra_phones = VALUES(extra_phones), updated_by = VALUES(updated_by), updated_at = NOW()')
+				->execute([
+					':student_id' => $studentKey,
+					':extra_emails' => $mergedEmails,
+					':extra_phones' => $mergedPhones,
+					':updated_by' => $this->currentUserId() ?: null,
+				]);
+
+			$db->prepare('DELETE FROM crm_student_contact_extras WHERE student_id = :id')->execute([':id' => $contactId]);
+		}
+
+		$db->prepare('DELETE FROM crm_student_pipeline WHERE student_id = :id')->execute([':id' => $contactId]);
 	}
 
 	private function upsertContactEmail(PDO $db, int $contactId, string $email, string $type = 'personal'): void
@@ -1619,6 +1776,9 @@ class CRMController extends Controller
 					COALESCE(c.estado, 'activo') AS estado,
 					c.created_at AS fecha_matricula,
 					COALESCE(i.origen, 'crm_manual') AS origen,
+					COALESCE(i.carrera, '') AS carrera,
+					COALESCE(i.provincia, '') AS provincia,
+					COALESCE(i.ciudad, '') AS ciudad,
 					COALESCE(i.convertido, 0) AS convertido,
 					i.id AS interesado_id,
 					e.id AS estudiante_local_id
@@ -2277,7 +2437,7 @@ class CRMController extends Controller
 			$sql = "SELECT csn.created_at, u.nombre AS usuario, csn.note_text
 					FROM crm_student_notes csn
 					LEFT JOIN usuarios u ON u.id = csn.created_by
-					WHERE csn.student_id = :student_id AND csn.source_type IN ('estado_change', 'task_create', 'task_participants', 'task_result', 'task_complete')
+					WHERE csn.student_id = :student_id AND csn.source_type IN ('prospect_created', 'estado_change', 'task_create', 'task_participants', 'task_result', 'task_complete')
 					ORDER BY csn.created_at DESC";
 			$stmt = $db->prepare($sql);
 			$stmt->execute([':student_id' => $studentId]);
@@ -2461,6 +2621,79 @@ class CRMController extends Controller
 		exit;
 	}
 
+	private function reconcileProspectsWithSuperarseUsers(): void
+	{
+		$db = Database::getInstance()->connection();
+		$remote = $this->connectSuperarseDatabase();
+		if (!$remote instanceof PDO || $this->resolveSuperarseStudentTable($remote) !== 'users') {
+			return;
+		}
+
+		$rows = $db->query("SELECT i.contacto_id, c.cedula
+			FROM interesados i
+			INNER JOIN contactos c ON c.id = i.contacto_id
+			WHERE i.estado = 'activo' AND COALESCE(i.convertido, 0) = 0")->fetchAll() ?: [];
+		if (empty($rows)) {
+			return;
+		}
+
+		$identityToContact = [];
+		foreach ($rows as $row) {
+			$contactId = (int) ($row['contacto_id'] ?? 0);
+			$identity = $this->normalizeIdentityValue((string) ($row['cedula'] ?? ''));
+			if ($contactId > 0 && $identity !== '') {
+				$identityToContact[$identity] = $contactId;
+			}
+		}
+		if (empty($identityToContact)) {
+			return;
+		}
+
+		$columns = $remote->query('SHOW COLUMNS FROM users')->fetchAll() ?: [];
+		$availableCols = [];
+		foreach ($columns as $column) {
+			$name = trim((string) ($column['Field'] ?? ''));
+			if ($name !== '') {
+				$availableCols[$name] = true;
+			}
+		}
+
+		$identityColumn = null;
+		foreach (['numero_identificacion', 'cedula', 'identificacion', 'documento', 'pasaporte'] as $candidate) {
+			if (isset($availableCols[$candidate])) {
+				$identityColumn = $candidate;
+				break;
+			}
+		}
+		if ($identityColumn === null) {
+			return;
+		}
+
+		$identities = array_keys($identityToContact);
+		foreach (array_chunk($identities, 200) as $chunk) {
+			$placeholders = implode(',', array_fill(0, count($chunk), '?'));
+			$sql = "SELECT id, REPLACE(REPLACE(REPLACE(UPPER(TRIM(COALESCE($identityColumn, ''))), '.', ''), '-', ''), ' ', '') AS identity_key
+				FROM users
+				WHERE REPLACE(REPLACE(REPLACE(UPPER(TRIM(COALESCE($identityColumn, ''))), '.', ''), '-', ''), ' ', '') IN ($placeholders)";
+			$stmt = $remote->prepare($sql);
+			$stmt->execute($chunk);
+			$matched = $stmt->fetchAll() ?: [];
+
+			foreach ($matched as $user) {
+				$userId = (int) ($user['id'] ?? 0);
+				$identity = $this->normalizeIdentityValue((string) ($user['identity_key'] ?? ''));
+				$contactId = (int) ($identityToContact[$identity] ?? 0);
+				if ($userId <= 0 || $contactId <= 0) {
+					continue;
+				}
+
+				$this->ensureStudentFromContact($db, $contactId, (string) $userId, 'activo');
+				$this->migrateProspectCrmDataToStudent($db, $contactId, $userId);
+				$this->markProspectAsConverted($db, $contactId);
+			}
+		}
+	}
+
 	public function cronInstitutionalSync(): void
 	{
 		header('Content-Type: application/json; charset=utf-8');
@@ -2601,6 +2834,7 @@ class CRMController extends Controller
 				$codigoEstudiante = $this->resolveFirstValue($row, ['codigo_estudiante', 'codigo_matricula', 'matricula', 'codigo']);
 				$estadoAcademico = $this->resolveFirstValue($row, ['estado_academico', 'estado']);
 				$estudianteResult = $this->ensureStudentFromContact($db, $contactId, $codigoEstudiante, $estadoAcademico);
+				$this->migrateProspectCrmDataToStudent($db, $contactId, $userId);
 				$this->markProspectAsConverted($db, $contactId);
 				if (!empty($estudianteResult['created'])) {
 					$summary['created_students']++;

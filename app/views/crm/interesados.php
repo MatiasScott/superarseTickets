@@ -1,5 +1,6 @@
 <section class="module-page crm-page">
 	<?php $estudiantesSuperarse = $estudiantesSuperarse ?? []; ?>
+	<?php $programas = $programas ?? []; ?>
 	<?php $periodos = $periodos ?? []; ?>
 	<?php $periodoSeleccionado = $periodoSeleccionado ?? ''; ?>
 	<?php $sourceLabel = $sourceLabel ?? 'No disponible'; ?>
@@ -175,8 +176,12 @@
 								<th>ID</th>
 								<th>Contacto</th>
 								<th>Identificacion</th>
+								<th>Carrera</th>
+								<th>Provincia</th>
+								<th>Ciudad</th>
 								<th>Correo personal</th>
 								<th>Celular</th>
+								<th>Estado</th>
 								<th>Etapa</th>
 								<th>Origen</th>
 								<th>Creado</th>
@@ -189,8 +194,12 @@
 									<td><?= e($prospecto['id'] ?? '-') ?></td>
 									<td><?= e(trim((string) (($prospecto['nombre'] ?? '') . ' ' . ($prospecto['apellido'] ?? '')))) ?></td>
 									<td><?= e($prospecto['cedula'] ?? '-') ?></td>
+									<td><?= e($prospecto['carrera'] ?? '-') ?></td>
+									<td><?= e($prospecto['provincia'] ?? '-') ?></td>
+									<td><?= e($prospecto['ciudad'] ?? '-') ?></td>
 									<td><?= e($prospecto['email'] ?? '-') ?></td>
 									<td><?= e($prospecto['celular'] ?? '-') ?></td>
+									<td><?= e($prospecto['estado_cliente'] ?? 'Cliente potencial') ?></td>
 									<td><span class="badge text-bg-light border"><?= e($prospecto['etapa'] ?? 'Sin etapa') ?></span></td>
 									<td><?= e($prospecto['origen'] ?? '-') ?></td>
 									<td><?= e($prospecto['created_at'] ?? '-') ?></td>
@@ -212,7 +221,7 @@
 							<?php endforeach; ?>
 							<?php if (empty($prospectosLocales)): ?>
 								<tr>
-									<td colspan="9" class="text-center text-muted py-4">No hay clientes potenciales CRM creados todavia.</td>
+									<td colspan="13" class="text-center text-muted py-4">No hay clientes potenciales CRM creados todavia.</td>
 								</tr>
 							<?php endif; ?>
 						</tbody>
@@ -285,8 +294,25 @@
 							<input type="email" id="prospectCorreoPersonal" name="correo_personal" class="form-control" maxlength="255" placeholder="persona@correo.com">
 						</div>
 						<div class="col-md-6">
-							<label for="prospectOrigen" class="form-label">Origen</label>
-							<input type="text" id="prospectOrigen" name="origen" class="form-control" maxlength="100" value="crm_manual">
+							<label for="prospectOrigen" class="form-label">Asesor</label>
+							<input type="text" id="prospectOrigen" name="origen" class="form-control" maxlength="100" placeholder="Asesor que crea el prospecto">
+						</div>
+						<div class="col-md-6">
+							<label for="prospectCarrera" class="form-label">Carrera</label>
+							<select id="prospectCarrera" name="carrera" class="form-select">
+								<option value="">Seleccione carrera</option>
+								<?php foreach ($programas as $programa): ?>
+									<option value="<?= e((string) $programa) ?>"><?= e((string) $programa) ?></option>
+								<?php endforeach; ?>
+							</select>
+						</div>
+						<div class="col-md-6">
+							<label for="prospectProvincia" class="form-label">Provincia</label>
+							<input type="text" id="prospectProvincia" name="provincia" class="form-control" maxlength="120" placeholder="Ej: Pichincha">
+						</div>
+						<div class="col-md-6">
+							<label for="prospectCiudad" class="form-label">Ciudad</label>
+							<input type="text" id="prospectCiudad" name="ciudad" class="form-control" maxlength="120" placeholder="Ej: Quito">
 						</div>
 					</div>
 				</div>
