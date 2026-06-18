@@ -22,6 +22,15 @@
 
 		<!-- Formulario -->
 		<div class="admin-form">
+			<?php
+			$pipelineLogicOptions = [
+				'admisiones' => 'Admisiones',
+				'matriculas' => 'Matriculas',
+				'docencia' => 'Docencia',
+			];
+			$itemCategoria = strtolower(trim((string) ($item['categoria'] ?? '')));
+			$itemCategoria = strtr($itemCategoria, ['á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u', 'ñ' => 'n']);
+			?>
 			<form method="POST" action="<?= base_url('admin/catalogo/' . $type . '/' . $item['id']) ?>" data-validate>
 				<?= csrf_field() ?>
 				
@@ -63,9 +72,14 @@
 						<small class="form-text text-muted">Posición en el pipeline</small>
 					</div>
 					<div class="form-group">
-						<label for="categoria"><i class="bi bi-tag"></i> Categoría</label>
-						<input type="text" class="form-control" id="categoria" name="categoria" value="<?= e($item['categoria'] ?? '') ?>" placeholder="Ej: Inicial, Desarrollo...">
-						<small class="form-text text-muted">Categorización del pipeline</small>
+						<label for="categoria"><i class="bi bi-diagram-3"></i> Lógica CRM *</label>
+						<select class="form-control" id="categoria" name="categoria" required>
+							<option value="">Selecciona la lógica CRM</option>
+							<?php foreach ($pipelineLogicOptions as $logicValue => $logicLabel): ?>
+								<option value="<?= e($logicValue) ?>" <?= $itemCategoria === $logicValue ? 'selected' : '' ?>><?= e($logicLabel) ?></option>
+							<?php endforeach; ?>
+						</select>
+						<small class="form-text text-muted">Define en cuál CRM se contabiliza esta etapa.</small>
 					</div>
 				<?php endif; ?>
 

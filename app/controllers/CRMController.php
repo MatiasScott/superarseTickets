@@ -6,27 +6,9 @@ class CRMController extends Controller
 	{
 		Auth::requireAuth();
 
-		$admisionesRows = [
-			'adm_1' => ['label' => '1. Etapa interesados', 'count' => 0],
-			'adm_2' => ['label' => '2. Etapa seguimiento', 'count' => 0],
-			'adm_no_legaliza' => ['label' => 'Siguiente periodo no legaliza matricula', 'count' => 0],
-			'adm_descalificado' => ['label' => 'Descalificado', 'count' => 0],
-		];
-		$matriculasRows = [
-			'mat_31' => ['label' => '3.1 Etapa nuevos siguiente paso', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
-			'mat_32' => ['label' => '3.2 Inscrito reingreso y homologacion siguiente paso', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
-			'mat_33' => ['label' => '3.3 Pendiente prematricula antiguos siguiente paso', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
-			'mat_4' => ['label' => '4. Prematricula nuevos y antiguos siguiente paso', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
-			'mat_5' => ['label' => '5. Etapa matriculado PAO actual', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
-		];
-		$docenciaRows = [
-			'doc_riesgo_financiero' => ['label' => 'Riesgo financiero', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
-			'doc_riesgo_academico' => ['label' => 'Riesgo academico', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
-			'doc_riesgo_af' => ['label' => 'Riesgo a+f', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
-			'doc_retiro_anulacion' => ['label' => 'Retiro y anulacion de matricula', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
-			'doc_egresado' => ['label' => 'Egresado', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
-			'doc_graduado' => ['label' => 'Graduado', 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0],
-		];
+		$admisionesRows = [];
+		$matriculasRows = [];
+		$docenciaRows = [];
 
 		$kpiMatriculas3233 = [
 			'label' => 'KPI etapas 3.2 + 3.3 por nivel',
@@ -42,12 +24,36 @@ class CRMController extends Controller
 		try {
 			$this->ensureCrmSupportTables();
 			$db = Database::getInstance()->connection();
+			$stageMetaByEstadoId = [];
 			$stageKeyByEstadoId = [];
 			$activeEstados = $db->query("SELECT id, nombre, categoria, orden FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC")->fetchAll() ?: [];
 			foreach ($activeEstados as $estado) {
 				$estadoId = (int) ($estado['id'] ?? 0);
 				if ($estadoId <= 0) {
 					continue;
+				}
+
+				$area = $this->dashboardResolveCrmAreaFromState($estado);
+				if ($area === null) {
+					continue;
+				}
+
+				$label = trim((string) ($estado['nombre'] ?? ''));
+				if ($label === '') {
+					$label = 'Etapa #' . $estadoId;
+				}
+
+				$stageMetaByEstadoId[$estadoId] = [
+					'area' => $area,
+					'label' => $label,
+				];
+
+				if ($area === 'admisiones') {
+					$admisionesRows[$estadoId] = ['label' => $label, 'count' => 0];
+				} elseif ($area === 'matriculas') {
+					$matriculasRows[$estadoId] = ['label' => $label, 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0];
+				} elseif ($area === 'docencia') {
+					$docenciaRows[$estadoId] = ['label' => $label, 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0];
 				}
 
 				$stageKeyByEstadoId[$estadoId] = $this->dashboardResolveStageKeyFromState($estado);
@@ -75,22 +81,52 @@ class CRMController extends Controller
 
 			foreach ($pipelineRows as $row) {
 				$estadoId = (int) ($row['estado_id'] ?? 0);
-				$stageKey = $stageKeyByEstadoId[$estadoId] ?? $this->dashboardResolveStageKey((string) ($row['estado_nombre'] ?? ''));
-				if ($stageKey === null) {
-					continue;
+				$stageName = trim((string) ($row['estado_nombre'] ?? ''));
+				$stageMeta = $stageMetaByEstadoId[$estadoId] ?? null;
+
+				if ($stageMeta === null) {
+					$fallbackArea = $this->dashboardResolveCrmAreaFromState([
+						'nombre' => $stageName,
+						'categoria' => '',
+					]);
+					if ($fallbackArea === null) {
+						continue;
+					}
+
+					$fallbackLabel = $stageName !== '' ? $stageName : 'Sin etapa';
+					$fallbackKey = 'fallback:' . md5($fallbackArea . '|' . $fallbackLabel);
+					$stageMeta = [
+						'area' => $fallbackArea,
+						'label' => $fallbackLabel,
+					];
+
+					if ($fallbackArea === 'admisiones' && !isset($admisionesRows[$fallbackKey])) {
+						$admisionesRows[$fallbackKey] = ['label' => $fallbackLabel, 'count' => 0];
+					} elseif ($fallbackArea === 'matriculas' && !isset($matriculasRows[$fallbackKey])) {
+						$matriculasRows[$fallbackKey] = ['label' => $fallbackLabel, 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0];
+					} elseif ($fallbackArea === 'docencia' && !isset($docenciaRows[$fallbackKey])) {
+						$docenciaRows[$fallbackKey] = ['label' => $fallbackLabel, 'levels' => $this->dashboardEmptyLevelBucket(), 'total' => 0];
+					}
+
+					$stageMetaByEstadoId[$fallbackKey] = $stageMeta;
+					if (!isset($stageKeyByEstadoId[$fallbackKey])) {
+						$stageKeyByEstadoId[$fallbackKey] = $this->dashboardResolveStageKey($fallbackLabel);
+					}
+					$estadoId = $fallbackKey;
 				}
 
-				if (isset($admisionesRows[$stageKey])) {
-					$admisionesRows[$stageKey]['count']++;
+				if ($stageMeta['area'] === 'admisiones' && isset($admisionesRows[$estadoId])) {
+					$admisionesRows[$estadoId]['count']++;
 					continue;
 				}
 
 				$studentId = (int) ($row['student_id'] ?? 0);
 				$nivel = $userLevels[$studentId] ?? null;
 
-				if (isset($matriculasRows[$stageKey])) {
-					$this->dashboardIncrementByLevel($matriculasRows[$stageKey], $nivel);
+				if ($stageMeta['area'] === 'matriculas' && isset($matriculasRows[$estadoId])) {
+					$this->dashboardIncrementByLevel($matriculasRows[$estadoId], $nivel);
 
+					$stageKey = $stageKeyByEstadoId[$estadoId] ?? $this->dashboardResolveStageKey($stageName);
 					if ($stageKey === 'mat_32' || $stageKey === 'mat_33') {
 						$this->dashboardIncrementByLevel($kpiMatriculas3233, $nivel);
 					}
@@ -101,8 +137,8 @@ class CRMController extends Controller
 					continue;
 				}
 
-				if (isset($docenciaRows[$stageKey])) {
-					$this->dashboardIncrementByLevel($docenciaRows[$stageKey], $nivel);
+				if ($stageMeta['area'] === 'docencia' && isset($docenciaRows[$estadoId])) {
+					$this->dashboardIncrementByLevel($docenciaRows[$estadoId], $nivel);
 				}
 			}
 		} catch (Throwable $e) {
@@ -150,6 +186,45 @@ class CRMController extends Controller
 		$value = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $value) ?: $value;
 		$value = preg_replace('/[^a-z0-9]+/', ' ', $value) ?: '';
 		return trim(preg_replace('/\s+/', ' ', $value) ?: '');
+	}
+
+	private function dashboardResolveCrmAreaFromState(array $state): ?string
+	{
+		$normalizedCategory = $this->dashboardNormalizeLabel((string) ($state['categoria'] ?? ''));
+		$normalizedName = $this->dashboardNormalizeLabel((string) ($state['nombre'] ?? ''));
+
+		$areaAliases = [
+			'admisiones' => ['admisiones', 'admision', 'adm'],
+			'matriculas' => ['matriculas', 'matricula', 'mat'],
+			'docencia' => ['docencia', 'docente', 'doc'],
+		];
+
+		foreach ($areaAliases as $area => $aliases) {
+			foreach ($aliases as $alias) {
+				if ($normalizedCategory === $alias || strpos($normalizedCategory, $alias . ' ') === 0 || strpos($normalizedCategory, ' ' . $alias . ' ') !== false || substr($normalizedCategory, -strlen(' ' . $alias)) === ' ' . $alias) {
+					return $area;
+				}
+			}
+		}
+
+		$stageKey = $this->dashboardResolveStageKey((string) ($state['nombre'] ?? ''));
+		if ($stageKey !== null) {
+			if (strpos($stageKey, 'adm_') === 0) {
+				return 'admisiones';
+			}
+			if (strpos($stageKey, 'mat_') === 0) {
+				return 'matriculas';
+			}
+			if (strpos($stageKey, 'doc_') === 0) {
+				return 'docencia';
+			}
+		}
+
+		if (strpos($normalizedName, 'riesgo') !== false || strpos($normalizedName, 'egresado') !== false || strpos($normalizedName, 'graduado') !== false || strpos($normalizedName, 'retiro') !== false) {
+			return 'docencia';
+		}
+
+		return null;
 	}
 
 	private function dashboardResolveStageKey(string $stageName): ?string

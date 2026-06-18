@@ -581,6 +581,42 @@ class AdminController extends Controller
 		return $catalogs[$type] ?? null;
 	}
 
+	private function pipelineCrmLogicOptions(): array
+	{
+		return [
+			'admisiones' => 'Admisiones',
+			'matriculas' => 'Matriculas',
+			'docencia' => 'Docencia',
+		];
+	}
+
+	private function normalizePipelineCrmLogic(string $value): ?string
+	{
+		$normalized = strtolower(trim($value));
+		$normalized = strtr($normalized, [
+			'á' => 'a',
+			'é' => 'e',
+			'í' => 'i',
+			'ó' => 'o',
+			'ú' => 'u',
+			'ñ' => 'n',
+		]);
+
+		$aliases = [
+			'admisiones' => 'admisiones',
+			'admision' => 'admisiones',
+			'adm' => 'admisiones',
+			'matriculas' => 'matriculas',
+			'matricula' => 'matriculas',
+			'mat' => 'matriculas',
+			'docencia' => 'docencia',
+			'docente' => 'docencia',
+			'doc' => 'docencia',
+		];
+
+		return $aliases[$normalized] ?? null;
+	}
+
 	public function catalogIndex(string $type): void
 	{
 		Auth::requireAuth();
@@ -632,7 +668,12 @@ class AdminController extends Controller
 				$data['es_final'] = isset($_POST['es_final']) ? 1 : 0;
 			} elseif ($type === 'pipeline-estados') {
 				$data['orden'] = (int)($_POST['orden'] ?? 1);
-				$data['categoria'] = trim($_POST['categoria'] ?? '');
+				$categoria = $this->normalizePipelineCrmLogic((string) ($_POST['categoria'] ?? ''));
+				if ($categoria === null) {
+					set_flash('error', 'Debes seleccionar la logica CRM: Admisiones, Matriculas o Docencia.');
+					redirect('admin/catalogo/' . $type . '/create');
+				}
+				$data['categoria'] = $categoria;
 			} elseif ($type === 'ticket-tipos') {
 				$data['descripcion'] = trim($_POST['descripcion'] ?? '');
 			}
@@ -701,7 +742,12 @@ class AdminController extends Controller
 				$sql = "UPDATE {$config['table']} SET nombre = :nombre, orden = :orden, es_final = :es_final WHERE id = :id";
 			} elseif ($type === 'pipeline-estados') {
 				$data['orden'] = (int)($_POST['orden'] ?? 1);
-				$data['categoria'] = trim($_POST['categoria'] ?? '');
+				$categoria = $this->normalizePipelineCrmLogic((string) ($_POST['categoria'] ?? ''));
+				if ($categoria === null) {
+					set_flash('error', 'Debes seleccionar la logica CRM: Admisiones, Matriculas o Docencia.');
+					redirect('admin/catalogo/' . $type . '/' . $id . '/edit');
+				}
+				$data['categoria'] = $categoria;
 				$sql = "UPDATE {$config['table']} SET nombre = :nombre, orden = :orden, categoria = :categoria WHERE id = :id";
 			} elseif ($type === 'ticket-tipos') {
 				$data['descripcion'] = trim($_POST['descripcion'] ?? '');
