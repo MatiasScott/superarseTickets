@@ -4,10 +4,24 @@
 	<?php $periodoSeleccionado = $periodoSeleccionado ?? ''; ?>
 	<?php $sourceLabel = $sourceLabel ?? 'No disponible'; ?>
 	<?php $sourceError = $sourceError ?? ''; ?>
+	<?php $studentPage = (int) ($studentPage ?? 1); ?>
+	<?php $studentPages = (int) ($studentPages ?? 1); ?>
+	<?php $totalStudents = (int) ($totalStudents ?? count($estudiantesSuperarse)); ?>
 	<?php $prospectosLocales = $prospectosLocales ?? []; ?>
-	<?php $pPage = (int) ($pPage ?? 1); ?>
-	<?php $pPages = (int) ($pPages ?? 1); ?>
+	<?php $prospectPage = (int) ($prospectPage ?? 1); ?>
+	<?php $prospectPages = (int) ($prospectPages ?? 1); ?>
 	<?php $totalProspects = (int) ($totalProspects ?? 0); ?>
+	<?php
+	$buildCrmUrl = function (array $params = []) use ($periodoSeleccionado, $studentPage, $prospectPage): string {
+		$query = [];
+		if ($periodoSeleccionado !== '') {
+			$query['periodo'] = $periodoSeleccionado;
+		}
+		$query['student_page'] = max(1, (int) ($params['student_page'] ?? $studentPage));
+		$query['prospect_page'] = max(1, (int) ($params['prospect_page'] ?? $prospectPage));
+		return base_url('crm/interesados?' . http_build_query($query));
+	};
+	?>
 	<div class="container-fluid py-4">
 		<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
 			<div>
@@ -119,6 +133,36 @@
 			</table>
 		</div>
 
+		<?php if ($studentPages > 1): ?>
+		<nav class="mt-3" aria-label="Paginacion estudiantes CRM">
+			<ul class="pagination pagination-sm justify-content-center flex-wrap">
+				<li class="page-item <?= $studentPage <= 1 ? 'disabled' : '' ?>">
+					<a class="page-link" href="<?= e($buildCrmUrl(['student_page' => $studentPage - 1])) ?>">&#8249; Anterior</a>
+				</li>
+				<?php
+				$studentRangeStart = max(1, $studentPage - 2);
+				$studentRangeEnd = min($studentPages, $studentPage + 2);
+				if ($studentRangeStart > 1): ?>
+					<li class="page-item"><a class="page-link" href="<?= e($buildCrmUrl(['student_page' => 1])) ?>">1</a></li>
+					<?php if ($studentRangeStart > 2): ?><li class="page-item disabled"><span class="page-link">…</span></li><?php endif; ?>
+				<?php endif; ?>
+				<?php for ($page = $studentRangeStart; $page <= $studentRangeEnd; $page++): ?>
+					<li class="page-item <?= $page === $studentPage ? 'active' : '' ?>">
+						<a class="page-link" href="<?= e($buildCrmUrl(['student_page' => $page])) ?>"><?= $page ?></a>
+					</li>
+				<?php endfor; ?>
+				<?php if ($studentRangeEnd < $studentPages): ?>
+					<?php if ($studentRangeEnd < $studentPages - 1): ?><li class="page-item disabled"><span class="page-link">…</span></li><?php endif; ?>
+					<li class="page-item"><a class="page-link" href="<?= e($buildCrmUrl(['student_page' => $studentPages])) ?>"><?= $studentPages ?></a></li>
+				<?php endif; ?>
+				<li class="page-item <?= $studentPage >= $studentPages ? 'disabled' : '' ?>">
+					<a class="page-link" href="<?= e($buildCrmUrl(['student_page' => $studentPage + 1])) ?>">Siguiente &#8250;</a>
+				</li>
+			</ul>
+			<p class="text-center text-muted small">Pagina <?= $studentPage ?> de <?= $studentPages ?> - <?= $totalStudents ?> estudiantes</p>
+		</nav>
+		<?php endif; ?>
+
 		<div class="card border-0 shadow-sm mt-4">
 			<div class="card-header bg-white">
 				<h2 class="h5 mb-0"><i class="bi bi-person-badge"></i> Clientes potenciales creados en CRM</h2>
@@ -177,39 +221,33 @@
 			</div>
 		</div>
 
-		<?php
-		$qBase = '';
-		if ($periodoSeleccionado !== '') {
-			$qBase .= 'periodo=' . rawurlencode($periodoSeleccionado) . '&';
-		}
-		?>
-		<?php if ($pPages > 1): ?>
+		<?php if ($prospectPages > 1): ?>
 		<nav class="mt-3" aria-label="Paginacion clientes potenciales">
 			<ul class="pagination pagination-sm justify-content-center flex-wrap">
-				<li class="page-item <?= $pPage <= 1 ? 'disabled' : '' ?>">
-					<a class="page-link" href="<?= e(base_url('crm/interesados?' . $qBase . 'page=' . ($pPage - 1))) ?>">&#8249; Anterior</a>
+				<li class="page-item <?= $prospectPage <= 1 ? 'disabled' : '' ?>">
+					<a class="page-link" href="<?= e($buildCrmUrl(['prospect_page' => $prospectPage - 1])) ?>">&#8249; Anterior</a>
 				</li>
 				<?php
-				$rangeStart = max(1, $pPage - 2);
-				$rangeEnd   = min($pPages, $pPage + 2);
+				$rangeStart = max(1, $prospectPage - 2);
+				$rangeEnd   = min($prospectPages, $prospectPage + 2);
 				if ($rangeStart > 1): ?>
-					<li class="page-item"><a class="page-link" href="<?= e(base_url('crm/interesados?' . $qBase . 'page=1')) ?>">1</a></li>
+					<li class="page-item"><a class="page-link" href="<?= e($buildCrmUrl(['prospect_page' => 1])) ?>">1</a></li>
 					<?php if ($rangeStart > 2): ?><li class="page-item disabled"><span class="page-link">…</span></li><?php endif; ?>
 				<?php endif; ?>
 				<?php for ($p = $rangeStart; $p <= $rangeEnd; $p++): ?>
-					<li class="page-item <?= $p === $pPage ? 'active' : '' ?>">
-						<a class="page-link" href="<?= e(base_url('crm/interesados?' . $qBase . 'page=' . $p)) ?>"><?= $p ?></a>
+					<li class="page-item <?= $p === $prospectPage ? 'active' : '' ?>">
+						<a class="page-link" href="<?= e($buildCrmUrl(['prospect_page' => $p])) ?>"><?= $p ?></a>
 					</li>
 				<?php endfor; ?>
-				<?php if ($rangeEnd < $pPages): ?>
-					<?php if ($rangeEnd < $pPages - 1): ?><li class="page-item disabled"><span class="page-link">…</span></li><?php endif; ?>
-					<li class="page-item"><a class="page-link" href="<?= e(base_url('crm/interesados?' . $qBase . 'page=' . $pPages)) ?>"><?= $pPages ?></a></li>
+				<?php if ($rangeEnd < $prospectPages): ?>
+					<?php if ($rangeEnd < $prospectPages - 1): ?><li class="page-item disabled"><span class="page-link">…</span></li><?php endif; ?>
+					<li class="page-item"><a class="page-link" href="<?= e($buildCrmUrl(['prospect_page' => $prospectPages])) ?>"><?= $prospectPages ?></a></li>
 				<?php endif; ?>
-				<li class="page-item <?= $pPage >= $pPages ? 'disabled' : '' ?>">
-					<a class="page-link" href="<?= e(base_url('crm/interesados?' . $qBase . 'page=' . ($pPage + 1))) ?>">Siguiente &#8250;</a>
+				<li class="page-item <?= $prospectPage >= $prospectPages ? 'disabled' : '' ?>">
+					<a class="page-link" href="<?= e($buildCrmUrl(['prospect_page' => $prospectPage + 1])) ?>">Siguiente &#8250;</a>
 				</li>
 			</ul>
-			<p class="text-center text-muted small">Página <?= $pPage ?> de <?= $pPages ?> &mdash; <?= $totalProspects ?> clientes potenciales</p>
+			<p class="text-center text-muted small">Pagina <?= $prospectPage ?> de <?= $prospectPages ?> - <?= $totalProspects ?> clientes potenciales</p>
 		</nav>
 		<?php endif; ?>
 	</div>

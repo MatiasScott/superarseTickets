@@ -364,6 +364,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		} else {
 			url.searchParams.set('periodo', selected);
 		}
+		url.searchParams.set('student_page', '1');
 		window.location.href = url.pathname + (url.search ? url.search : '');
 	});
 	filterClearBtn?.addEventListener('click', () => {

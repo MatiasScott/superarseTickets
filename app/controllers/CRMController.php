@@ -329,26 +329,43 @@ class CRMController extends Controller
 		Auth::requireAuth();
 		$this->ensureCrmSupportTables();
 		$periodoFiltro = $this->sanitizePeriodoKey((string) ($_GET['periodo'] ?? ''));
-		$studentsData = $this->fetchSuperarseStudents(1000, $periodoFiltro);
+
+		$studentsPerPage = 25;
+		$studentPage = max(1, (int) ($_GET['student_page'] ?? 1));
+		$studentOffset = ($studentPage - 1) * $studentsPerPage;
+		$studentsData = $this->fetchSuperarseStudents($studentsPerPage, $periodoFiltro, $studentOffset);
 		$estudiantesSuperarse = is_array($studentsData['rows'] ?? null) ? $studentsData['rows'] : [];
 		$periodos = is_array($studentsData['periodos'] ?? null) ? $studentsData['periodos'] : [];
+		$totalStudents = max(0, (int) ($studentsData['total'] ?? count($estudiantesSuperarse)));
+		$studentPages = max(1, (int) ceil($totalStudents / $studentsPerPage));
+		$studentPage = min($studentPage, $studentPages);
+		if ($studentPage > 0 && $studentOffset !== (($studentPage - 1) * $studentsPerPage)) {
+			$studentOffset = ($studentPage - 1) * $studentsPerPage;
+			$studentsData = $this->fetchSuperarseStudents($studentsPerPage, $periodoFiltro, $studentOffset);
+			$estudiantesSuperarse = is_array($studentsData['rows'] ?? null) ? $studentsData['rows'] : [];
+			$periodos = is_array($studentsData['periodos'] ?? null) ? $studentsData['periodos'] : $periodos;
+		}
 
-		$pPerPage = 25;
-		$pPage    = max(1, (int) ($_GET['page'] ?? 1));
+		$prospectPerPage = 25;
+		$prospectPage = max(1, (int) ($_GET['prospect_page'] ?? 1));
 		$totalProspects = $this->countLocalProspects();
-		$pPages   = max(1, (int) ceil($totalProspects / $pPerPage));
-		$pPage    = min($pPage, $pPages);
-		$prospectosLocales = $this->fetchLocalProspects($pPerPage, ($pPage - 1) * $pPerPage);
+		$prospectPages = max(1, (int) ceil($totalProspects / $prospectPerPage));
+		$prospectPage = min($prospectPage, $prospectPages);
+		$prospectosLocales = $this->fetchLocalProspects($prospectPerPage, ($prospectPage - 1) * $prospectPerPage);
 
 		$this->view('crm/interesados', [
 			'estudiantesSuperarse' => $estudiantesSuperarse,
+			'studentPage'      => $studentPage,
+			'studentPages'     => $studentPages,
+			'studentsPerPage'  => $studentsPerPage,
+			'totalStudents'    => $totalStudents,
 			'prospectosLocales' => $prospectosLocales,
 			'periodos' => $periodos,
 			'periodoSeleccionado' => $periodoFiltro,
 			'sourceLabel' => (string) ($studentsData['source'] ?? 'No disponible'),
 			'sourceError' => (string) ($studentsData['error'] ?? ''),
-			'pPage'          => $pPage,
-			'pPages'         => $pPages,
+			'prospectPage'   => $prospectPage,
+			'prospectPages'  => $prospectPages,
 			'totalProspects' => $totalProspects,
 		], [
 			'title' => 'CRM - Ver todo CRM',
@@ -499,15 +516,16 @@ class CRMController extends Controller
 		]);
 	}
 
-	private function fetchSuperarseStudents(int $limit = 500, string $periodoFiltro = ''): array
+	private function fetchSuperarseStudents(int $limit = 500, string $periodoFiltro = '', int $offset = 0): array
 	{
-		$limit = max(50, min(2000, $limit));
+		$limit = max(1, min(2000, $limit));
+		$offset = max(0, $offset);
 		$periodoFiltro = $this->sanitizePeriodoKey($periodoFiltro);
 		try {
 			$this->ensureCrmSupportTables();
 			$remote = $this->connectSuperarseDatabase();
 			if ($remote === null) {
-				$fallbackRows = $this->fetchLocalFallbackStudents($limit, $periodoFiltro);
+				$fallbackRows = $this->fetchLocalFallbackStudents($limit, $periodoFiltro, $offset);
 				$fallbackRows = $this->attachPipelineData($fallbackRows);
 				$fallbackTotal = $this->countLocalStudents($periodoFiltro);
 				$periodos = $this->fetchLocalPeriodOptions();
@@ -550,7 +568,7 @@ class CRMController extends Controller
 					FROM users u
 					$whereSql
 					ORDER BY u.id DESC
-					LIMIT :limit";
+					LIMIT :limit OFFSET :offset";
 			} else {
 				$whereSql = '';
 				if ($periodoFiltro !== '') {
@@ -571,7 +589,7 @@ class CRMController extends Controller
 						LEFT JOIN carreras ca ON ca.id = m.carrera_id
 						$whereSql
 						ORDER BY e.id DESC
-						LIMIT :limit";
+						LIMIT :limit OFFSET :offset";
 			}
 
 			$stmt = $remote->prepare($sql);
@@ -579,6 +597,7 @@ class CRMController extends Controller
 				$stmt->bindValue(':periodo', $periodoFiltro, PDO::PARAM_STR);
 			}
 			$stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+			$stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
 			$stmt->execute();
 			$rows = $stmt->fetchAll() ?: [];
 			$rows = $this->attachPipelineData($rows);
@@ -615,7 +634,7 @@ class CRMController extends Controller
 				'error' => '',
 			];
 		} catch (Throwable $e) {
-			$fallbackRows = $this->fetchLocalFallbackStudents($limit, $periodoFiltro);
+			$fallbackRows = $this->fetchLocalFallbackStudents($limit, $periodoFiltro, $offset);
 			$fallbackRows = $this->attachPipelineData($fallbackRows);
 			$fallbackTotal = $this->countLocalStudents($periodoFiltro);
 			$periodos = $this->fetchLocalPeriodOptions();
@@ -652,11 +671,12 @@ class CRMController extends Controller
 		return null;
 	}
 
-	private function fetchLocalFallbackStudents(int $limit, string $periodoFiltro = ''): array
+	private function fetchLocalFallbackStudents(int $limit, string $periodoFiltro = '', int $offset = 0): array
 	{
 		try {
 			$db = Database::getInstance()->connection();
 			$periodoFiltro = $this->sanitizePeriodoKey($periodoFiltro);
+			$offset = max(0, $offset);
 			$whereSql = '';
 			if ($periodoFiltro !== '') {
 				$whereSql = "WHERE DATE_FORMAT(e.created_at, '%Y-%m') = :periodo";
@@ -675,12 +695,13 @@ class CRMController extends Controller
 					LEFT JOIN carreras ca ON ca.id = m.carrera_id
 					$whereSql
 					ORDER BY e.id DESC
-					LIMIT :limit";
+					LIMIT :limit OFFSET :offset";
 			$stmt = $db->prepare($sql);
 			if ($periodoFiltro !== '') {
 				$stmt->bindValue(':periodo', $periodoFiltro, PDO::PARAM_STR);
 			}
 			$stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+			$stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
 			$stmt->execute();
 			return $stmt->fetchAll() ?: [];
 		} catch (Throwable $e) {
