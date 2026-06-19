@@ -126,9 +126,25 @@ class AsyncTaskRunnerService
             $origin = strtolower(trim((string) ($row['correo_origen'] ?? '')));
             $alias = $aliasByEmail[$origin] ?? null;
 
+            $attachmentRows = [];
+            try {
+                $attachmentStmt = $db->prepare("SELECT storage_path FROM campana_adjuntos WHERE campana_id = :campana_id AND deleted_at IS NULL ORDER BY id ASC");
+                $attachmentStmt->execute(['campana_id' => $campanaId]);
+                $attachmentRows = $attachmentStmt->fetchAll() ?: [];
+            } catch (Throwable $e) {
+                $attachmentRows = [];
+            }
+            $attachments = [];
+            foreach ($attachmentRows as $attachmentRow) {
+                $path = trim((string) ($attachmentRow['storage_path'] ?? ''));
+                if ($path !== '' && is_file($path)) {
+                    $attachments[] = $path;
+                }
+            }
+
             $ok = false;
             if ($to !== '' && $subject !== '' && $body !== '') {
-                $ok = $mailService->send($to, $subject, $body, [], [], $alias);
+                $ok = $mailService->send($to, $subject, $body, [], [], $alias, [], $attachments);
             }
 
             if ($ok) {

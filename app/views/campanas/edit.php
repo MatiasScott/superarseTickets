@@ -1,4 +1,8 @@
-<?php include APP_PATH . '/views/layouts/header.php'; ?>
+<?php
+$campana = $campana ?? [];
+$cuentas = $cuentas ?? [];
+$adjuntos = $adjuntos ?? [];
+?>
 
 <script src="https://cdn.quilljs.com/1.3.6/quill.js"></script>
 <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
@@ -6,8 +10,8 @@
 <div class="container my-4">
     <h1 class="h3 mb-4"><i class="bi bi-pencil-square"></i> Editar Campaña</h1>
 
-    <form method="POST" action="<?= base_url('campanas/update/' . $campana['id']) ?>" id="formCampana">
-        <input type="hidden" name="_token" value="<?= generate_csrf() ?>">
+    <form method="POST" action="<?= base_url('campanas/update/' . $campana['id']) ?>" id="formCampana" enctype="multipart/form-data">
+        <input type="hidden" name="_token" value="<?= csrf_token() ?>">
         <input type="hidden" name="contenido" id="contenido">
 
         <div class="card">
@@ -33,6 +37,19 @@
                 <!-- Configuración de envío -->
                 <div class="row mb-3">
                     <div class="col-md-6">
+                        <label class="form-label"><strong>Fuente de destinatarios</strong></label>
+                        <div class="form-control bg-light">
+                            <?php if (($campana['source_db'] ?? 'superarse') === 'sgpro'): ?>
+                                SGPRO
+                                <?php if (!empty($campana['sgpro_filter_type']) && !empty($campana['sgpro_filter_value'])): ?>
+                                    (<?= htmlspecialchars(ucfirst((string) $campana['sgpro_filter_type'])) ?>: <?= htmlspecialchars((string) $campana['sgpro_filter_value']) ?>)
+                                <?php endif; ?>
+                            <?php else: ?>
+                                Superarse Conectados
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
                         <label for="correo_origen" class="form-label"><strong>Enviar desde</strong></label>
                         <select class="form-control" id="correo_origen" name="correo_origen" required <?= $campana['estado'] !== 'borrador' ? 'disabled' : '' ?>>
                             <option value="">-- Selecciona una cuenta --</option>
@@ -54,6 +71,67 @@
                         </div>
                     </div>
                 </div>
+
+                <?php if ($campana['estado'] === 'borrador'): ?>
+                    <div class="mb-3">
+                        <label for="adjuntos" class="form-label"><strong>Agregar nuevos adjuntos</strong></label>
+                        <input class="form-control" type="file" id="adjuntos" name="adjuntos[]" multiple>
+                        <small class="text-muted">Los nuevos archivos se agregan a esta campaña y se enviarán en cada correo.</small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label"><strong>Adjuntos actuales</strong></label>
+                        <?php if (!empty($adjuntos ?? [])): ?>
+                            <div class="table-responsive">
+                                <table class="table table-sm align-middle">
+                                    <thead>
+                                        <tr>
+                                            <th>Archivo</th>
+                                            <th>Tamaño</th>
+                                            <th>Reemplazar</th>
+                                            <th>Eliminar</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php foreach (($adjuntos ?? []) as $adjunto): ?>
+                                            <tr>
+                                                <td>
+                                                    <div class="fw-semibold"><?= htmlspecialchars((string) ($adjunto['nombre_original'] ?? 'archivo')) ?></div>
+                                                    <div class="small text-muted"><?= htmlspecialchars((string) ($adjunto['mime'] ?? '')) ?></div>
+                                                </td>
+                                                <td>
+                                                    <?php
+                                                    $size = (int) ($adjunto['size_bytes'] ?? 0);
+                                                    if ($size >= 1024 * 1024) {
+                                                        echo number_format($size / (1024 * 1024), 2) . ' MB';
+                                                    } elseif ($size >= 1024) {
+                                                        echo number_format($size / 1024, 2) . ' KB';
+                                                    } else {
+                                                        echo $size . ' B';
+                                                    }
+                                                    ?>
+                                                </td>
+                                                <td>
+                                                    <input type="file" class="form-control form-control-sm" name="replace_attachment[<?= (int) ($adjunto['id'] ?? 0) ?>]">
+                                                </td>
+                                                <td>
+                                                    <div class="form-check">
+                                                        <input class="form-check-input" type="checkbox" value="<?= (int) ($adjunto['id'] ?? 0) ?>" name="delete_attachment_ids[]" id="delete_attachment_<?= (int) ($adjunto['id'] ?? 0) ?>">
+                                                        <label class="form-check-label" for="delete_attachment_<?= (int) ($adjunto['id'] ?? 0) ?>">
+                                                            Quitar
+                                                        </label>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <?php else: ?>
+                            <div class="alert alert-light border mb-0">Esta campaña aún no tiene adjuntos.</div>
+                        <?php endif; ?>
+                    </div>
+                <?php endif; ?>
 
                 <!-- Editor HTML -->
                 <label class="form-label"><strong>Contenido del Correo</strong></label>
@@ -120,5 +198,3 @@
         });
     <?php endif; ?>
 </script>
-
-<?php include APP_PATH . '/views/layouts/footer.php'; ?>

@@ -10,6 +10,9 @@ class CampanaController extends Controller
 			asunto VARCHAR(255) NOT NULL,
 			contenido LONGTEXT NOT NULL,
 			correo_origen VARCHAR(255) NOT NULL,
+            source_db VARCHAR(20) NOT NULL DEFAULT 'superarse',
+            sgpro_filter_type VARCHAR(20) NULL,
+            sgpro_filter_value VARCHAR(191) NULL,
 			tipo_destinatarios ENUM('todos', 'periodo', 'personalizado') NOT NULL DEFAULT 'todos',
 			periodo_id INT NULL,
 			estado ENUM('borrador', 'programada', 'enviando', 'completada', 'cancelada') NOT NULL DEFAULT 'borrador',
@@ -30,7 +33,7 @@ class CampanaController extends Controller
         $db->exec("CREATE TABLE IF NOT EXISTS campana_destinatarios (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			campana_id INT NOT NULL,
-			contacto_id INT NOT NULL,
+            contacto_id INT NULL,
 			correo_destino VARCHAR(255) NOT NULL,
 			nombre_destino VARCHAR(255),
 			estado ENUM('pendiente', 'enviado', 'fallido', 'rebotado') NOT NULL DEFAULT 'pendiente',
@@ -43,6 +46,22 @@ class CampanaController extends Controller
 			FOREIGN KEY (campana_id) REFERENCES campanas(id) ON DELETE CASCADE,
 			FOREIGN KEY (contacto_id) REFERENCES contactos(id) ON DELETE CASCADE
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+        $db->exec("CREATE TABLE IF NOT EXISTS campana_adjuntos (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            campana_id INT NOT NULL,
+            nombre_original VARCHAR(255) NOT NULL,
+            nombre_storage VARCHAR(255) NOT NULL,
+            mime VARCHAR(120) NULL,
+            size_bytes INT NOT NULL DEFAULT 0,
+            storage_path VARCHAR(500) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            deleted_at TIMESTAMP NULL,
+            INDEX idx_campana_adjuntos_campana (campana_id),
+            INDEX idx_campana_adjuntos_deleted (deleted_at),
+            FOREIGN KEY (campana_id) REFERENCES campanas(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
         $db->exec("CREATE TABLE IF NOT EXISTS cola_envios (
 			id INT AUTO_INCREMENT PRIMARY KEY,
@@ -59,6 +78,24 @@ class CampanaController extends Controller
 			FOREIGN KEY (campana_id) REFERENCES campanas(id) ON DELETE CASCADE,
 			FOREIGN KEY (destinatario_id) REFERENCES campana_destinatarios(id) ON DELETE CASCADE
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+        // Migraciones suaves para instalaciones existentes.
+        try {
+            $db->exec("ALTER TABLE campanas ADD COLUMN source_db VARCHAR(20) NOT NULL DEFAULT 'superarse' AFTER correo_origen");
+        } catch (Throwable $e) {
+        }
+        try {
+            $db->exec("ALTER TABLE campanas ADD COLUMN sgpro_filter_type VARCHAR(20) NULL AFTER source_db");
+        } catch (Throwable $e) {
+        }
+        try {
+            $db->exec("ALTER TABLE campanas ADD COLUMN sgpro_filter_value VARCHAR(191) NULL AFTER sgpro_filter_type");
+        } catch (Throwable $e) {
+        }
+        try {
+            $db->exec("ALTER TABLE campana_destinatarios MODIFY contacto_id INT NULL");
+        } catch (Throwable $e) {
+        }
     }
 
     public function index(): void
@@ -90,10 +127,11 @@ class CampanaController extends Controller
         $pipelineEstados = $this->getCampanaPipelineStates($db);
         $carreras = $this->getCampanaCarreras($db);
         $niveles = $this->getCampanaNiveles();
+        $sgproFilters = $this->getCampanaSgproFilters();
         $resumen = array_merge($this->getCampanaCreateSummary($db), $this->getCampanaExternalStats());
         $resumen['cuentas'] = count($cuentas);
 
-        $this->view('campanas/create', compact('cuentas', 'periodos', 'pipelineEstados', 'carreras', 'niveles', 'resumen'), ['title' => 'Nueva Campaña']);
+        $this->view('campanas/create', compact('cuentas', 'periodos', 'pipelineEstados', 'carreras', 'niveles', 'sgproFilters', 'resumen'), ['title' => 'Nueva Campaña']);
     }
 
     public function store(): void
@@ -116,6 +154,9 @@ class CampanaController extends Controller
         $periodoIdRaw = trim((string) ($_POST['periodo_id'] ?? ''));
         $periodo_id = $periodoIdRaw !== '' ? (int) $periodoIdRaw : null;
         $entityScope = (string) ($_POST['entity_scope'] ?? 'todos');
+        $sourceDb = strtolower(trim((string) ($_POST['source_db'] ?? 'superarse')));
+        $sgproFilterType = strtolower(trim((string) ($_POST['sgpro_filter_type'] ?? '')));
+        $sgproFilterValue = trim((string) ($_POST['sgpro_filter_value'] ?? ''));
         $pipelineEstadoRaw = trim((string) ($_POST['pipeline_estado_id'] ?? ''));
         $pipelineEstadoId = $pipelineEstadoRaw !== '' ? (int) $pipelineEstadoRaw : null;
         $carreraPrograma = trim((string) ($_POST['carrera_id'] ?? ''));
@@ -124,9 +165,20 @@ class CampanaController extends Controller
         if (!in_array($entityScope, ['todos', 'potenciales', 'estudiantes'], true)) {
             $entityScope = 'todos';
         }
+        if (!in_array($sourceDb, ['superarse', 'sgpro'], true)) {
+            $sourceDb = 'superarse';
+        }
+        if (!in_array($sgproFilterType, ['', 'dedicacion', 'escuela'], true)) {
+            $sgproFilterType = '';
+        }
 
         if ($titulo === '' || $asunto === '' || $contenido === '' || $correo_origen === '') {
             set_flash('error', 'Todos los campos son obligatorios.');
+            redirect('campanas/create');
+        }
+
+        if ($sourceDb === 'sgpro' && $sgproFilterType !== '' && $sgproFilterValue === '') {
+            set_flash('error', 'Selecciona un valor para el filtro de SGPRO.');
             redirect('campanas/create');
         }
 
@@ -138,13 +190,16 @@ class CampanaController extends Controller
         try {
             $db->beginTransaction();
 
-            $stmt = $db->prepare("INSERT INTO campanas (titulo, asunto, contenido, correo_origen, tipo_destinatarios, periodo_id, usuario_id, estado)
-				VALUES (:titulo, :asunto, :contenido, :correo_origen, :tipo_destinatarios, :periodo_id, :usuario_id, 'borrador')");
+            $stmt = $db->prepare("INSERT INTO campanas (titulo, asunto, contenido, correo_origen, source_db, sgpro_filter_type, sgpro_filter_value, tipo_destinatarios, periodo_id, usuario_id, estado)
+				VALUES (:titulo, :asunto, :contenido, :correo_origen, :source_db, :sgpro_filter_type, :sgpro_filter_value, :tipo_destinatarios, :periodo_id, :usuario_id, 'borrador')");
             $stmt->execute([
                 'titulo' => $titulo,
                 'asunto' => $asunto,
                 'contenido' => $contenido,
                 'correo_origen' => $correo_origen,
+                'source_db' => $sourceDb,
+                'sgpro_filter_type' => $sgproFilterType !== '' ? $sgproFilterType : null,
+                'sgpro_filter_value' => $sgproFilterValue !== '' ? $sgproFilterValue : null,
                 'tipo_destinatarios' => $tipo_destinatarios,
                 'periodo_id' => $periodo_id,
                 'usuario_id' => Auth::id(),
@@ -155,14 +210,22 @@ class CampanaController extends Controller
                 'tipo_destinatarios' => $tipo_destinatarios,
                 'periodo_id' => $periodo_id,
                 'entity_scope' => $entityScope,
+                'source_db' => $sourceDb,
+                'sgpro_filter_type' => $sgproFilterType,
+                'sgpro_filter_value' => $sgproFilterValue,
                 'pipeline_estado_id' => $pipelineEstadoId,
                 'carrera_programa' => $carreraPrograma,
                 'nivel' => $nivelAcademico,
             ]);
 
+            $this->addCampanaAttachmentsFromFiles($db, $campanaId, $_FILES['adjuntos'] ?? null);
+
             AuditLogger::log('CREATE', 'campanas', $campanaId, null, [
                 'titulo' => $titulo,
                 'asunto' => $asunto,
+                'source_db' => $sourceDb,
+                'sgpro_filter_type' => $sgproFilterType,
+                'sgpro_filter_value' => $sgproFilterValue,
                 'tipo_destinatarios' => $tipo_destinatarios,
                 'entity_scope' => $entityScope,
                 'pipeline_estado_id' => $pipelineEstadoId,
@@ -201,7 +264,8 @@ class CampanaController extends Controller
 
         $cuentas = $this->getCampanaMailAccounts();
         $periodos = $this->getCampanaPeriodOptions();
-        $this->view('campanas/edit', compact('campana', 'cuentas', 'periodos'), ['title' => 'Editar Campaña']);
+        $adjuntos = $this->getCampanaAttachments($db, $id);
+        $this->view('campanas/edit', compact('campana', 'cuentas', 'periodos', 'adjuntos'), ['title' => 'Editar Campaña']);
     }
 
     public function update(int $id): void
@@ -263,6 +327,38 @@ class CampanaController extends Controller
                 'asunto' => $asunto,
                 'correo_origen' => $correo_origen,
             ]);
+
+            $deleteIds = array_values(array_unique(array_map('intval', (array) ($_POST['delete_attachment_ids'] ?? []))));
+            if (!empty($deleteIds)) {
+                $this->markCampanaAttachmentsDeleted($db, $id, $deleteIds);
+            }
+
+            $replaceFiles = $_FILES['replace_attachment'] ?? null;
+            if (is_array($replaceFiles) && is_array($replaceFiles['name'] ?? null)) {
+                foreach (array_keys($replaceFiles['name']) as $attachmentIdRaw) {
+                    $attachmentId = (int) $attachmentIdRaw;
+                    if ($attachmentId <= 0) {
+                        continue;
+                    }
+
+                    $errorCode = (int) ($replaceFiles['error'][$attachmentIdRaw] ?? UPLOAD_ERR_NO_FILE);
+                    if ($errorCode === UPLOAD_ERR_NO_FILE) {
+                        continue;
+                    }
+
+                    $file = [
+                        'name' => (string) ($replaceFiles['name'][$attachmentIdRaw] ?? ''),
+                        'type' => (string) ($replaceFiles['type'][$attachmentIdRaw] ?? ''),
+                        'tmp_name' => (string) ($replaceFiles['tmp_name'][$attachmentIdRaw] ?? ''),
+                        'error' => $errorCode,
+                        'size' => (int) ($replaceFiles['size'][$attachmentIdRaw] ?? 0),
+                    ];
+
+                    $this->replaceCampanaAttachment($db, $id, $attachmentId, $file);
+                }
+            }
+
+            $this->addCampanaAttachmentsFromFiles($db, $id, $_FILES['adjuntos'] ?? null);
 
             set_flash('success', 'Campaña actualizada correctamente.');
         } catch (Throwable $e) {
@@ -383,9 +479,12 @@ class CampanaController extends Controller
             redirect('campanas');
         }
 
-        header('Content-Type: text/html; charset=utf-8');
-        echo (string) ($campana['contenido'] ?? '');
-        exit;
+        $this->view('campanas/preview', [
+            'campana' => $campana,
+        ], [
+            'title' => 'Vista previa de campaña',
+            'showSidebar' => false,
+        ]);
     }
 
     private function getCampanaMailAccounts(): array
@@ -575,6 +674,46 @@ class CampanaController extends Controller
         return $options;
     }
 
+    private function getCampanaSgproFilters(): array
+    {
+        $result = [
+            'dedicacion' => [],
+            'escuela' => [],
+        ];
+
+        try {
+            $remote = $this->connectSgproDatabase();
+            if ($remote === null) {
+                return $result;
+            }
+
+            $table = $this->resolveSgproUsersTable($remote);
+            if ($table === null) {
+                return $result;
+            }
+
+            $columns = $this->getTableColumns($remote, $table);
+            foreach (['dedicacion', 'escuela'] as $field) {
+                if (!isset($columns[$field])) {
+                    continue;
+                }
+
+                $stmt = $remote->query("SELECT DISTINCT TRIM(COALESCE($field, '')) AS value FROM $table WHERE TRIM(COALESCE($field, '')) <> '' ORDER BY value ASC");
+                $rows = $stmt ? ($stmt->fetchAll() ?: []) : [];
+                foreach ($rows as $row) {
+                    $value = trim((string) ($row['value'] ?? ''));
+                    if ($value !== '') {
+                        $result[$field][] = $value;
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            return $result;
+        }
+
+        return $result;
+    }
+
     private function getCampanaCreateSummary(PDO $db): array
     {
         try {
@@ -647,6 +786,26 @@ class CampanaController extends Controller
         ]);
     }
 
+    private function connectSgproDatabase(): ?PDO
+    {
+        $host = trim((string) env('SGPRO_DB_HOST', ''));
+        $port = trim((string) env('SGPRO_DB_PORT', '3306'));
+        $database = trim((string) env('SGPRO_DB_DATABASE', ''));
+        $username = trim((string) env('SGPRO_DB_USERNAME', ''));
+        $password = (string) env('SGPRO_DB_PASSWORD', '');
+        $charset = trim((string) env('SGPRO_DB_CHARSET', 'utf8mb4'));
+
+        if ($host === '' || $database === '' || $username === '') {
+            return null;
+        }
+
+        $dsn = 'mysql:host=' . $host . ';port=' . $port . ';dbname=' . $database . ';charset=' . $charset;
+        return new PDO($dsn, $username, $password, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        ]);
+    }
+
     private function resolveSuperarseStudentTable(PDO $remote): ?string
     {
         try {
@@ -668,6 +827,39 @@ class CampanaController extends Controller
         }
 
         return null;
+    }
+
+    private function resolveSgproUsersTable(PDO $remote): ?string
+    {
+        try {
+            $stmt = $remote->query("SHOW TABLES LIKE 'users'");
+            if (($stmt->fetchColumn() ?? '') !== '') {
+                return 'users';
+            }
+        } catch (Throwable $e) {
+            // Ignorar.
+        }
+
+        return null;
+    }
+
+    private function getTableColumns(PDO $db, string $table): array
+    {
+        $columns = [];
+        try {
+            $stmt = $db->query("SHOW COLUMNS FROM $table");
+            $rows = $stmt ? ($stmt->fetchAll() ?: []) : [];
+            foreach ($rows as $row) {
+                $name = strtolower(trim((string) ($row['Field'] ?? '')));
+                if ($name !== '') {
+                    $columns[$name] = true;
+                }
+            }
+        } catch (Throwable $e) {
+            return [];
+        }
+
+        return $columns;
     }
 
     private function findContactByIdentity(PDO $db, string $identity): ?array
@@ -803,8 +995,247 @@ class CampanaController extends Controller
         return $result;
     }
 
+    private function buildSgproRecipients(array $filters): array
+    {
+        $destinatarios = [];
+        $seen = [];
+
+        $sgproFilterType = strtolower(trim((string) ($filters['sgpro_filter_type'] ?? '')));
+        $sgproFilterValue = trim((string) ($filters['sgpro_filter_value'] ?? ''));
+
+        try {
+            $remote = $this->connectSgproDatabase();
+            if ($remote === null) {
+                return [];
+            }
+
+            $table = $this->resolveSgproUsersTable($remote);
+            if ($table === null) {
+                return [];
+            }
+
+            $columns = $this->getTableColumns($remote, $table);
+            if (!isset($columns['email'])) {
+                return [];
+            }
+
+            $nameCandidates = ['nombres', 'apellidos', 'nombre', 'apellido', 'name'];
+            $availableNameColumns = [];
+            foreach ($nameCandidates as $column) {
+                if (isset($columns[$column])) {
+                    $availableNameColumns[] = $column;
+                }
+            }
+
+            $selectCols = ['email'];
+            foreach ($availableNameColumns as $column) {
+                $selectCols[] = $column;
+            }
+
+            $where = ["TRIM(COALESCE(email, '')) <> ''"];
+            $params = [];
+            if ($sgproFilterType !== '' && $sgproFilterValue !== '' && in_array($sgproFilterType, ['dedicacion', 'escuela'], true) && isset($columns[$sgproFilterType])) {
+                $where[] = "LOWER(TRIM(COALESCE($sgproFilterType, ''))) = :filter_value";
+                $params['filter_value'] = mb_strtolower($sgproFilterValue);
+            }
+
+            $sql = 'SELECT ' . implode(', ', $selectCols) . " FROM $table WHERE " . implode(' AND ', $where) . ' ORDER BY id ASC';
+            $stmt = $remote->prepare($sql);
+            $stmt->execute($params);
+            $rows = $stmt->fetchAll() ?: [];
+
+            foreach ($rows as $row) {
+                $mail = $this->normalizeEmailValue((string) ($row['email'] ?? ''));
+                if ($mail === '') {
+                    continue;
+                }
+
+                $key = strtolower($mail);
+                if (isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
+
+                $nombre = '';
+                if (isset($row['nombres']) || isset($row['apellidos'])) {
+                    $nombre = trim((string) ($row['nombres'] ?? '') . ' ' . (string) ($row['apellidos'] ?? ''));
+                }
+                if ($nombre === '' && isset($row['name'])) {
+                    $nombre = trim((string) $row['name']);
+                }
+                if ($nombre === '' && (isset($row['nombre']) || isset($row['apellido']))) {
+                    $nombre = trim((string) ($row['nombre'] ?? '') . ' ' . (string) ($row['apellido'] ?? ''));
+                }
+
+                $destinatarios[] = [
+                    'contacto_id' => null,
+                    'correo' => $mail,
+                    'nombre' => $nombre,
+                ];
+            }
+        } catch (Throwable $e) {
+            return [];
+        }
+
+        return $destinatarios;
+    }
+
+    private function normalizeUploadedFiles($rawFiles): array
+    {
+        if (!is_array($rawFiles) || !isset($rawFiles['name'])) {
+            return [];
+        }
+
+        if (!is_array($rawFiles['name'])) {
+            return [[
+                'name' => (string) ($rawFiles['name'] ?? ''),
+                'type' => (string) ($rawFiles['type'] ?? ''),
+                'tmp_name' => (string) ($rawFiles['tmp_name'] ?? ''),
+                'error' => (int) ($rawFiles['error'] ?? UPLOAD_ERR_NO_FILE),
+                'size' => (int) ($rawFiles['size'] ?? 0),
+            ]];
+        }
+
+        $normalized = [];
+        $count = count($rawFiles['name']);
+        for ($i = 0; $i < $count; $i++) {
+            $normalized[] = [
+                'name' => (string) ($rawFiles['name'][$i] ?? ''),
+                'type' => (string) ($rawFiles['type'][$i] ?? ''),
+                'tmp_name' => (string) ($rawFiles['tmp_name'][$i] ?? ''),
+                'error' => (int) ($rawFiles['error'][$i] ?? UPLOAD_ERR_NO_FILE),
+                'size' => (int) ($rawFiles['size'][$i] ?? 0),
+            ];
+        }
+
+        return $normalized;
+    }
+
+    private function addCampanaAttachmentsFromFiles(PDO $db, int $campanaId, $rawFiles): void
+    {
+        $files = $this->normalizeUploadedFiles($rawFiles);
+        if (empty($files)) {
+            return;
+        }
+
+        foreach ($files as $file) {
+            $errorCode = (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE);
+            if ($errorCode === UPLOAD_ERR_NO_FILE) {
+                continue;
+            }
+
+            $this->storeCampanaAttachment($db, $campanaId, $file);
+        }
+    }
+
+    private function storeCampanaAttachment(PDO $db, int $campanaId, array $file): void
+    {
+        $errorCode = (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE);
+        if ($errorCode !== UPLOAD_ERR_OK) {
+            throw new RuntimeException('No se pudo cargar uno de los adjuntos.');
+        }
+
+        $tmpName = (string) ($file['tmp_name'] ?? '');
+        if ($tmpName === '' || !is_uploaded_file($tmpName)) {
+            throw new RuntimeException('Archivo adjunto inválido.');
+        }
+
+        $original = trim((string) ($file['name'] ?? 'archivo'));
+        $safeOriginal = preg_replace('/[^A-Za-z0-9._-]/', '_', basename($original)) ?: 'archivo';
+        $ext = strtolower(pathinfo($safeOriginal, PATHINFO_EXTENSION));
+        $storageName = date('YmdHis') . '_' . bin2hex(random_bytes(8)) . ($ext !== '' ? '.' . $ext : '');
+
+        $uploadDir = ROOT_PATH . '/uploads/campanas/' . $campanaId;
+        if (!is_dir($uploadDir) && !@mkdir($uploadDir, 0775, true) && !is_dir($uploadDir)) {
+            throw new RuntimeException('No se pudo crear directorio de adjuntos de campaña.');
+        }
+
+        $targetPath = $uploadDir . '/' . $storageName;
+        if (!move_uploaded_file($tmpName, $targetPath)) {
+            throw new RuntimeException('No se pudo guardar el archivo adjunto.');
+        }
+
+        $mime = trim((string) ($file['type'] ?? ''));
+        $sizeBytes = (int) ($file['size'] ?? 0);
+        if ($sizeBytes <= 0 && is_file($targetPath)) {
+            $sizeBytes = (int) filesize($targetPath);
+        }
+
+        $insert = $db->prepare('INSERT INTO campana_adjuntos (campana_id, nombre_original, nombre_storage, mime, size_bytes, storage_path, created_at, updated_at) VALUES (:campana_id, :nombre_original, :nombre_storage, :mime, :size_bytes, :storage_path, NOW(), NOW())');
+        $insert->execute([
+            'campana_id' => $campanaId,
+            'nombre_original' => $safeOriginal,
+            'nombre_storage' => $storageName,
+            'mime' => $mime !== '' ? $mime : null,
+            'size_bytes' => max(0, $sizeBytes),
+            'storage_path' => $targetPath,
+        ]);
+    }
+
+    private function getCampanaAttachments(PDO $db, int $campanaId): array
+    {
+        $stmt = $db->prepare('SELECT id, nombre_original, nombre_storage, mime, size_bytes, storage_path, created_at FROM campana_adjuntos WHERE campana_id = :campana_id AND deleted_at IS NULL ORDER BY id ASC');
+        $stmt->execute(['campana_id' => $campanaId]);
+        return $stmt->fetchAll() ?: [];
+    }
+
+    private function markCampanaAttachmentsDeleted(PDO $db, int $campanaId, array $attachmentIds): void
+    {
+        $ids = array_values(array_filter(array_map('intval', $attachmentIds), static function (int $id): bool {
+            return $id > 0;
+        }));
+
+        if (empty($ids)) {
+            return;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $params = array_merge([$campanaId], $ids);
+        $sql = "UPDATE campana_adjuntos SET deleted_at = NOW(), updated_at = NOW() WHERE campana_id = ? AND id IN ($placeholders) AND deleted_at IS NULL";
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+    }
+
+    private function replaceCampanaAttachment(PDO $db, int $campanaId, int $attachmentId, array $newFile): void
+    {
+        $stmt = $db->prepare('SELECT id FROM campana_adjuntos WHERE id = :id AND campana_id = :campana_id AND deleted_at IS NULL LIMIT 1');
+        $stmt->execute([
+            'id' => $attachmentId,
+            'campana_id' => $campanaId,
+        ]);
+        $row = $stmt->fetch();
+        if (!$row) {
+            return;
+        }
+
+        $this->markCampanaAttachmentsDeleted($db, $campanaId, [$attachmentId]);
+        $this->storeCampanaAttachment($db, $campanaId, $newFile);
+    }
+
     private function agregarDestinatarios(PDO $db, int $campanaId, array $filters): void
     {
+        $sourceDb = strtolower(trim((string) ($filters['source_db'] ?? 'superarse')));
+        if ($sourceDb === 'sgpro') {
+            $destinatarios = $this->buildSgproRecipients($filters);
+            $insert = $db->prepare("INSERT INTO campana_destinatarios (campana_id, contacto_id, correo_destino, nombre_destino)
+			VALUES (:campana_id, :contacto_id, :correo_destino, :nombre_destino)");
+
+            $total = 0;
+            foreach ($destinatarios as $destinatario) {
+                $insert->execute([
+                    'campana_id' => $campanaId,
+                    'contacto_id' => $destinatario['contacto_id'],
+                    'correo_destino' => (string) ($destinatario['correo'] ?? ''),
+                    'nombre_destino' => (string) ($destinatario['nombre'] ?? ''),
+                ]);
+                $total++;
+            }
+
+            $update = $db->prepare('UPDATE campanas SET total_destinatarios = :total WHERE id = :campana_id');
+            $update->execute(['total' => $total, 'campana_id' => $campanaId]);
+            return;
+        }
+
         $tipo = (string) ($filters['tipo_destinatarios'] ?? 'todos');
         $periodoId = isset($filters['periodo_id']) ? (int) $filters['periodo_id'] : 0;
         $entityScope = (string) ($filters['entity_scope'] ?? 'todos');

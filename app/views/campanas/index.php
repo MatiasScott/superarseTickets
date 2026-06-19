@@ -66,24 +66,24 @@
                                 <small><?= date('d/m/Y H:i', strtotime($campana['created_at'])) ?></small>
                             </td>
                             <td data-label="Acciones">
-                                <div class="btn-group btn-group-sm" role="group">
+                                <div class="d-flex flex-wrap gap-1 align-items-center">
                                     <a href="<?= base_url('campanas/edit/' . $campana['id']) ?>" class="btn btn-sm btn-outline-secondary" title="Editar">
-                                        <i class="bi bi-pencil"></i>
+                                        <i class="bi bi-pencil"></i> Editar
                                     </a>
                                     <?php if ($campana['estado'] === 'borrador'): ?>
-                                        <form method="POST" action="<?= base_url('campanas/send/' . $campana['id']) ?>" style="display: inline;">
-                                            <input type="hidden" name="_token" value="<?= generate_csrf() ?>">
-                                            <button type="submit" class="btn btn-sm btn-outline-success" title="Enviar" onclick="return confirm('¿Enviar esta campaña?')">
-                                                <i class="bi bi-send"></i>
+                                        <form method="POST" action="<?= base_url('campanas/send/' . $campana['id']) ?>" class="d-inline">
+                                            <input type="hidden" name="_token" value="<?= csrf_token() ?>">
+                                            <button type="submit" class="btn btn-sm btn-success" title="Enviar" onclick="return confirm('¿Enviar esta campaña ahora? Esta acción iniciará la cola de envío.')">
+                                                <i class="bi bi-send"></i> Enviar
                                             </button>
                                         </form>
                                     <?php endif; ?>
                                     <a href="<?= base_url('campanas/preview/' . $campana['id']) ?>" class="btn btn-sm btn-outline-info" title="Vista previa" target="_blank">
-                                        <i class="bi bi-eye"></i>
+                                        <i class="bi bi-eye"></i> Ver
                                     </a>
                                     <?php if ($campana['estado'] === 'borrador'): ?>
-                                        <form method="POST" action="<?= base_url('campanas/delete/' . $campana['id']) ?>" style="display: inline;">
-                                            <input type="hidden" name="_token" value="<?= generate_csrf() ?>">
+                                        <form method="POST" action="<?= base_url('campanas/delete/' . $campana['id']) ?>" class="d-inline">
+                                            <input type="hidden" name="_token" value="<?= csrf_token() ?>">
                                             <button type="submit" class="btn btn-sm btn-outline-danger" title="Eliminar" onclick="return confirm('¿Eliminar esta campaña?')">
                                                 <i class="bi bi-trash"></i>
                                             </button>

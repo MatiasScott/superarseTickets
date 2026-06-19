@@ -1,10 +1,10 @@
-
 <?php
 $cuentas = $cuentas ?? [];
 $periodos = $periodos ?? [];
 $pipelineEstados = $pipelineEstados ?? [];
 $carreras = $carreras ?? [];
 $niveles = $niveles ?? [];
+$sgproFilters = $sgproFilters ?? ['dedicacion' => [], 'escuela' => []];
 $resumen = $resumen ?? [];
 
 $cuentasCount = count($cuentas);
@@ -83,7 +83,7 @@ $nivelesCount = count($niveles);
 
     <div class="row g-4">
         <div class="col-xl-8">
-            <form method="POST" action="<?= base_url('campanas') ?>" id="formCampana">
+            <form method="POST" action="<?= base_url('campanas') ?>" id="formCampana" enctype="multipart/form-data">
                 <input type="hidden" name="_token" value="<?= csrf_token() ?>">
                 <input type="hidden" name="contenido" id="contenido">
 
@@ -112,6 +112,14 @@ $nivelesCount = count($niveles);
                         </div>
 
                         <div class="row g-3 mb-3">
+                            <div class="col-md-4">
+                                <label for="source_db" class="form-label fw-semibold">Base de datos origen</label>
+                                <select class="form-select" id="source_db" name="source_db">
+                                    <option value="superarse">Superarse Conectados</option>
+                                    <option value="sgpro">SGPRO</option>
+                                </select>
+                                <div class="form-text">Superarse usa la lógica actual de CRM; SGPRO usa users.email.</div>
+                            </div>
                             <div class="col-md-6">
                                 <label for="correo_origen" class="form-label fw-semibold">Enviar desde</label>
                                 <select class="form-select" id="correo_origen" name="correo_origen" required>
@@ -126,7 +134,7 @@ $nivelesCount = count($niveles);
                                     <div class="form-text text-warning">No hay cuentas configuradas; se usará la cuenta por defecto si existe en .env.</div>
                                 <?php endif; ?>
                             </div>
-                            <div class="col-md-6">
+                            <div class="col-md-4">
                                 <label for="tipo_destinatarios" class="form-label fw-semibold">Tipo de destinatarios</label>
                                 <select class="form-select" id="tipo_destinatarios" name="tipo_destinatarios">
                                     <option value="todos">Todos los contactos con correo</option>
@@ -134,6 +142,24 @@ $nivelesCount = count($niveles);
                                     <option value="personalizado">Selección personalizada</option>
                                 </select>
                                 <div class="form-text">La campaña se arma sobre la base CRM y académica existente.</div>
+                            </div>
+                        </div>
+
+                        <div class="row g-3 mb-3" id="sgproFiltersGroup" style="display:none;">
+                            <div class="col-md-6">
+                                <label for="sgpro_filter_type" class="form-label fw-semibold">Filtro SGPRO</label>
+                                <select class="form-select" id="sgpro_filter_type" name="sgpro_filter_type">
+                                    <option value="">Sin filtro</option>
+                                    <option value="dedicacion">Dedicación</option>
+                                    <option value="escuela">Escuela</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="sgpro_filter_value" class="form-label fw-semibold">Valor del filtro</label>
+                                <select class="form-select" id="sgpro_filter_value" name="sgpro_filter_value">
+                                    <option value="">-- Selecciona un valor --</option>
+                                </select>
+                                <div class="form-text">Este filtro solo se aplica cuando la fuente es SGPRO.</div>
                             </div>
                         </div>
 
@@ -172,6 +198,14 @@ $nivelesCount = count($niveles);
                                         <option value="<?= htmlspecialchars((string) ($nivel['id'] ?? '')) ?>"><?= htmlspecialchars((string) ($nivel['nombre'] ?? '')) ?></option>
                                     <?php endforeach; ?>
                                 </select>
+                            </div>
+                        </div>
+
+                        <div class="row g-3 mb-3">
+                            <div class="col-12">
+                                <label for="adjuntos" class="form-label fw-semibold">Adjuntos de campaña</label>
+                                <input class="form-control" type="file" id="adjuntos" name="adjuntos[]" multiple>
+                                <div class="form-text">Puedes adjuntar múltiples archivos. Se enviarán en cada correo de la campaña.</div>
                             </div>
                         </div>
 
@@ -345,42 +379,92 @@ $nivelesCount = count($niveles);
     const tipoDestinatarios = document.getElementById('tipo_destinatarios');
     const periodoGroup = document.getElementById('periodoGroup');
     const correoOrigen = document.getElementById('correo_origen');
+    const sourceDb = document.getElementById('source_db');
+    const sgproFilterType = document.getElementById('sgpro_filter_type');
+    const sgproFilterValue = document.getElementById('sgpro_filter_value');
+    const sgproFiltersGroup = document.getElementById('sgproFiltersGroup');
     const summarySender = document.getElementById('summarySender');
     const summaryRecipients = document.getElementById('summaryRecipients');
     const entityScope = document.getElementById('entity_scope');
     const pipelineEstado = document.getElementById('pipeline_estado_id');
     const carrera = document.getElementById('carrera_id');
     const nivel = document.getElementById('nivel');
+    const sgproData = <?= json_encode($sgproFilters, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
+
+    const populateSgproValues = () => {
+        const type = String(sgproFilterType.value || '');
+        const values = Array.isArray(sgproData[type]) ? sgproData[type] : [];
+        const previous = sgproFilterValue.value;
+        sgproFilterValue.innerHTML = '<option value="">-- Selecciona un valor --</option>';
+        values.forEach((item) => {
+            const opt = document.createElement('option');
+            opt.value = String(item || '');
+            opt.textContent = String(item || '');
+            sgproFilterValue.appendChild(opt);
+        });
+        if (previous && values.includes(previous)) {
+            sgproFilterValue.value = previous;
+        }
+    };
+
+    const toggleSourceGroups = () => {
+        const source = String(sourceDb.value || 'superarse');
+        const isSgpro = source === 'sgpro';
+
+        sgproFiltersGroup.style.display = isSgpro ? 'flex' : 'none';
+
+        entityScope.disabled = isSgpro;
+        pipelineEstado.disabled = isSgpro;
+        carrera.disabled = isSgpro;
+        nivel.disabled = isSgpro;
+        tipoDestinatarios.disabled = isSgpro;
+
+        if (isSgpro) {
+            tipoDestinatarios.value = 'todos';
+            periodoGroup.style.display = 'none';
+            populateSgproValues();
+        }
+
+        syncSummary();
+    };
 
     const syncSummary = () => {
         const senderText = correoOrigen?.selectedOptions?.[0]?.textContent?.trim() || 'Sin seleccionar';
         summarySender.textContent = senderText;
 
-        const tipo = String(tipoDestinatarios.value || 'todos');
-        const scope = String(entityScope.value || 'todos');
-        const scopeLabel = scope === 'potenciales'
-            ? 'potenciales'
-            : (scope === 'estudiantes' ? 'estudiantes' : 'todos');
-
-        if (tipo === 'periodo') {
-            summaryRecipients.textContent = `Estudiantes de un período (${scopeLabel})`;
-        } else if (tipo === 'personalizado') {
-            summaryRecipients.textContent = `Selección personalizada (${scopeLabel})`;
+        const source = String(sourceDb.value || 'superarse');
+        if (source === 'sgpro') {
+            const filterType = String(sgproFilterType.value || '');
+            const filterLabel = filterType === 'dedicacion' ? 'Dedicación' : (filterType === 'escuela' ? 'Escuela' : 'Sin filtro');
+            const filterValue = String(sgproFilterValue.value || '');
+            summaryRecipients.textContent = `SGPRO (users.email) · ${filterLabel}${filterValue ? ': ' + filterValue : ''}`;
         } else {
-            summaryRecipients.textContent = `Todos los contactos con correo (${scopeLabel})`;
-        }
+            const tipo = String(tipoDestinatarios.value || 'todos');
+            const scope = String(entityScope.value || 'todos');
+            const scopeLabel = scope === 'potenciales'
+                ? 'potenciales'
+                : (scope === 'estudiantes' ? 'estudiantes' : 'todos');
 
-        const pipelineLabel = pipelineEstado?.selectedOptions?.[0]?.textContent?.trim() || '';
-        const carreraLabel = carrera?.selectedOptions?.[0]?.textContent?.trim() || '';
-        const nivelLabel = nivel?.selectedOptions?.[0]?.textContent?.trim() || '';
-        if (pipelineLabel && pipelineLabel !== 'Todas las etapas') {
-            summaryRecipients.textContent += ` · Pipeline: ${pipelineLabel}`;
-        }
-        if (carreraLabel && carreraLabel !== 'Todas las carreras') {
-            summaryRecipients.textContent += ` · Carrera: ${carreraLabel}`;
-        }
-        if (nivelLabel && nivelLabel !== 'Todos los niveles') {
-            summaryRecipients.textContent += ` · Nivel: ${nivelLabel}`;
+            if (tipo === 'periodo') {
+                summaryRecipients.textContent = `Estudiantes de un período (${scopeLabel})`;
+            } else if (tipo === 'personalizado') {
+                summaryRecipients.textContent = `Selección personalizada (${scopeLabel})`;
+            } else {
+                summaryRecipients.textContent = `Todos los contactos con correo (${scopeLabel})`;
+            }
+
+            const pipelineLabel = pipelineEstado?.selectedOptions?.[0]?.textContent?.trim() || '';
+            const carreraLabel = carrera?.selectedOptions?.[0]?.textContent?.trim() || '';
+            const nivelLabel = nivel?.selectedOptions?.[0]?.textContent?.trim() || '';
+            if (pipelineLabel && pipelineLabel !== 'Todas las etapas') {
+                summaryRecipients.textContent += ` · Pipeline: ${pipelineLabel}`;
+            }
+            if (carreraLabel && carreraLabel !== 'Todas las carreras') {
+                summaryRecipients.textContent += ` · Carrera: ${carreraLabel}`;
+            }
+            if (nivelLabel && nivelLabel !== 'Todos los niveles') {
+                summaryRecipients.textContent += ` · Nivel: ${nivelLabel}`;
+            }
         }
     };
 
@@ -391,6 +475,12 @@ $nivelesCount = count($niveles);
     };
 
     tipoDestinatarios.addEventListener('change', togglePeriodo);
+    sourceDb.addEventListener('change', toggleSourceGroups);
+    sgproFilterType.addEventListener('change', () => {
+        populateSgproValues();
+        syncSummary();
+    });
+    sgproFilterValue.addEventListener('change', syncSummary);
     correoOrigen.addEventListener('change', syncSummary);
     entityScope.addEventListener('change', syncSummary);
     pipelineEstado.addEventListener('change', syncSummary);
@@ -404,5 +494,6 @@ $nivelesCount = count($niveles);
     });
 
     togglePeriodo();
+    toggleSourceGroups();
     syncSummary();
 </script>
