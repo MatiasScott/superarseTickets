@@ -59,6 +59,130 @@ class DashboardController extends Controller
 		]);
 	}
 
+	public function notifications(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=UTF-8');
+
+		$userId = (int) (Auth::id() ?? 0);
+		if ($userId <= 0) {
+			http_response_code(401);
+			echo json_encode([
+				'ok' => false,
+				'error' => 'No autenticado',
+			]);
+			return;
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+
+			$countSql = "SELECT COUNT(*)
+				FROM tickets t
+				LEFT JOIN ticket_estados te ON te.id = t.estado_id
+				WHERE t.estado = 'activo'
+				  AND (
+						t.asignado_a = :user_id
+						OR EXISTS (
+							SELECT 1
+							FROM usuario_grupos ug
+							WHERE ug.usuario_id = :user_id
+							  AND ug.grupo_id = t.grupo_id
+						)
+				  )
+				  AND (COALESCE(te.es_final, 0) = 0 OR te.id IS NULL)";
+
+			$countStmt = $db->prepare($countSql);
+			$countStmt->execute(['user_id' => $userId]);
+			$total = (int) $countStmt->fetchColumn();
+
+			$listSql = "SELECT
+					t.id,
+					t.codigo,
+					t.asunto,
+					t.created_at,
+					t.fecha_resolucion,
+					t.asignado_a,
+					t.grupo_id,
+					COALESCE(tg.nombre, 'Sin grupo') AS grupo_nombre,
+					COALESCE(te.nombre, 'Sin estado') AS estado_nombre,
+					CASE
+						WHEN t.fecha_resolucion IS NOT NULL AND DATE(t.fecha_resolucion) < CURDATE() THEN 'vencido'
+						WHEN t.fecha_resolucion IS NOT NULL AND DATE(t.fecha_resolucion) = CURDATE() THEN 'vence_hoy'
+						ELSE 'asignado'
+					END AS tipo
+				FROM tickets t
+				LEFT JOIN ticket_estados te ON te.id = t.estado_id
+				LEFT JOIN ticket_grupos tg ON tg.id = t.grupo_id
+				WHERE t.estado = 'activo'
+				  AND (
+						t.asignado_a = :user_id
+						OR EXISTS (
+							SELECT 1
+							FROM usuario_grupos ug
+							WHERE ug.usuario_id = :user_id
+							  AND ug.grupo_id = t.grupo_id
+						)
+				  )
+				  AND (COALESCE(te.es_final, 0) = 0 OR te.id IS NULL)
+				ORDER BY
+					CASE
+						WHEN t.fecha_resolucion IS NOT NULL AND DATE(t.fecha_resolucion) < CURDATE() THEN 0
+						WHEN t.fecha_resolucion IS NOT NULL AND DATE(t.fecha_resolucion) = CURDATE() THEN 1
+						ELSE 2
+					END ASC,
+					t.created_at DESC
+				LIMIT 8";
+
+			$listStmt = $db->prepare($listSql);
+			$listStmt->execute(['user_id' => $userId]);
+			$rows = $listStmt->fetchAll() ?: [];
+
+			$items = [];
+			foreach ($rows as $row) {
+				$code = trim((string) ($row['codigo'] ?? ''));
+				$subject = trim((string) ($row['asunto'] ?? 'Ticket sin asunto'));
+				$type = (string) ($row['tipo'] ?? 'asignado');
+				$status = trim((string) ($row['estado_nombre'] ?? 'Sin estado'));
+				$groupName = trim((string) ($row['grupo_nombre'] ?? 'Sin grupo'));
+				$createdAt = (string) ($row['created_at'] ?? '');
+				$isDirectAssignment = (int) ($row['asignado_a'] ?? 0) === $userId;
+
+				$title = $code !== '' ? ($code . ' - ' . $subject) : $subject;
+				$message = 'Estado: ' . $status;
+				if (!$isDirectAssignment) {
+					$message = 'Ticket de tu grupo (' . $groupName . '). ' . $message;
+				}
+				if ($type === 'vencido') {
+					$message = 'Ticket vencido. ' . $message;
+				} elseif ($type === 'vence_hoy') {
+					$message = 'Vence hoy. ' . $message;
+				}
+
+				$items[] = [
+					'id' => (int) ($row['id'] ?? 0),
+					'title' => $title,
+					'message' => $message,
+					'type' => $type,
+					'created_at' => $createdAt,
+					'url' => base_url('tickets/' . (int) ($row['id'] ?? 0)),
+				];
+			}
+
+			echo json_encode([
+				'ok' => true,
+				'count' => $total,
+				'items' => $items,
+			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		} catch (Throwable $e) {
+			http_response_code(500);
+			echo json_encode([
+				'ok' => false,
+				'error' => 'No se pudieron cargar las notificaciones.',
+			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		}
+	}
+
 	private function getTableColumns(PDO $db, string $table): array
 	{
 		try {

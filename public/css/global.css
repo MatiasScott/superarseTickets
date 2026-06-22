@@ -166,6 +166,109 @@ body {
     line-height: 1;
 }
 
+.notification-btn {
+    position: relative;
+}
+
+.notification-badge {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: #ef4444;
+    color: #fff;
+    font-size: .67rem;
+    font-weight: 700;
+    line-height: 18px;
+    text-align: center;
+    box-shadow: 0 4px 10px rgba(239, 68, 68, .35);
+}
+
+.notification-menu {
+    width: min(380px, 92vw);
+    padding: 0;
+    overflow: hidden;
+}
+
+.notification-menu-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line-soft);
+    background: #fbfdff;
+}
+
+.notification-menu-list {
+    max-height: 360px;
+    overflow-y: auto;
+}
+
+.notification-empty {
+    padding: 18px 14px;
+    text-align: center;
+    color: var(--ink-soft);
+    font-size: .86rem;
+}
+
+.notification-item {
+    display: block;
+    text-decoration: none;
+    color: inherit;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--line-soft);
+    transition: background .18s ease;
+}
+
+.notification-item:hover {
+    background: #f7fbff;
+}
+
+.notification-item-title {
+    font-size: .84rem;
+    font-weight: 700;
+    color: var(--ink);
+    line-height: 1.2;
+    margin-bottom: 4px;
+}
+
+.notification-item-message {
+    font-size: .78rem;
+    color: var(--ink-mid);
+    line-height: 1.3;
+    margin-bottom: 4px;
+}
+
+.notification-item-time {
+    font-size: .72rem;
+    color: var(--ink-soft);
+}
+
+.notification-item.is-danger .notification-item-title { color: #b91c1c; }
+.notification-item.is-warning .notification-item-title { color: #b45309; }
+.notification-item.is-info .notification-item-title { color: #0f4f96; }
+
+.notification-menu-footer {
+    display: block;
+    padding: 10px 14px;
+    text-align: center;
+    text-decoration: none;
+    font-size: .82rem;
+    font-weight: 600;
+    color: var(--turquoise);
+    background: #fbfdff;
+    border-top: 1px solid var(--line-soft);
+}
+
+.notification-menu-footer:hover {
+    background: #f3f9ff;
+    color: #007c8c;
+}
+
 .topbar-icon-btn:hover {
     background: var(--bg);
     border-color: var(--turquoise);

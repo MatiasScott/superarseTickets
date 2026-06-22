@@ -37,9 +37,33 @@
 			</div>
 			<div class="topbar-right">
 				<div id="globalNotifications" class="position-relative"></div>
-				<button type="button" class="topbar-icon-btn" title="Notificaciones" aria-label="Notificaciones">
-					<i class="bi bi-bell"></i>
-				</button>
+				<div class="dropdown">
+					<button
+						type="button"
+						class="topbar-icon-btn notification-btn"
+						id="topbarNotificationsBtn"
+						data-bs-toggle="dropdown"
+						data-bs-auto-close="outside"
+						aria-expanded="false"
+						title="Notificaciones"
+						aria-label="Notificaciones"
+					>
+						<i class="bi bi-bell"></i>
+						<span class="notification-badge d-none" id="topbarNotificationsBadge">0</span>
+					</button>
+					<div class="dropdown-menu dropdown-menu-end notification-menu" aria-labelledby="topbarNotificationsBtn">
+						<div class="notification-menu-head">
+							<strong>Notificaciones</strong>
+							<small id="topbarNotificationsCount" class="text-muted">0</small>
+						</div>
+						<div id="topbarNotificationsList" class="notification-menu-list">
+							<div class="notification-empty">Cargando...</div>
+						</div>
+						<a class="notification-menu-footer" href="<?= e(base_url('tickets')) ?>">
+							Ver todos los tickets
+						</a>
+					</div>
+				</div>
 				<?php if (Auth::check()): ?>
 					<div class="dropdown">
 						<button class="profile-chip" type="button" id="userMenuBtn" data-bs-toggle="dropdown" aria-expanded="false">

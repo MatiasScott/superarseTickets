@@ -1,11 +1,96 @@
 document.addEventListener('DOMContentLoaded', () => {
-            // Botón de notificaciones funcional
-            const notifBtn = document.querySelector('.topbar-icon-btn[title="Notificaciones"]');
-            if (notifBtn) {
-                notifBtn.addEventListener('click', () => {
-                    showGlobalNotification('No tienes notificaciones nuevas.', 'info');
-                });
+        const notificationsBtn = document.getElementById('topbarNotificationsBtn');
+        const notificationsBadge = document.getElementById('topbarNotificationsBadge');
+        const notificationsCount = document.getElementById('topbarNotificationsCount');
+        const notificationsList = document.getElementById('topbarNotificationsList');
+
+        const escapeHtml = (value) => {
+            const div = document.createElement('div');
+            div.textContent = String(value ?? '');
+            return div.innerHTML;
+        };
+
+        const timeAgo = (rawDate) => {
+            if (!rawDate) return '';
+            const date = new Date(rawDate.replace(' ', 'T'));
+            if (Number.isNaN(date.getTime())) return '';
+
+            const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+            if (seconds < 60) return 'hace un momento';
+            if (seconds < 3600) return `hace ${Math.floor(seconds / 60)} min`;
+            if (seconds < 86400) return `hace ${Math.floor(seconds / 3600)} h`;
+            return `hace ${Math.floor(seconds / 86400)} d`;
+        };
+
+        const renderNotifications = (items, totalCount) => {
+            if (notificationsCount) {
+                notificationsCount.textContent = String(totalCount || 0);
             }
+
+            if (notificationsBadge) {
+                notificationsBadge.textContent = String(totalCount || 0);
+                notificationsBadge.classList.toggle('d-none', !(totalCount > 0));
+            }
+
+            if (!notificationsList) {
+                return;
+            }
+
+            if (!Array.isArray(items) || items.length === 0) {
+                notificationsList.innerHTML = '<div class="notification-empty">No tienes notificaciones nuevas.</div>';
+                return;
+            }
+
+            notificationsList.innerHTML = items.map((item) => {
+                const typeClass = item.type === 'vencido' ? 'is-danger' : (item.type === 'vence_hoy' ? 'is-warning' : 'is-info');
+                return `
+                    <a href="${escapeHtml(item.url || '#')}" class="notification-item ${typeClass}">
+                        <div class="notification-item-title">${escapeHtml(item.title || 'Notificación')}</div>
+                        <div class="notification-item-message">${escapeHtml(item.message || '')}</div>
+                        <div class="notification-item-time">${escapeHtml(timeAgo(item.created_at || ''))}</div>
+                    </a>
+                `;
+            }).join('');
+        };
+
+        const loadNotifications = async () => {
+            if (!notificationsBtn) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`${BASE_URL}api/notifications`, {
+                    method: 'GET',
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                });
+
+                if (!response.ok) {
+                    throw new Error('No se pudieron cargar las notificaciones');
+                }
+
+                const payload = await response.json();
+                if (!payload?.ok) {
+                    throw new Error(payload?.error || 'Respuesta inválida');
+                }
+
+                renderNotifications(payload.items || [], Number(payload.count || 0));
+            } catch (error) {
+                if (notificationsList) {
+                    notificationsList.innerHTML = '<div class="notification-empty">No se pudieron cargar notificaciones.</div>';
+                }
+            }
+        };
+
+        if (notificationsBtn) {
+            notificationsBtn.addEventListener('show.bs.dropdown', () => {
+                loadNotifications();
+            });
+            loadNotifications();
+            window.setInterval(loadNotifications, 60000);
+        }
+
         // --- Notificaciones globales tipo toast ---
         window.showGlobalNotification = function(message, type = 'success', timeout = 3500) {
             let container = document.getElementById('globalNotifications');

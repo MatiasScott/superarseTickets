@@ -51,6 +51,7 @@ return static function (Router $router): void {
 
 	$router->get('/dashboard', 'DashboardController@index');
 	$router->get('/heartbeat', 'DashboardController@heartbeat');
+	$router->get('/api/notifications', 'DashboardController@notifications');
 	$router->get('/api/health', 'InternalApiController@health');
 	$router->get('/api/internal/sync-mails', 'InternalApiController@syncMails');
 	$router->post('/api/internal/sync-mails', 'InternalApiController@syncMails');
