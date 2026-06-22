@@ -338,6 +338,11 @@ document.addEventListener('DOMContentLoaded', () => {
 	const filterPipelineSelect = document.getElementById('crmFilterPipeline');
 	const filterClearBtn = document.getElementById('crmFilterClear');
 	const filterPeriodSelect = document.getElementById('crmFilterPeriodo');
+	const prospectsTable = document.getElementById('crmProspectsTable');
+	const prospectOriginSelect = document.getElementById('crmProspectFilterOrigin');
+	const prospectDateFromInput = document.getElementById('crmProspectDateFrom');
+	const prospectDateToInput = document.getElementById('crmProspectDateTo');
+	const prospectClearBtn = document.getElementById('crmProspectFilterClear');
 
 	const applyTableFilters = () => {
 		if (!studentsTable) {
@@ -358,9 +363,34 @@ document.addEventListener('DOMContentLoaded', () => {
 		});
 	};
 
+	const applyProspectFilters = () => {
+		if (!prospectsTable) {
+			return;
+		}
+
+		const selectedOrigin = normalizeText(prospectOriginSelect?.value || '');
+		const fromDate = String(prospectDateFromInput?.value || '').trim();
+		const toDate = String(prospectDateToInput?.value || '').trim();
+		const rows = prospectsTable.querySelectorAll('tbody tr[data-prospect-origin]');
+
+		rows.forEach((row) => {
+			const rowOrigin = normalizeText(row.getAttribute('data-prospect-origin') || '');
+			const rowDate = String(row.getAttribute('data-prospect-date') || '').trim();
+
+			const matchOrigin = selectedOrigin === '' || rowOrigin === selectedOrigin;
+			const matchFrom = fromDate === '' || (rowDate !== '' && rowDate >= fromDate);
+			const matchTo = toDate === '' || (rowDate !== '' && rowDate <= toDate);
+
+			row.style.display = (matchOrigin && matchFrom && matchTo) ? '' : 'none';
+		});
+	};
+
 	filterNameInput?.addEventListener('input', applyTableFilters);
 	filterCareerInput?.addEventListener('change', applyTableFilters);
 	filterPipelineSelect?.addEventListener('change', applyTableFilters);
+	prospectOriginSelect?.addEventListener('change', applyProspectFilters);
+	prospectDateFromInput?.addEventListener('change', applyProspectFilters);
+	prospectDateToInput?.addEventListener('change', applyProspectFilters);
 	filterPeriodSelect?.addEventListener('change', () => {
 		const selected = String(filterPeriodSelect.value || '').trim();
 		const url = new URL(window.location.href);
@@ -392,6 +422,19 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 
 		applyTableFilters();
+	});
+
+	prospectClearBtn?.addEventListener('click', () => {
+		if (prospectOriginSelect) {
+			prospectOriginSelect.value = '';
+		}
+		if (prospectDateFromInput) {
+			prospectDateFromInput.value = '';
+		}
+		if (prospectDateToInput) {
+			prospectDateToInput.value = '';
+		}
+		applyProspectFilters();
 	});
 
 	const contactLinks = document.querySelectorAll('.student-contact-link');

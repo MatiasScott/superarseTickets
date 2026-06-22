@@ -14,6 +14,17 @@
 	<?php $prospectPages = (int) ($prospectPages ?? 1); ?>
 	<?php $totalProspects = (int) ($totalProspects ?? 0); ?>
 	<?php
+	$prospectOrigins = [];
+	foreach ($prospectosLocales as $prospectoItem) {
+		$originValue = trim((string) ($prospectoItem['origen'] ?? ''));
+		if ($originValue !== '') {
+			$prospectOrigins[$originValue] = $originValue;
+		}
+	}
+	ksort($prospectOrigins, SORT_NATURAL | SORT_FLAG_CASE);
+	$prospectOrigins = array_values($prospectOrigins);
+	?>
+	<?php
 	$buildCrmUrl = function (array $params = []) use ($periodoSeleccionado, $studentPage, $prospectPage): string {
 		$query = [];
 		if ($periodoSeleccionado !== '') {
@@ -184,6 +195,30 @@
 			<div class="card-header bg-white">
 				<h2 class="h5 mb-0"><i class="bi bi-person-badge"></i> Clientes potenciales creados en CRM</h2>
 			</div>
+			<div class="card-body pb-0">
+				<div class="row g-2 align-items-end mb-3">
+					<div class="col-md-4">
+						<label for="crmProspectFilterOrigin" class="form-label mb-1"><i class="bi bi-diagram-3"></i> Asesores</label>
+						<select id="crmProspectFilterOrigin" class="form-select">
+							<option value="">Todos los asesores</option>
+							<?php foreach ($prospectOrigins as $originOption): ?>
+								<option value="<?= e(strtolower((string) $originOption)) ?>"><?= e((string) $originOption) ?></option>
+							<?php endforeach; ?>
+						</select>
+					</div>
+					<div class="col-md-3">
+						<label for="crmProspectDateFrom" class="form-label mb-1"><i class="bi bi-calendar-event"></i> Desde</label>
+						<input type="date" id="crmProspectDateFrom" class="form-control">
+					</div>
+					<div class="col-md-3">
+						<label for="crmProspectDateTo" class="form-label mb-1"><i class="bi bi-calendar-check"></i> Hasta</label>
+						<input type="date" id="crmProspectDateTo" class="form-control">
+					</div>
+					<div class="col-md-2 d-grid">
+						<button type="button" id="crmProspectFilterClear" class="btn btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Limpiar</button>
+					</div>
+				</div>
+			</div>
 			<div class="card-body p-0">
 				<div class="table-responsive" data-mobile-cards>
 					<table class="table table-hover align-middle mb-0" id="crmProspectsTable">
@@ -199,14 +234,24 @@
 								<th>Celular</th>
 								<th>Estado</th>
 								<th>Etapa</th>
-								<th>Origen</th>
+								<th>Asesor</th>
 								<th>Creado</th>
 								<th class="text-end">Acciones</th>
 							</tr>
 						</thead>
 						<tbody>
 							<?php foreach ($prospectosLocales as $prospecto): ?>
-								<tr>
+								<?php
+								$rawCreatedAt = trim((string) ($prospecto['created_at'] ?? ''));
+								$createdDate = '';
+								if ($rawCreatedAt !== '' && strlen($rawCreatedAt) >= 10) {
+									$createdDate = substr($rawCreatedAt, 0, 10);
+								}
+								?>
+								<tr
+									data-prospect-origin="<?= e(strtolower((string) ($prospecto['origen'] ?? ''))) ?>"
+									data-prospect-date="<?= e($createdDate) ?>"
+								>
 									<td><?= e($prospecto['id'] ?? '-') ?></td>
 									<td><?= e(trim((string) (($prospecto['nombre'] ?? '') . ' ' . ($prospecto['apellido'] ?? '')))) ?></td>
 									<td><?= e($prospecto['cedula'] ?? '-') ?></td>
