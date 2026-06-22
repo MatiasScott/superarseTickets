@@ -335,6 +335,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 	const filterNameInput = document.getElementById('crmFilterName');
 	const filterCareerInput = document.getElementById('crmFilterCareer');
+	const filterPipelineSelect = document.getElementById('crmFilterPipeline');
 	const filterClearBtn = document.getElementById('crmFilterClear');
 	const filterPeriodSelect = document.getElementById('crmFilterPeriodo');
 
@@ -344,18 +345,22 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 		const nameQuery = normalizeText(filterNameInput?.value || '');
 		const careerQuery = normalizeText(filterCareerInput?.value || '');
+		const pipelineQuery = normalizeText(filterPipelineSelect?.value || '');
 		const rows = studentsTable.querySelectorAll('tbody tr[data-student-id]');
 		rows.forEach((row) => {
 			const rowName = normalizeText(row.getAttribute('data-student-name') || '');
 			const rowCareer = normalizeText(row.getAttribute('data-student-career') || '');
+			const rowPipeline = normalizeText(row.getAttribute('data-student-pipeline') || '');
 			const matchName = nameQuery === '' || rowName.includes(nameQuery);
-			const matchCareer = careerQuery === '' || rowCareer.includes(careerQuery);
-			row.style.display = (matchName && matchCareer) ? '' : 'none';
+			const matchCareer = careerQuery === '' || rowCareer === careerQuery;
+			const matchPipeline = pipelineQuery === '' || rowPipeline === pipelineQuery;
+			row.style.display = (matchName && matchCareer && matchPipeline) ? '' : 'none';
 		});
 	};
 
 	filterNameInput?.addEventListener('input', applyTableFilters);
-	filterCareerInput?.addEventListener('input', applyTableFilters);
+	filterCareerInput?.addEventListener('change', applyTableFilters);
+	filterPipelineSelect?.addEventListener('change', applyTableFilters);
 	filterPeriodSelect?.addEventListener('change', () => {
 		const selected = String(filterPeriodSelect.value || '').trim();
 		const url = new URL(window.location.href);
@@ -373,6 +378,9 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 		if (filterCareerInput) {
 			filterCareerInput.value = '';
+		}
+		if (filterPipelineSelect) {
+			filterPipelineSelect.value = '';
 		}
 		if (filterPeriodSelect) filterPeriodSelect.value = '';
 
@@ -558,13 +566,16 @@ document.addEventListener('DOMContentLoaded', () => {
 						<button class="nav-link active" id="detallesTabBtn" data-bs-toggle="tab" data-bs-target="#detallesPane" type="button" role="tab">Detalles de cliente potencial</button>
 					</li>
 					<li class="nav-item" role="presentation">
-						<button class="nav-link" id="historicoTabBtn" data-bs-toggle="tab" data-bs-target="#historicoPane" type="button" role="tab">Historico</button>
-					</li>
-					<li class="nav-item" role="presentation">
 						<button class="nav-link" id="tareasTabBtn" data-bs-toggle="tab" data-bs-target="#tareasPane" type="button" role="tab">Tareas</button>
 					</li>
 					<li class="nav-item" role="presentation">
 						<button class="nav-link" id="ticketsTabBtn" data-bs-toggle="tab" data-bs-target="#ticketsPane" type="button" role="tab">Tickets</button>
+					</li>
+					<li class="nav-item" role="presentation">
+						<button class="nav-link" id="notasTabBtn" data-bs-toggle="tab" data-bs-target="#notasPane" type="button" role="tab">Notas internas</button>
+					</li>
+					<li class="nav-item" role="presentation">
+						<button class="nav-link" id="historicoTabBtn" data-bs-toggle="tab" data-bs-target="#historicoPane" type="button" role="tab">Historico</button>
 					</li>
 				</ul>
 
@@ -644,6 +655,25 @@ document.addEventListener('DOMContentLoaded', () => {
 							</div>
 						</div>
 					</div>
+
+					<!-- Tab 5: Notas internas -->
+					<div class="tab-pane fade" id="notasPane" role="tabpanel">
+						<div class="mb-3">
+							<label for="internalNoteText" class="form-label small fw-semibold">Nueva nota interna</label>
+							<div class="input-group">
+								<textarea id="internalNoteText" class="form-control" rows="2" placeholder="Escribe una nota interna del seguimiento CRM..."></textarea>
+								<button type="button" class="btn btn-outline-primary" id="addInternalNoteBtn">Guardar nota</button>
+							</div>
+							<div id="internalNoteStatus" class="small mt-2 text-muted"></div>
+						</div>
+						<div id="internalNotesList" style="max-height: 320px; overflow-y: auto;">
+							<div class="text-center text-muted small py-3">
+								<div class="spinner-border spinner-border-sm" role="status">
+									<span class="visually-hidden">Cargando...</span>
+								</div>
+							</div>
+						</div>
+					</div>
 				</div>
 
 				<div class="d-none">
@@ -674,6 +704,63 @@ document.addEventListener('DOMContentLoaded', () => {
 		loadStudentHistory(entityId, entityType);
 		loadStudentTasks(entityId, entityType);
 		loadStudentTickets(entityId, entityType);
+		loadStudentNotes(entityId);
+
+		const addNoteBtn = document.getElementById('addInternalNoteBtn');
+		if (addNoteBtn) {
+			addNoteBtn.addEventListener('click', async () => {
+				const noteInput = document.getElementById('internalNoteText');
+				const statusBox = document.getElementById('internalNoteStatus');
+				const noteText = String(noteInput?.value || '').trim();
+
+				if (!noteText) {
+					if (statusBox) {
+						statusBox.className = 'small mt-2 text-danger';
+						statusBox.textContent = 'Escribe una nota antes de guardar.';
+					}
+					return;
+				}
+
+				try {
+					addNoteBtn.disabled = true;
+					if (statusBox) {
+						statusBox.className = 'small mt-2 text-muted';
+						statusBox.textContent = 'Guardando nota...';
+					}
+
+					const payload = new URLSearchParams({
+						student_id: String(entityId),
+						note_text: noteText,
+					});
+
+					const response = await fetch(`${BASE_URL}crm/addStudentNote`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+						body: payload,
+					});
+					const data = await response.json();
+					if (!response.ok || !data.success) {
+						throw new Error(data.error || 'No se pudo guardar la nota.');
+					}
+
+					if (noteInput) {
+						noteInput.value = '';
+					}
+					if (statusBox) {
+						statusBox.className = 'small mt-2 text-success';
+						statusBox.textContent = 'Nota guardada correctamente.';
+					}
+					await loadStudentNotes(entityId);
+				} catch (error) {
+					if (statusBox) {
+						statusBox.className = 'small mt-2 text-danger';
+						statusBox.textContent = error.message || 'Error al guardar nota.';
+					}
+				} finally {
+					addNoteBtn.disabled = false;
+				}
+			});
+		}
 	};
 
 	const buildEntityQuery = (entityId, entityType = 'student') => {
@@ -1181,6 +1268,65 @@ document.addEventListener('DOMContentLoaded', () => {
 				container.innerHTML = `<div class="alert alert-danger alert-sm">${escapeHtml(error.message)}</div>`;
 			}
 		}
+	};
+
+	const loadStudentNotes = async (entityId) => {
+		try {
+			const response = await fetch(`${BASE_URL}crm/getStudentNotes?student_id=${encodeURIComponent(String(entityId || 0))}`);
+			let data = null;
+			try {
+				data = await response.json();
+			} catch (parseError) {
+				data = null;
+			}
+
+			if (!response.ok || !data || !data.success) {
+				throw new Error((data && data.error) ? data.error : 'Error al cargar notas internas');
+			}
+
+			renderStudentNotes(data.notes || [], entityId);
+		} catch (error) {
+			const container = document.getElementById('internalNotesList');
+			if (container) {
+				container.innerHTML = `<div class="alert alert-danger alert-sm">${escapeHtml(error.message || 'Error al cargar notas internas')}</div>`;
+			}
+		}
+	};
+
+	const renderStudentNotes = (notes, entityId) => {
+		const container = document.getElementById('internalNotesList');
+		if (!container) return;
+
+		if (!Array.isArray(notes) || notes.length === 0) {
+			container.innerHTML = '<p class="text-muted small text-center py-3">No hay notas internas registradas.</p>';
+			return;
+		}
+
+		let html = '<div class="list-group">';
+		notes.forEach((note) => {
+			const noteText = String(note.note_text || '').trim();
+			const userName = String(note.user_name || 'Usuario');
+			const rawDate = String(note.created_at || '');
+			const parsedDate = rawDate ? new Date(rawDate) : null;
+			const dateLabel = parsedDate && !Number.isNaN(parsedDate.getTime())
+				? parsedDate.toLocaleString('es-ES')
+				: '-';
+
+			html += `
+				<div class="list-group-item">
+					<div class="d-flex justify-content-between align-items-start gap-2">
+						<div>
+							<div class="fw-semibold">${escapeHtml(userName)}</div>
+							<div>${escapeHtml(noteText)}</div>
+						</div>
+						<small class="text-muted text-nowrap">${escapeHtml(dateLabel)}</small>
+					</div>
+				</div>
+			`;
+		});
+		html += '</div>';
+
+		container.innerHTML = html;
 	};
 
 	const renderTickets = (tickets) => {

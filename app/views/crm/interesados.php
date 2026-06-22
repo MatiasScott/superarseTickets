@@ -1,6 +1,7 @@
 <section class="module-page crm-page">
 	<?php $estudiantesSuperarse = $estudiantesSuperarse ?? []; ?>
 	<?php $programas = $programas ?? []; ?>
+	<?php $pipelineEstados = $pipelineEstados ?? []; ?>
 	<?php $periodos = $periodos ?? []; ?>
 	<?php $periodoSeleccionado = $periodoSeleccionado ?? ''; ?>
 	<?php $sourceLabel = $sourceLabel ?? 'No disponible'; ?>
@@ -63,8 +64,22 @@
 						<input type="text" id="crmFilterName" class="form-control" placeholder="Ej: Francisco Carpio">
 					</div>
 					<div class="col-md-2">
-						<label for="crmFilterCareer" class="form-label mb-1"><i class="bi bi-book"></i> Filtrar por carrera</label>
-						<input type="text" id="crmFilterCareer" class="form-control" placeholder="Ej: Seguridad y Riesgos">
+						<label for="crmFilterCareer" class="form-label mb-1"><i class="bi bi-book"></i> Carrera</label>
+						<select id="crmFilterCareer" class="form-select">
+							<option value="">Todas las carreras</option>
+							<?php foreach ($programas as $programa): ?>
+								<option value="<?= e(strtolower((string) $programa)) ?>"><?= e((string) $programa) ?></option>
+							<?php endforeach; ?>
+						</select>
+					</div>
+					<div class="col-md-2">
+						<label for="crmFilterPipeline" class="form-label mb-1"><i class="bi bi-funnel"></i> Etapa</label>
+						<select id="crmFilterPipeline" class="form-select">
+							<option value="">Todas las etapas</option>
+							<?php foreach ($pipelineEstados as $etapa): ?>
+								<option value="<?= e(strtolower((string) ($etapa['nombre'] ?? ''))) ?>"><?= e((string) ($etapa['nombre'] ?? '')) ?></option>
+							<?php endforeach; ?>
+						</select>
 					</div>
 					<div class="col-md-2 d-grid">
 						<button type="button" id="crmFilterClear" class="btn btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Limpiar filtros</button>
@@ -94,6 +109,7 @@
 							data-student-id="<?= e($item['id'] ?? '') ?>"
 							data-student-name="<?= e(strtolower(trim((($item['nombre'] ?? '') . ' ' . ($item['apellido'] ?? '')))) ) ?>"
 							data-student-career="<?= e(strtolower((string) ($item['carrera'] ?? ''))) ?>"
+							data-student-pipeline="<?= e(strtolower((string) ($item['pipeline_nombre'] ?? ''))) ?>"
 						>
 							<td><?= e($item['numero_identificacion'] ?? '-') ?></td>
 							<td>

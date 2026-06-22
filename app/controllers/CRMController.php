@@ -367,6 +367,13 @@ class CRMController extends Controller
 		$prospectPage = min($prospectPage, $prospectPages);
 		$prospectosLocales = $this->fetchLocalProspects($prospectPerPage, ($prospectPage - 1) * $prospectPerPage);
 
+		try {
+			$db = Database::getInstance()->connection();
+			$pipelineEstados = $db->query("SELECT id, nombre FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC")->fetchAll() ?: [];
+		} catch (Throwable $e) {
+			$pipelineEstados = [];
+		}
+
 		$this->view('crm/interesados', [
 			'estudiantesSuperarse' => $estudiantesSuperarse,
 			'studentPage'      => $studentPage,
@@ -377,6 +384,7 @@ class CRMController extends Controller
 			'programas' => $programas,
 			'periodos' => $periodos,
 			'periodoSeleccionado' => $periodoFiltro,
+			'pipelineEstados' => $pipelineEstados,
 			'sourceLabel' => (string) ($studentsData['source'] ?? 'No disponible'),
 			'sourceError' => (string) ($studentsData['error'] ?? ''),
 			'prospectPage'   => $prospectPage,
