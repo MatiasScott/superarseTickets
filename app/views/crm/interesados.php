@@ -234,6 +234,7 @@
 								<th>Contacto</th>
 								<th>Identificacion</th>
 								<th>Carrera</th>
+								<th>Modalidad</th>
 								<th>Provincia</th>
 								<th>Ciudad</th>
 								<th>Correo personal</th>
@@ -262,6 +263,7 @@
 									<td><?= e(trim((string) (($prospecto['nombre'] ?? '') . ' ' . ($prospecto['apellido'] ?? '')))) ?></td>
 									<td><?= e($prospecto['cedula'] ?? '-') ?></td>
 									<td><?= e($prospecto['carrera'] ?? '-') ?></td>
+									<td><?= e($prospecto['modalidad'] ?? '-') ?></td>
 									<td><?= e($prospecto['provincia'] ?? '-') ?></td>
 									<td><?= e($prospecto['ciudad'] ?? '-') ?></td>
 									<td><?= e($prospecto['email'] ?? '-') ?></td>
@@ -288,7 +290,7 @@
 							<?php endforeach; ?>
 							<?php if (empty($prospectosLocales)): ?>
 								<tr>
-									<td colspan="13" class="text-center text-muted py-4">No hay clientes potenciales CRM creados todavia.</td>
+									<td colspan="14" class="text-center text-muted py-4">No hay clientes potenciales CRM creados todavia.</td>
 								</tr>
 							<?php endif; ?>
 						</tbody>
@@ -372,6 +374,10 @@
 									<option value="<?= e((string) $programa) ?>"><?= e((string) $programa) ?></option>
 								<?php endforeach; ?>
 							</select>
+						</div>
+						<div class="col-md-6">
+							<label for="prospectModalidad" class="form-label">Modalidad</label>
+							<input type="text" id="prospectModalidad" name="modalidad" class="form-control" maxlength="80" placeholder="Ej: Presencial, Virtual, Hibrida">
 						</div>
 						<div class="col-md-6">
 							<label for="prospectProvincia" class="form-label">Provincia</label>

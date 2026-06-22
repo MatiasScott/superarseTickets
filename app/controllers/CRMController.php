@@ -411,6 +411,7 @@ class CRMController extends Controller
 		$correoPersonal = $this->normalizeEmailValue((string) ($_POST['correo_personal'] ?? ''));
 		$origen = trim((string) ($_POST['origen'] ?? 'crm_manual'));
 		$carrera = trim((string) ($_POST['carrera'] ?? ''));
+		$modalidad = trim((string) ($_POST['modalidad'] ?? ''));
 		$provincia = trim((string) ($_POST['provincia'] ?? ''));
 		$ciudad = trim((string) ($_POST['ciudad'] ?? ''));
 
@@ -485,6 +486,7 @@ class CRMController extends Controller
 				$estadoInicialId,
 				$origen !== '' ? $origen : 'crm_manual',
 				$carrera,
+				$modalidad,
 				$provincia,
 				$ciudad
 			);
@@ -1175,8 +1177,11 @@ class CRMController extends Controller
 			if (!in_array('carrera', $interesadosColumns, true)) {
 				$db->exec('ALTER TABLE interesados ADD COLUMN carrera VARCHAR(180) NULL AFTER origen');
 			}
+			if (!in_array('modalidad', $interesadosColumns, true)) {
+				$db->exec('ALTER TABLE interesados ADD COLUMN modalidad VARCHAR(80) NULL AFTER carrera');
+			}
 			if (!in_array('provincia', $interesadosColumns, true)) {
-				$db->exec('ALTER TABLE interesados ADD COLUMN provincia VARCHAR(120) NULL AFTER carrera');
+				$db->exec('ALTER TABLE interesados ADD COLUMN provincia VARCHAR(120) NULL AFTER modalidad');
 			}
 			if (!in_array('ciudad', $interesadosColumns, true)) {
 				$db->exec('ALTER TABLE interesados ADD COLUMN ciudad VARCHAR(120) NULL AFTER provincia');
@@ -1198,6 +1203,7 @@ class CRMController extends Controller
 				i.origen,
 				i.convertido,
 				i.carrera,
+				i.modalidad,
 				i.provincia,
 				i.ciudad,
 				i.created_at,
@@ -1276,7 +1282,7 @@ class CRMController extends Controller
 		return $fallbackId > 0 ? $fallbackId : null;
 	}
 
-	private function upsertInteresado(PDO $db, int $contactId, ?int $estadoId, string $origen, string $carrera = '', string $provincia = '', string $ciudad = ''): void
+	private function upsertInteresado(PDO $db, int $contactId, ?int $estadoId, string $origen, string $carrera = '', string $modalidad = '', string $provincia = '', string $ciudad = ''): void
 	{
 		if ($contactId <= 0) {
 			return;
@@ -1291,6 +1297,7 @@ class CRMController extends Controller
 				SET estado_id = :estado_id,
 					origen = :origen,
 					carrera = :carrera,
+					modalidad = :modalidad,
 					provincia = :provincia,
 					ciudad = :ciudad,
 					convertido = 0,
@@ -1302,6 +1309,7 @@ class CRMController extends Controller
 				'estado_id' => $estadoId,
 				'origen' => mb_substr($origen, 0, 100),
 				'carrera' => $carrera !== '' ? mb_substr($carrera, 0, 180) : null,
+				'modalidad' => $modalidad !== '' ? mb_substr($modalidad, 0, 80) : null,
 				'provincia' => $provincia !== '' ? mb_substr($provincia, 0, 120) : null,
 				'ciudad' => $ciudad !== '' ? mb_substr($ciudad, 0, 120) : null,
 				'id' => $existingId,
@@ -1309,13 +1317,14 @@ class CRMController extends Controller
 			return;
 		}
 
-		$insert = $db->prepare('INSERT INTO interesados (contacto_id, estado_id, origen, carrera, provincia, ciudad, convertido, estado, created_at, updated_at)
-			VALUES (:contacto_id, :estado_id, :origen, :carrera, :provincia, :ciudad, 0, "activo", NOW(), NOW())');
+		$insert = $db->prepare('INSERT INTO interesados (contacto_id, estado_id, origen, carrera, modalidad, provincia, ciudad, convertido, estado, created_at, updated_at)
+			VALUES (:contacto_id, :estado_id, :origen, :carrera, :modalidad, :provincia, :ciudad, 0, "activo", NOW(), NOW())');
 		$insert->execute([
 			'contacto_id' => $contactId,
 			'estado_id' => $estadoId,
 			'origen' => mb_substr($origen, 0, 100),
 			'carrera' => $carrera !== '' ? mb_substr($carrera, 0, 180) : null,
+			'modalidad' => $modalidad !== '' ? mb_substr($modalidad, 0, 80) : null,
 			'provincia' => $provincia !== '' ? mb_substr($provincia, 0, 120) : null,
 			'ciudad' => $ciudad !== '' ? mb_substr($ciudad, 0, 120) : null,
 		]);
