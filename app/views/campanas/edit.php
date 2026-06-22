@@ -2,6 +2,20 @@
 $campana = $campana ?? [];
 $cuentas = $cuentas ?? [];
 $adjuntos = $adjuntos ?? [];
+$sgproFilterValueDisplay = trim((string) ($campana['sgpro_filter_value'] ?? ''));
+if (($campana['sgpro_filter_type'] ?? '') === 'escuela' && $sgproFilterValueDisplay !== '' && strlen($sgproFilterValueDisplay) > 1 && $sgproFilterValueDisplay[0] === '[') {
+    $decoded = json_decode($sgproFilterValueDisplay, true);
+    if (is_array($decoded)) {
+        $clean = array_values(array_filter(array_map(static function ($item) {
+            return trim((string) $item);
+        }, $decoded), static function ($item) {
+            return $item !== '';
+        }));
+        if (!empty($clean)) {
+            $sgproFilterValueDisplay = implode(', ', $clean);
+        }
+    }
+}
 ?>
 
 <script src="https://cdn.quilljs.com/1.3.6/quill.js"></script>
@@ -42,7 +56,7 @@ $adjuntos = $adjuntos ?? [];
                             <?php if (($campana['source_db'] ?? 'superarse') === 'sgpro'): ?>
                                 SGPRO
                                 <?php if (!empty($campana['sgpro_filter_type']) && !empty($campana['sgpro_filter_value'])): ?>
-                                    (<?= htmlspecialchars(ucfirst((string) $campana['sgpro_filter_type'])) ?>: <?= htmlspecialchars((string) $campana['sgpro_filter_value']) ?>)
+                                    (<?= htmlspecialchars(ucfirst((string) $campana['sgpro_filter_type'])) ?>: <?= htmlspecialchars($sgproFilterValueDisplay) ?>)
                                 <?php endif; ?>
                             <?php else: ?>
                                 Superarse Conectados

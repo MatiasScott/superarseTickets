@@ -156,7 +156,16 @@ class CampanaController extends Controller
         $entityScope = (string) ($_POST['entity_scope'] ?? 'todos');
         $sourceDb = strtolower(trim((string) ($_POST['source_db'] ?? 'superarse')));
         $sgproFilterType = strtolower(trim((string) ($_POST['sgpro_filter_type'] ?? '')));
-        $sgproFilterValue = trim((string) ($_POST['sgpro_filter_value'] ?? ''));
+        $sgproFilterInput = $_POST['sgpro_filter_value'] ?? '';
+        $sgproFilterValues = $this->parseSgproFilterValues($sgproFilterInput);
+        $sgproFilterValue = '';
+        if (!empty($sgproFilterValues)) {
+            if ($sgproFilterType === 'escuela') {
+                $sgproFilterValue = (string) json_encode($sgproFilterValues, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            } else {
+                $sgproFilterValue = (string) ($sgproFilterValues[0] ?? '');
+            }
+        }
         $pipelineEstadoRaw = trim((string) ($_POST['pipeline_estado_id'] ?? ''));
         $pipelineEstadoId = $pipelineEstadoRaw !== '' ? (int) $pipelineEstadoRaw : null;
         $carreraPrograma = trim((string) ($_POST['carrera_id'] ?? ''));
@@ -177,7 +186,7 @@ class CampanaController extends Controller
             redirect('campanas/create');
         }
 
-        if ($sourceDb === 'sgpro' && $sgproFilterType !== '' && $sgproFilterValue === '') {
+        if ($sourceDb === 'sgpro' && $sgproFilterType !== '' && empty($sgproFilterValues)) {
             set_flash('error', 'Selecciona un valor para el filtro de SGPRO.');
             redirect('campanas/create');
         }
@@ -1001,7 +1010,7 @@ class CampanaController extends Controller
         $seen = [];
 
         $sgproFilterType = strtolower(trim((string) ($filters['sgpro_filter_type'] ?? '')));
-        $sgproFilterValue = trim((string) ($filters['sgpro_filter_value'] ?? ''));
+        $sgproFilterValues = $this->parseSgproFilterValues($filters['sgpro_filter_value'] ?? '');
 
         try {
             $remote = $this->connectSgproDatabase();
@@ -1034,9 +1043,21 @@ class CampanaController extends Controller
 
             $where = ["TRIM(COALESCE(email, '')) <> ''"];
             $params = [];
-            if ($sgproFilterType !== '' && $sgproFilterValue !== '' && in_array($sgproFilterType, ['dedicacion', 'escuela'], true) && isset($columns[$sgproFilterType])) {
-                $where[] = "LOWER(TRIM(COALESCE($sgproFilterType, ''))) = :filter_value";
-                $params['filter_value'] = mb_strtolower($sgproFilterValue);
+            if ($sgproFilterType !== '' && !empty($sgproFilterValues) && in_array($sgproFilterType, ['dedicacion', 'escuela'], true) && isset($columns[$sgproFilterType])) {
+                if ($sgproFilterType === 'escuela') {
+                    $inParams = [];
+                    foreach ($sgproFilterValues as $index => $value) {
+                        $key = 'filter_value_' . $index;
+                        $inParams[] = ':' . $key;
+                        $params[$key] = mb_strtolower($value);
+                    }
+                    if (!empty($inParams)) {
+                        $where[] = "LOWER(TRIM(COALESCE(escuela, ''))) IN (" . implode(', ', $inParams) . ')';
+                    }
+                } else {
+                    $where[] = "LOWER(TRIM(COALESCE($sgproFilterType, ''))) = :filter_value";
+                    $params['filter_value'] = mb_strtolower((string) ($sgproFilterValues[0] ?? ''));
+                }
             }
 
             $sql = 'SELECT ' . implode(', ', $selectCols) . " FROM $table WHERE " . implode(' AND ', $where) . ' ORDER BY id ASC';
@@ -1078,6 +1099,41 @@ class CampanaController extends Controller
         }
 
         return $destinatarios;
+    }
+
+    private function parseSgproFilterValues($value): array
+    {
+        $values = [];
+
+        if (is_array($value)) {
+            foreach ($value as $item) {
+                $clean = trim((string) $item);
+                if ($clean !== '') {
+                    $values[] = $clean;
+                }
+            }
+        } else {
+            $raw = trim((string) $value);
+            if ($raw !== '') {
+                if (strlen($raw) > 1 && $raw[0] === '[') {
+                    $decoded = json_decode($raw, true);
+                    if (is_array($decoded)) {
+                        foreach ($decoded as $item) {
+                            $clean = trim((string) $item);
+                            if ($clean !== '') {
+                                $values[] = $clean;
+                            }
+                        }
+                    }
+                }
+
+                if (empty($values)) {
+                    $values[] = $raw;
+                }
+            }
+        }
+
+        return array_values(array_unique($values));
     }
 
     private function normalizeUploadedFiles($rawFiles): array

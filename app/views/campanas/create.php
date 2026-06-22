@@ -159,7 +159,8 @@ $nivelesCount = count($niveles);
                                 <select class="form-select" id="sgpro_filter_value" name="sgpro_filter_value">
                                     <option value="">-- Selecciona un valor --</option>
                                 </select>
-                                <div class="form-text">Este filtro solo se aplica cuando la fuente es SGPRO.</div>
+                                <div class="border rounded p-2" id="sgpro_filter_value_checklist" style="display:none; max-height: 220px; overflow-y: auto;"></div>
+                                <div class="form-text" id="sgproFilterHelp">Este filtro solo se aplica cuando la fuente es SGPRO.</div>
                             </div>
                         </div>
 
@@ -382,6 +383,8 @@ $nivelesCount = count($niveles);
     const sourceDb = document.getElementById('source_db');
     const sgproFilterType = document.getElementById('sgpro_filter_type');
     const sgproFilterValue = document.getElementById('sgpro_filter_value');
+    const sgproFilterChecklist = document.getElementById('sgpro_filter_value_checklist');
+    const sgproFilterHelp = document.getElementById('sgproFilterHelp');
     const sgproFiltersGroup = document.getElementById('sgproFiltersGroup');
     const summarySender = document.getElementById('summarySender');
     const summaryRecipients = document.getElementById('summaryRecipients');
@@ -391,19 +394,84 @@ $nivelesCount = count($niveles);
     const nivel = document.getElementById('nivel');
     const sgproData = <?= json_encode($sgproFilters, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
 
+    const getSelectedSgproValues = () => {
+        const type = String(sgproFilterType.value || '');
+        if (type === 'escuela') {
+            return Array.from(sgproFilterChecklist.querySelectorAll('input[name="sgpro_filter_value[]"]:checked'))
+                .map((input) => String(input.value || '').trim())
+                .filter(Boolean);
+        }
+
+        return Array.from(sgproFilterValue.selectedOptions || [])
+            .map((opt) => String(opt.value || '').trim())
+            .filter(Boolean);
+    };
+
     const populateSgproValues = () => {
         const type = String(sgproFilterType.value || '');
         const values = Array.isArray(sgproData[type]) ? sgproData[type] : [];
-        const previous = sgproFilterValue.value;
-        sgproFilterValue.innerHTML = '<option value="">-- Selecciona un valor --</option>';
-        values.forEach((item) => {
-            const opt = document.createElement('option');
-            opt.value = String(item || '');
-            opt.textContent = String(item || '');
-            sgproFilterValue.appendChild(opt);
-        });
-        if (previous && values.includes(previous)) {
-            sgproFilterValue.value = previous;
+        const previous = getSelectedSgproValues();
+        const previousSet = new Set(previous);
+        const isEscuela = type === 'escuela';
+
+        sgproFilterValue.style.display = isEscuela ? 'none' : '';
+        sgproFilterChecklist.style.display = isEscuela ? '' : 'none';
+
+        sgproFilterValue.multiple = false;
+        sgproFilterValue.disabled = isEscuela;
+        sgproFilterValue.name = 'sgpro_filter_value';
+        sgproFilterValue.size = 1;
+
+        sgproFilterChecklist.innerHTML = '';
+        sgproFilterHelp.textContent = isEscuela
+            ? 'Puedes seleccionar varias escuelas marcando una o mas opciones.'
+            : 'Este filtro solo se aplica cuando la fuente es SGPRO.';
+
+        if (isEscuela) {
+            values.forEach((item, index) => {
+                const value = String(item || '');
+                if (!value) {
+                    return;
+                }
+
+                const wrapper = document.createElement('div');
+                wrapper.className = 'form-check mb-1';
+
+                const input = document.createElement('input');
+                input.className = 'form-check-input';
+                input.type = 'checkbox';
+                input.name = 'sgpro_filter_value[]';
+                input.value = value;
+                input.id = `sgpro_escuela_${index}`;
+                if (previousSet.has(value)) {
+                    input.checked = true;
+                }
+
+                const label = document.createElement('label');
+                label.className = 'form-check-label';
+                label.htmlFor = input.id;
+                label.textContent = value;
+
+                wrapper.appendChild(input);
+                wrapper.appendChild(label);
+                sgproFilterChecklist.appendChild(wrapper);
+            });
+        } else {
+            sgproFilterValue.innerHTML = '<option value="">-- Selecciona un valor --</option>';
+            values.forEach((item) => {
+                const opt = document.createElement('option');
+                opt.value = String(item || '');
+                opt.textContent = String(item || '');
+                if (previousSet.has(opt.value)) {
+                    opt.selected = true;
+                }
+                sgproFilterValue.appendChild(opt);
+            });
+
+            const firstPrevious = previous.find((value) => values.includes(value));
+            if (firstPrevious) {
+                sgproFilterValue.value = firstPrevious;
+            }
         }
     };
 
@@ -436,8 +504,17 @@ $nivelesCount = count($niveles);
         if (source === 'sgpro') {
             const filterType = String(sgproFilterType.value || '');
             const filterLabel = filterType === 'dedicacion' ? 'Dedicación' : (filterType === 'escuela' ? 'Escuela' : 'Sin filtro');
-            const filterValue = String(sgproFilterValue.value || '');
-            summaryRecipients.textContent = `SGPRO (users.email) · ${filterLabel}${filterValue ? ': ' + filterValue : ''}`;
+            const filterValues = getSelectedSgproValues();
+            let filterText = '';
+            if (filterType === 'escuela' && filterValues.length > 0) {
+                const preview = filterValues.slice(0, 2).join(', ');
+                filterText = filterValues.length > 2
+                    ? `: ${preview} (+${filterValues.length - 2})`
+                    : `: ${preview}`;
+            } else if (filterValues.length > 0) {
+                filterText = `: ${filterValues[0]}`;
+            }
+            summaryRecipients.textContent = `SGPRO (users.email) · ${filterLabel}${filterText}`;
         } else {
             const tipo = String(tipoDestinatarios.value || 'todos');
             const scope = String(entityScope.value || 'todos');
@@ -481,6 +558,7 @@ $nivelesCount = count($niveles);
         syncSummary();
     });
     sgproFilterValue.addEventListener('change', syncSummary);
+    sgproFilterChecklist.addEventListener('change', syncSummary);
     correoOrigen.addEventListener('change', syncSummary);
     entityScope.addEventListener('change', syncSummary);
     pipelineEstado.addEventListener('change', syncSummary);
