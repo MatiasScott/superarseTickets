@@ -347,15 +347,71 @@ document.addEventListener('DOMContentLoaded', () => {
 	const prospectsCounter = document.getElementById('crmProspectsCounter');
 
 	const isVisibleRow = (row) => row && row.style.display !== 'none';
+	let studentsRowsCache = [];
 
-	const updateStudentsCounter = () => {
-		if (!studentsCounter || !studentsTable) {
+	const updateStudentsCounter = (total) => {
+		if (!studentsCounter) {
 			return;
 		}
-		const rows = Array.from(studentsTable.querySelectorAll('tbody tr[data-student-id]'));
-		const total = rows.length;
-		const visibles = rows.filter((row) => isVisibleRow(row)).length;
-		studentsCounter.textContent = `Mostrando ${visibles} de ${total} estudiantes`;
+		const safeTotal = Number.isFinite(Number(total)) ? Number(total) : 0;
+		studentsCounter.textContent = `${safeTotal} estudiantes`;
+	};
+
+	const renderStudentsRows = (rows) => {
+		if (!studentsTable) {
+			return;
+		}
+
+		const tbody = studentsTable.querySelector('tbody');
+		if (!tbody) {
+			return;
+		}
+
+		if (!Array.isArray(rows) || rows.length === 0) {
+			tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted py-4">No hay estudiantes para mostrar.</td></tr>';
+			return;
+		}
+
+		const html = rows.map((item) => {
+			const fullName = `${String(item.nombre || '').trim()} ${String(item.apellido || '').trim()}`.replace(/\s+/g, ' ').trim();
+			return `
+				<tr
+					data-student-id="${escapeHtml(item.id || '')}"
+					data-student-name="${escapeHtml(normalizeText(fullName))}"
+					data-student-career="${escapeHtml(normalizeText(item.carrera || ''))}"
+					data-student-pipeline="${escapeHtml(normalizeText(item.pipeline_nombre || ''))}"
+				>
+					<td>${escapeHtml(item.numero_identificacion || '-')}</td>
+					<td>
+						<a href="#" class="student-contact-link" data-student-id="${escapeHtml(item.id || '')}" data-bs-toggle="modal" data-bs-target="#studentContactModal">
+							${escapeHtml(fullName || '-')}
+						</a>
+					</td>
+					<td class="email-col">${escapeHtml(item.email || '-')}</td>
+					<td class="career-col">${escapeHtml(item.carrera || '-')}</td>
+					<td>${escapeHtml(item.periodo || '-')}</td>
+					<td>${escapeHtml(item.nivel || '-')}</td>
+					<td>${escapeHtml(item.estado || '-')}</td>
+					<td class="pipeline-col"><span class="badge text-bg-light border">${escapeHtml(item.pipeline_nombre || 'Sin asignar')}</span></td>
+					<td class="text-end">
+						<button
+							type="button"
+							class="btn btn-sm btn-outline-primary student-pipeline-action"
+							data-student-id="${escapeHtml(item.id || '')}"
+							data-entity-type="student"
+							data-bs-toggle="modal"
+							data-bs-target="#studentPipelineModal"
+							title="Ver / Editar CRM"
+							aria-label="Ver / Editar CRM"
+						>
+							<i class="bi bi-pencil-square"></i>
+						</button>
+					</td>
+				</tr>
+			`;
+		}).join('');
+
+		tbody.innerHTML = html;
 	};
 
 	const updateProspectsCounter = () => {
@@ -368,25 +424,41 @@ document.addEventListener('DOMContentLoaded', () => {
 		prospectsCounter.textContent = `Mostrando ${visibles} de ${total} clientes potenciales`;
 	};
 
-	const applyTableFilters = () => {
+	const applyTableFilters = async () => {
 		if (!studentsTable) {
-			updateStudentsCounter();
+			updateStudentsCounter(0);
 			return;
 		}
-		const nameQuery = normalizeText(filterNameInput?.value || '');
-		const careerQuery = normalizeText(filterCareerInput?.value || '');
-		const pipelineQuery = normalizeText(filterPipelineSelect?.value || '');
-		const rows = studentsTable.querySelectorAll('tbody tr[data-student-id]');
-		rows.forEach((row) => {
-			const rowName = normalizeText(row.getAttribute('data-student-name') || '');
-			const rowCareer = normalizeText(row.getAttribute('data-student-career') || '');
-			const rowPipeline = normalizeText(row.getAttribute('data-student-pipeline') || '');
-			const matchName = nameQuery === '' || rowName.includes(nameQuery);
-			const matchCareer = careerQuery === '' || rowCareer === careerQuery;
-			const matchPipeline = pipelineQuery === '' || rowPipeline === pipelineQuery;
-			row.style.display = (matchName && matchCareer && matchPipeline) ? '' : 'none';
-		});
-		updateStudentsCounter();
+
+		const params = new URLSearchParams();
+		const periodo = String(filterPeriodSelect?.value || '').trim();
+		const nombre = String(filterNameInput?.value || '').trim();
+		const carrera = String(filterCareerInput?.value || '').trim();
+		const etapa = String(filterPipelineSelect?.value || '').trim();
+
+		if (periodo !== '') params.set('periodo', periodo);
+		if (nombre !== '') params.set('nombre', nombre);
+		if (carrera !== '') params.set('carrera', carrera);
+		if (etapa !== '') params.set('etapa', etapa);
+
+		try {
+			const response = await fetch(`${BASE_URL}crm/interesados/students-filter?${params.toString()}`);
+			if (!response.ok) {
+				throw new Error('No se pudo filtrar estudiantes');
+			}
+
+			const data = await response.json();
+			if (!data.success) {
+				throw new Error(data.error || 'Error al filtrar estudiantes');
+			}
+
+			studentsRowsCache = Array.isArray(data.students) ? data.students : [];
+			renderStudentsRows(studentsRowsCache);
+			updateStudentsCounter(Number(data.total || studentsRowsCache.length || 0));
+			bindStudentActions();
+		} catch (error) {
+			console.error('Error filtrando estudiantes:', error);
+		}
 	};
 
 	const applyProspectFilters = () => {
@@ -468,30 +540,42 @@ document.addEventListener('DOMContentLoaded', () => {
 	applyTableFilters();
 	applyProspectFilters();
 
-	const contactLinks = document.querySelectorAll('.student-contact-link');
-	contactLinks.forEach((link) => {
-		link.addEventListener('click', (e) => {
-			e.preventDefault();
-			const studentId = link.getAttribute('data-student-id');
-			if (!studentId) {
+	function bindStudentActions() {
+		const contactLinks = document.querySelectorAll('.student-contact-link');
+		contactLinks.forEach((link) => {
+			if (link.dataset.crmBound === '1') {
 				return;
 			}
-			loadStudentContact(studentId);
+			link.dataset.crmBound = '1';
+			link.addEventListener('click', (e) => {
+				e.preventDefault();
+				const studentId = link.getAttribute('data-student-id');
+				if (!studentId) {
+					return;
+				}
+				loadStudentContact(studentId);
+			});
 		});
-	});
 
-	const pipelineLinks = document.querySelectorAll('.student-pipeline-action');
-	pipelineLinks.forEach((link) => {
-		link.addEventListener('click', (e) => {
-			e.preventDefault();
-			const entityId = link.getAttribute('data-student-id');
-			const entityType = String(link.getAttribute('data-entity-type') || 'student').toLowerCase() === 'contact' ? 'contact' : 'student';
-			if (!entityId) {
+		const pipelineLinks = document.querySelectorAll('.student-pipeline-action');
+		pipelineLinks.forEach((link) => {
+			if (link.dataset.crmBound === '1') {
 				return;
 			}
-			loadStudentPipeline(entityId, entityType);
+			link.dataset.crmBound = '1';
+			link.addEventListener('click', (e) => {
+				e.preventDefault();
+				const entityId = link.getAttribute('data-student-id');
+				const entityType = String(link.getAttribute('data-entity-type') || 'student').toLowerCase() === 'contact' ? 'contact' : 'student';
+				if (!entityId) {
+					return;
+				}
+				loadStudentPipeline(entityId, entityType);
+			});
 		});
-	});
+	}
+
+	bindStudentActions();
 
 	const loadStudentContact = async (studentId) => {
 		try {

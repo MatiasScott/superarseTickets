@@ -97,7 +97,7 @@
 					</div>
 				</div>
 				<div class="d-flex justify-content-end mt-2">
-					<small id="crmStudentsCounter" class="text-muted" data-total="<?= e((string) count($estudiantesSuperarse)) ?>">Mostrando 0 de 0 estudiantes</small>
+					<small id="crmStudentsCounter" class="text-muted"><?= e((string) $totalStudents) ?> estudiantes</small>
 				</div>
 			</div>
 		</div>

@@ -536,11 +536,11 @@ class CRMController extends Controller
 					   c.nombre, c.apellido,
 					   ca.nombre AS carrera
 					FROM estudiantes e
-					INNER JOIN contactos c ON c.id = e.contacto_id
+					LEFT JOIN contactos c ON c.id = e.contacto_id
 					LEFT JOIN matriculas m ON m.estudiante_id = e.id
 					LEFT JOIN carreras ca ON ca.id = m.carrera_id
 					ORDER BY e.id DESC
-					LIMIT 200";
+					LIMIT 10000";
 			$stmt = $db->query($sql);
 			$estudiantes = $stmt->fetchAll() ?: [];
 		} catch (Throwable $e) {
@@ -550,6 +550,118 @@ class CRMController extends Controller
 		$this->view('crm/estudiantes', compact('estudiantes'), [
 			'title' => 'CRM - Estudiantes',
 		]);
+	}
+
+	public function estudiantesFilter(): void
+	{
+		Auth::requireAuth();
+
+		$nombre = strtolower(trim((string) ($_GET['nombre'] ?? '')));
+		$carrera = strtolower(trim((string) ($_GET['carrera'] ?? '')));
+
+		$db = Database::getInstance()->connection();
+
+		$where = [];
+		$params = [];
+
+		if ($nombre !== '') {
+			$where[] = "LOWER(CONCAT_WS(' ', COALESCE(c.nombre, ''), COALESCE(c.apellido, ''))) LIKE :nombre";
+			$params['nombre'] = '%' . $nombre . '%';
+		}
+
+		if ($carrera !== '') {
+			$where[] = "LOWER(COALESCE(ca.nombre, '')) LIKE :carrera";
+			$params['carrera'] = '%' . $carrera . '%';
+		}
+
+		$whereClause = empty($where) ? '' : 'WHERE ' . implode(' AND ', $where);
+
+		$sql = "SELECT e.id, e.numero_identificacion, e.estado,
+				   c.nombre, c.apellido,
+				   ca.nombre AS carrera
+				FROM estudiantes e
+				LEFT JOIN contactos c ON c.id = e.contacto_id
+				LEFT JOIN matriculas m ON m.estudiante_id = e.id
+				LEFT JOIN carreras ca ON ca.id = m.carrera_id
+				$whereClause
+				ORDER BY e.id DESC
+				LIMIT 10000";
+
+		$stmt = $db->prepare($sql);
+		$stmt->execute($params);
+		$estudiantes = $stmt->fetchAll() ?: [];
+
+		$countSql = "SELECT COUNT(*) AS total FROM estudiantes e
+					LEFT JOIN contactos c ON c.id = e.contacto_id
+					LEFT JOIN matriculas m ON m.estudiante_id = e.id
+					LEFT JOIN carreras ca ON ca.id = m.carrera_id
+					$whereClause";
+
+		$countStmt = $db->prepare($countSql);
+		$countStmt->execute($params);
+		$countRow = $countStmt->fetch();
+		$total = (int) ($countRow['total'] ?? 0);
+
+		header('Content-Type: application/json; charset=utf-8');
+		echo json_encode([
+			'success' => true,
+			'estudiantes' => $estudiantes,
+			'total' => $total,
+		], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		exit;
+	}
+
+	public function interesadosStudentsFilter(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		$periodo = $this->sanitizePeriodoKey((string) ($_GET['periodo'] ?? ''));
+		$nombre = mb_strtolower(trim((string) ($_GET['nombre'] ?? '')), 'UTF-8');
+		$carrera = mb_strtolower(trim((string) ($_GET['carrera'] ?? '')), 'UTF-8');
+		$etapa = mb_strtolower(trim((string) ($_GET['etapa'] ?? '')), 'UTF-8');
+
+		try {
+			$studentsData = $this->fetchSuperarseStudents(2000, $periodo, 0);
+			$rows = is_array($studentsData['rows'] ?? null) ? $studentsData['rows'] : [];
+
+			$normalize = static function ($value): string {
+				return mb_strtolower(trim((string) $value), 'UTF-8');
+			};
+
+			$filtered = [];
+			foreach ($rows as $row) {
+				$fullName = $normalize((string) ($row['nombre'] ?? '') . ' ' . (string) ($row['apellido'] ?? ''));
+				$rowCareer = $normalize($row['carrera'] ?? '');
+				$rowStage = $normalize($row['pipeline_nombre'] ?? '');
+
+				if ($nombre !== '' && strpos($fullName, $nombre) === false) {
+					continue;
+				}
+				if ($carrera !== '' && strpos($rowCareer, $carrera) === false) {
+					continue;
+				}
+				if ($etapa !== '' && $rowStage !== $etapa) {
+					continue;
+				}
+
+				$filtered[] = $row;
+			}
+
+			echo json_encode([
+				'success' => true,
+				'students' => $filtered,
+				'total' => count($filtered),
+			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		} catch (Throwable $e) {
+			http_response_code(500);
+			echo json_encode([
+				'success' => false,
+				'error' => $e->getMessage(),
+			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		}
+
+		exit;
 	}
 
 	private function fetchSuperarseStudents(int $limit = 500, string $periodoFiltro = '', int $offset = 0): array
