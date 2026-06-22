@@ -96,6 +96,9 @@
 						<button type="button" id="crmFilterClear" class="btn btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Limpiar filtros</button>
 					</div>
 				</div>
+				<div class="d-flex justify-content-end mt-2">
+					<small id="crmStudentsCounter" class="text-muted" data-total="<?= e((string) count($estudiantesSuperarse)) ?>">Mostrando 0 de 0 estudiantes</small>
+				</div>
 			</div>
 		</div>
 
@@ -217,6 +220,9 @@
 					<div class="col-md-2 d-grid">
 						<button type="button" id="crmProspectFilterClear" class="btn btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Limpiar</button>
 					</div>
+				</div>
+				<div class="d-flex justify-content-end mb-3">
+					<small id="crmProspectsCounter" class="text-muted" data-total="<?= e((string) count($prospectosLocales)) ?>">Mostrando 0 de 0 clientes potenciales</small>
 				</div>
 			</div>
 			<div class="card-body p-0">

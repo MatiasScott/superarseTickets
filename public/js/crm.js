@@ -338,14 +338,39 @@ document.addEventListener('DOMContentLoaded', () => {
 	const filterPipelineSelect = document.getElementById('crmFilterPipeline');
 	const filterClearBtn = document.getElementById('crmFilterClear');
 	const filterPeriodSelect = document.getElementById('crmFilterPeriodo');
+	const studentsCounter = document.getElementById('crmStudentsCounter');
 	const prospectsTable = document.getElementById('crmProspectsTable');
 	const prospectOriginSelect = document.getElementById('crmProspectFilterOrigin');
 	const prospectDateFromInput = document.getElementById('crmProspectDateFrom');
 	const prospectDateToInput = document.getElementById('crmProspectDateTo');
 	const prospectClearBtn = document.getElementById('crmProspectFilterClear');
+	const prospectsCounter = document.getElementById('crmProspectsCounter');
+
+	const isVisibleRow = (row) => row && row.style.display !== 'none';
+
+	const updateStudentsCounter = () => {
+		if (!studentsCounter || !studentsTable) {
+			return;
+		}
+		const rows = Array.from(studentsTable.querySelectorAll('tbody tr[data-student-id]'));
+		const total = rows.length;
+		const visibles = rows.filter((row) => isVisibleRow(row)).length;
+		studentsCounter.textContent = `Mostrando ${visibles} de ${total} estudiantes`;
+	};
+
+	const updateProspectsCounter = () => {
+		if (!prospectsCounter || !prospectsTable) {
+			return;
+		}
+		const rows = Array.from(prospectsTable.querySelectorAll('tbody tr[data-prospect-origin]'));
+		const total = rows.length;
+		const visibles = rows.filter((row) => isVisibleRow(row)).length;
+		prospectsCounter.textContent = `Mostrando ${visibles} de ${total} clientes potenciales`;
+	};
 
 	const applyTableFilters = () => {
 		if (!studentsTable) {
+			updateStudentsCounter();
 			return;
 		}
 		const nameQuery = normalizeText(filterNameInput?.value || '');
@@ -361,10 +386,12 @@ document.addEventListener('DOMContentLoaded', () => {
 			const matchPipeline = pipelineQuery === '' || rowPipeline === pipelineQuery;
 			row.style.display = (matchName && matchCareer && matchPipeline) ? '' : 'none';
 		});
+		updateStudentsCounter();
 	};
 
 	const applyProspectFilters = () => {
 		if (!prospectsTable) {
+			updateProspectsCounter();
 			return;
 		}
 
@@ -383,6 +410,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 			row.style.display = (matchOrigin && matchFrom && matchTo) ? '' : 'none';
 		});
+		updateProspectsCounter();
 	};
 
 	filterNameInput?.addEventListener('input', applyTableFilters);
@@ -436,6 +464,9 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 		applyProspectFilters();
 	});
+
+	applyTableFilters();
+	applyProspectFilters();
 
 	const contactLinks = document.querySelectorAll('.student-contact-link');
 	contactLinks.forEach((link) => {
