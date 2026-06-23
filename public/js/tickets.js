@@ -41,7 +41,12 @@ document.addEventListener('DOMContentLoaded', () => {
 		const refreshDashboard = async () => {
 			if (!endpoint) return;
 			try {
-				const response = await fetch(endpoint, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+				const url = new URL(endpoint, window.location.origin);
+				url.searchParams.set('_ts', String(Date.now()));
+				const response = await fetch(url.toString(), {
+					headers: { 'X-Requested-With': 'XMLHttpRequest' },
+					cache: 'no-store'
+				});
 				if (!response.ok) return;
 				const payload = await response.json();
 				if (!payload || payload.ok !== true || !payload.data) return;
@@ -58,6 +63,7 @@ document.addEventListener('DOMContentLoaded', () => {
 			}
 		};
 
+		refreshDashboard();
 		window.setInterval(refreshDashboard, 15000);
 	}
 

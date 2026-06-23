@@ -24,6 +24,9 @@ class TicketController extends Controller
 	{
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
+		header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+		header('Pragma: no-cache');
+		header('Expires: 0');
 
 		try {
 			$data = $this->buildDashboardData();
@@ -869,7 +872,8 @@ class TicketController extends Controller
 			LEFT JOIN ticket_grupos tg ON tg.id = t.grupo_id
 			LEFT JOIN contactos c ON c.id = t.contacto_id
 			LEFT JOIN usuarios u ON u.id = t.asignado_a
-			WHERE t.estado = 'activo'";
+			WHERE t.estado = 'activo'
+			  AND (COALESCE(te.es_final, 0) = 0 OR te.id IS NULL)";
 
 		$params = [];
 		if ($groupId !== null) {
