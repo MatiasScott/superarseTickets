@@ -415,10 +415,12 @@ class CRMController extends Controller
 		$provincia = trim((string) ($_POST['provincia'] ?? ''));
 		$ciudad = trim((string) ($_POST['ciudad'] ?? ''));
 
-		if ($nombres === '' || $apellidos === '' || $identificacion === '') {
-			set_flash('error', 'Nombres, apellidos e identificacion son obligatorios.');
+		if ($nombres === '' || $apellidos === '') {
+			set_flash('error', 'Nombres y apellidos son obligatorios.');
 			redirect('crm/interesados');
 		}
+
+		$identificacionToStore = $identificacion !== '' ? mb_substr($identificacion, 0, 20) : null;
 
 		try {
 			$this->ensureCrmSupportTables();
@@ -447,7 +449,7 @@ class CRMController extends Controller
 				$insertContact->execute([
 					'nombre' => mb_substr($nombres, 0, 150),
 					'apellido' => mb_substr($apellidos, 0, 150),
-					'cedula' => mb_substr($identificacion, 0, 20),
+					'cedula' => $identificacionToStore,
 					'email' => $emailToStore !== '' ? $emailToStore : null,
 				]);
 				$contactId = (int) $db->lastInsertId();
@@ -456,7 +458,7 @@ class CRMController extends Controller
 				$updateContact = $db->prepare('UPDATE contactos
 					SET nombre = :nombre,
 						apellido = :apellido,
-						cedula = :cedula,
+						cedula = COALESCE(:cedula, cedula),
 						estado = "activo",
 						updated_at = NOW()
 					WHERE id = :id
@@ -464,7 +466,7 @@ class CRMController extends Controller
 				$updateContact->execute([
 					'nombre' => mb_substr($nombres, 0, 150),
 					'apellido' => mb_substr($apellidos, 0, 150),
-					'cedula' => mb_substr($identificacion, 0, 20),
+					'cedula' => $identificacionToStore,
 					'id' => $contactId,
 				]);
 			}

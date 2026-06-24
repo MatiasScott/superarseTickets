@@ -352,7 +352,7 @@
 						</div>
 						<div class="col-md-4">
 							<label for="prospectIdentificacion" class="form-label">Identificacion / Cedula / Pasaporte</label>
-							<input type="text" id="prospectIdentificacion" name="identificacion" class="form-control" maxlength="30" required>
+							<input type="text" id="prospectIdentificacion" name="identificacion" class="form-control" maxlength="30" placeholder="Opcional">
 						</div>
 						<div class="col-md-4">
 							<label for="prospectCelular" class="form-label">Celular</label>
