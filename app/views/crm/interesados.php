@@ -15,14 +15,21 @@
 	<?php $totalProspects = (int) ($totalProspects ?? 0); ?>
 	<?php
 	$prospectOrigins = [];
+	$prospectStages = [];
 	foreach ($prospectosLocales as $prospectoItem) {
 		$originValue = trim((string) ($prospectoItem['origen'] ?? ''));
+		$stageValue = trim((string) ($prospectoItem['etapa'] ?? ''));
 		if ($originValue !== '') {
 			$prospectOrigins[$originValue] = $originValue;
 		}
+		if ($stageValue !== '') {
+			$prospectStages[$stageValue] = $stageValue;
+		}
 	}
 	ksort($prospectOrigins, SORT_NATURAL | SORT_FLAG_CASE);
+	ksort($prospectStages, SORT_NATURAL | SORT_FLAG_CASE);
 	$prospectOrigins = array_values($prospectOrigins);
+	$prospectStages = array_values($prospectStages);
 	?>
 	<?php
 	$buildCrmUrl = function (array $params = []) use ($periodoSeleccionado, $studentPage, $prospectPage): string {
@@ -200,12 +207,21 @@
 			</div>
 			<div class="card-body pb-0">
 				<div class="row g-2 align-items-end mb-3">
-					<div class="col-md-4">
+					<div class="col-md-3">
 						<label for="crmProspectFilterOrigin" class="form-label mb-1"><i class="bi bi-diagram-3"></i> Asesores</label>
 						<select id="crmProspectFilterOrigin" class="form-select">
 							<option value="">Todos los asesores</option>
 							<?php foreach ($prospectOrigins as $originOption): ?>
 								<option value="<?= e(strtolower((string) $originOption)) ?>"><?= e((string) $originOption) ?></option>
+							<?php endforeach; ?>
+						</select>
+					</div>
+					<div class="col-md-3">
+						<label for="crmProspectFilterStage" class="form-label mb-1"><i class="bi bi-funnel"></i> Etapa</label>
+						<select id="crmProspectFilterStage" class="form-select">
+							<option value="">Todas las etapas</option>
+							<?php foreach ($prospectStages as $stageOption): ?>
+								<option value="<?= e(strtolower((string) $stageOption)) ?>"><?= e((string) $stageOption) ?></option>
 							<?php endforeach; ?>
 						</select>
 					</div>
@@ -257,6 +273,7 @@
 								?>
 								<tr
 									data-prospect-origin="<?= e(strtolower((string) ($prospecto['origen'] ?? ''))) ?>"
+									data-prospect-stage="<?= e(strtolower((string) ($prospecto['etapa'] ?? ''))) ?>"
 									data-prospect-date="<?= e($createdDate) ?>"
 								>
 									<td><?= e($prospecto['id'] ?? '-') ?></td>

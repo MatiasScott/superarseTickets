@@ -341,6 +341,7 @@ document.addEventListener('DOMContentLoaded', () => {
 	const studentsCounter = document.getElementById('crmStudentsCounter');
 	const prospectsTable = document.getElementById('crmProspectsTable');
 	const prospectOriginSelect = document.getElementById('crmProspectFilterOrigin');
+	const prospectStageSelect = document.getElementById('crmProspectFilterStage');
 	const prospectDateFromInput = document.getElementById('crmProspectDateFrom');
 	const prospectDateToInput = document.getElementById('crmProspectDateTo');
 	const prospectClearBtn = document.getElementById('crmProspectFilterClear');
@@ -468,19 +469,22 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 
 		const selectedOrigin = normalizeText(prospectOriginSelect?.value || '');
+		const selectedStage = normalizeText(prospectStageSelect?.value || '');
 		const fromDate = String(prospectDateFromInput?.value || '').trim();
 		const toDate = String(prospectDateToInput?.value || '').trim();
 		const rows = prospectsTable.querySelectorAll('tbody tr[data-prospect-origin]');
 
 		rows.forEach((row) => {
 			const rowOrigin = normalizeText(row.getAttribute('data-prospect-origin') || '');
+			const rowStage = normalizeText(row.getAttribute('data-prospect-stage') || '');
 			const rowDate = String(row.getAttribute('data-prospect-date') || '').trim();
 
 			const matchOrigin = selectedOrigin === '' || rowOrigin === selectedOrigin;
+			const matchStage = selectedStage === '' || rowStage === selectedStage;
 			const matchFrom = fromDate === '' || (rowDate !== '' && rowDate >= fromDate);
 			const matchTo = toDate === '' || (rowDate !== '' && rowDate <= toDate);
 
-			row.style.display = (matchOrigin && matchFrom && matchTo) ? '' : 'none';
+			row.style.display = (matchOrigin && matchStage && matchFrom && matchTo) ? '' : 'none';
 		});
 		updateProspectsCounter();
 	};
@@ -489,6 +493,7 @@ document.addEventListener('DOMContentLoaded', () => {
 	filterCareerInput?.addEventListener('change', applyTableFilters);
 	filterPipelineSelect?.addEventListener('change', applyTableFilters);
 	prospectOriginSelect?.addEventListener('change', applyProspectFilters);
+	prospectStageSelect?.addEventListener('change', applyProspectFilters);
 	prospectDateFromInput?.addEventListener('change', applyProspectFilters);
 	prospectDateToInput?.addEventListener('change', applyProspectFilters);
 	filterPeriodSelect?.addEventListener('change', () => {
@@ -527,6 +532,9 @@ document.addEventListener('DOMContentLoaded', () => {
 	prospectClearBtn?.addEventListener('click', () => {
 		if (prospectOriginSelect) {
 			prospectOriginSelect.value = '';
+		}
+		if (prospectStageSelect) {
+			prospectStageSelect.value = '';
 		}
 		if (prospectDateFromInput) {
 			prospectDateFromInput.value = '';
