@@ -51,6 +51,18 @@ if ($defaultAlias === '' && !empty($mailAccounts)) {
 }
 
 $ticketUrl = base_url('tickets');
+$returnUrl = trim((string) ($_GET['return'] ?? ''));
+if ($returnUrl !== '') {
+    $base = rtrim((string) base_url(''), '/');
+    $candidate = trim($returnUrl);
+    $isRelativeTickets = str_starts_with($candidate, '/tickets') || str_starts_with($candidate, 'tickets');
+    $isAbsoluteLocalTickets = str_starts_with($candidate, $base . '/tickets');
+    if ($isRelativeTickets) {
+        $ticketUrl = str_starts_with($candidate, '/') ? $candidate : ('/' . $candidate);
+    } elseif ($isAbsoluteLocalTickets) {
+        $ticketUrl = $candidate;
+    }
+}
 $correoOrigenUrl = '';
 if (is_array($correoOrigen) && !empty($correoOrigen['email_uid'])) {
     $correoOrigenUrl = base_url('correo/' . rawurlencode((string) $correoOrigen['email_uid']) . '?account=' . urlencode((string) ($correoOrigen['account_alias'] ?? '')));
@@ -219,6 +231,7 @@ $phones = array_values(array_unique($phones));
                     <form id="ticket-reply-form" method="POST" action="<?= e(base_url('tickets/' . $ticketId . '/reply')) ?>" enctype="multipart/form-data" data-editor-form="reply-editor:reply-body" data-reply-upload-form="true">
                         <input type="hidden" name="_token" value="<?= csrf_token() ?>">
                         <input type="hidden" name="cuerpo_html" id="reply-body">
+                           <input type="hidden" name="return" value="<?= e($ticketUrl) ?>">
 
                         <?php if (!empty($mailAccounts)): ?>
                             <div class="compose-row">
@@ -294,6 +307,7 @@ $phones = array_values(array_unique($phones));
                     <form method="POST" action="<?= e(base_url('tickets/' . $ticketId . '/note')) ?>" data-editor-form="note-editor:note-body">
                         <input type="hidden" name="_token" value="<?= csrf_token() ?>">
                         <input type="hidden" name="cuerpo_html" id="note-body">
+                           <input type="hidden" name="return" value="<?= e($ticketUrl) ?>">
 
                         <div class="compose-toolbar">
                             <button type="button" data-editor-target="note-editor" data-editor-cmd="bold"><strong>B</strong></button>
@@ -332,6 +346,7 @@ $phones = array_values(array_unique($phones));
                 <h2 class="sidebar-title">Propiedades</h2>
                 <form method="POST" action="<?= e(base_url('tickets/' . $ticketId . '/properties')) ?>">
                     <input type="hidden" name="_token" value="<?= csrf_token() ?>">
+                       <input type="hidden" name="return" value="<?= e($ticketUrl) ?>">
 
                     <div class="prop-field">
                         <label>Tipo</label>

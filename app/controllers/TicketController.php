@@ -75,7 +75,10 @@ class TicketController extends Controller
 
 		$normalizeMultiSelect = static function ($raw): array {
 			if (!is_array($raw)) {
-				return [];
+				if ($raw === null) {
+					return [];
+				}
+				$raw = [$raw];
 			}
 
 			$values = [];
@@ -477,9 +480,10 @@ class TicketController extends Controller
 	public function replyTicket(string $id): void
 	{
 		Auth::requireAuth();
+		$return = trim((string) ($_POST['return'] ?? ''));
 		if (!verify_csrf($_POST['_token'] ?? null)) {
 			set_flash('error', 'Token CSRF inválido.');
-			redirect('tickets/' . (int) $id);
+			redirect($this->buildTicketShowRedirect((int) $id, $return));
 		}
 
 		$ticketId = (int) $id;
@@ -495,12 +499,12 @@ class TicketController extends Controller
 
 		if ($para === '' || !MailService::isValidEmail($para)) {
 			set_flash('error', 'El destinatario es obligatorio y debe ser un correo valido.');
-			redirect('tickets/' . $ticketId);
+			redirect($this->buildTicketShowRedirect($ticketId, $return));
 		}
 
 		if ($cuerpoTexto === '' && !$tieneImagen) {
 			set_flash('error', 'El cuerpo del mensaje es obligatorio.');
-			redirect('tickets/' . $ticketId);
+			redirect($this->buildTicketShowRedirect($ticketId, $return));
 		}
 
 		try {
@@ -634,7 +638,7 @@ class TicketController extends Controller
 			set_flash('error', 'Error al guardar la respuesta: ' . $e->getMessage());
 		}
 
-		redirect('tickets/' . $ticketId);
+		redirect($this->buildTicketShowRedirect($ticketId, $return));
 	}
 
 	private function encodeGraphMessageToken(string $messageId): string
@@ -757,9 +761,10 @@ class TicketController extends Controller
 	public function addNote(string $id): void
 	{
 		Auth::requireAuth();
+		$return = trim((string) ($_POST['return'] ?? ''));
 		if (!verify_csrf($_POST['_token'] ?? null)) {
 			set_flash('error', 'Token CSRF inválido.');
-			redirect('tickets/' . (int) $id);
+			redirect($this->buildTicketShowRedirect((int) $id, $return));
 		}
 
 		$ticketId   = (int) $id;
@@ -767,7 +772,7 @@ class TicketController extends Controller
 
 		if (strip_tags($cuerpoHtml) === "") {
 			set_flash('error', 'La nota no puede estar vacía.');
-			redirect('tickets/' . $ticketId);
+			redirect($this->buildTicketShowRedirect($ticketId, $return));
 		}
 
 		try {
@@ -788,15 +793,16 @@ class TicketController extends Controller
 			set_flash('error', 'Error al guardar la nota: ' . $e->getMessage());
 		}
 
-		redirect('tickets/' . $ticketId);
+		redirect($this->buildTicketShowRedirect($ticketId, $return));
 	}
 
 	public function updateProperties(string $id): void
 	{
 		Auth::requireAuth();
+		$return = trim((string) ($_POST['return'] ?? ''));
 		if (!verify_csrf($_POST['_token'] ?? null)) {
 			set_flash('error', 'Token CSRF inválido.');
-			redirect('tickets/' . (int) $id);
+			redirect($this->buildTicketShowRedirect((int) $id, $return));
 		}
 
 		$ticketId   = (int) $id;
@@ -829,7 +835,41 @@ class TicketController extends Controller
 			set_flash('error', 'Error al actualizar: ' . $e->getMessage());
 		}
 
-		redirect('tickets/' . $ticketId);
+		redirect($this->buildTicketShowRedirect($ticketId, $return));
+	}
+
+	private function buildTicketShowRedirect(int $ticketId, string $returnUrl = ''): string
+	{
+		$target = 'tickets/' . $ticketId;
+		$returnPath = $this->normalizeTicketReturnPath($returnUrl);
+		if ($returnPath !== '') {
+			$target .= '?return=' . urlencode('/' . $returnPath);
+		}
+
+		return $target;
+	}
+
+	private function normalizeTicketReturnPath(string $returnUrl): string
+	{
+		$candidate = trim($returnUrl);
+		if ($candidate === '') {
+			return '';
+		}
+
+		$base = rtrim((string) base_url(''), '/');
+		if ($base !== '' && str_starts_with($candidate, $base . '/')) {
+			$candidate = substr($candidate, strlen($base) + 1);
+		}
+
+		if (str_starts_with($candidate, '/')) {
+			$candidate = ltrim($candidate, '/');
+		}
+
+		if (!str_starts_with($candidate, 'tickets')) {
+			return '';
+		}
+
+		return $candidate;
 	}
 	private function buildDashboardData(): array
 	{
@@ -896,7 +936,12 @@ class TicketController extends Controller
 			LEFT JOIN contactos c ON c.id = t.contacto_id
 			LEFT JOIN usuarios u ON u.id = t.asignado_a
 			WHERE t.estado = 'activo'
-			  AND (COALESCE(te.es_final, 0) = 0 OR te.id IS NULL)";
+			  AND (COALESCE(te.es_final, 0) = 0 OR te.id IS NULL)
+			  AND LOWER(COALESCE(te.nombre, 'abierto')) NOT LIKE '%cerrad%'
+			  AND LOWER(COALESCE(te.nombre, 'abierto')) NOT LIKE '%resuelt%'
+			  AND LOWER(COALESCE(te.nombre, 'abierto')) NOT LIKE '%finaliz%'
+			  AND LOWER(COALESCE(te.nombre, 'abierto')) NOT LIKE '%solucionad%'
+			  AND LOWER(COALESCE(te.nombre, 'abierto')) NOT LIKE '%completad%'";
 
 		$params = [];
 		if ($groupId !== null) {

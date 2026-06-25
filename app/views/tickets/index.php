@@ -289,6 +289,7 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 					return $value !== '';
 				}));
 		$qBase = $qBase !== '' ? $qBase . '&' : '';
+		$returnUrl = base_url('tickets' . ($qBase !== '' ? ('?' . rtrim($qBase, '&')) : ''));
 		?>
 		<div class="tickets-table-shell">
 			<div class="table-responsive" data-mobile-cards>
@@ -339,7 +340,7 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 							?>
 							<tr>
 								<td class="text-nowrap">
-									<a class="ticket-code-link" href="<?= e(base_url('tickets/' . ($ticket['id'] ?? 0))) ?>">
+									<a class="ticket-code-link" href="<?= e(base_url('tickets/' . ($ticket['id'] ?? 0) . '?return=' . urlencode($returnUrl))) ?>">
 										<?= e($ticket['codigo'] ?? ('#' . ($ticket['id'] ?? '-'))) ?>
 									</a>
 								</td>
