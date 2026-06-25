@@ -90,8 +90,12 @@
 					<h5 class="mb-0">Office 365 - Correo</h5>
 				</div>
 				<div class="card-body">
+					<div class="alert alert-secondary py-2">
+						Esta seccion esta en modo solo lectura. Los datos se muestran, pero no se pueden modificar desde esta vista.
+					</div>
 					<form method="POST" action="<?= e(base_url('configuracion/mail')) ?>">
 						<?= csrf_field() ?>
+						<fieldset disabled>
 
 						<div class="row g-3 mb-3">
 							<div class="col-md-2">
@@ -168,17 +172,8 @@
 									<tr>
 										<th>#</th>
 										<th>Activo</th>
-										<th>Alias</th>
 										<th>Nombre</th>
 										<th>Email</th>
-										<th>Usuario</th>
-										<th>Password</th>
-										<th>Host</th>
-										<th>Puerto</th>
-										<th>Cifrado</th>
-										<th>IMAP Host</th>
-										<th>IMAP Puerto</th>
-										<th>IMAP Cifrado</th>
 										<th></th>
 									</tr>
 								</thead>
@@ -187,28 +182,17 @@
 										<tr>
 											<td class="mail-row-no"><?= e($rowIndex + 1) ?></td>
 											<td><input type="checkbox" name="mail_accounts[<?= e($rowIndex) ?>][enabled]" <?= !empty($acc['enabled']) ? 'checked' : '' ?>></td>
-											<td><input class="form-control form-control-sm" name="mail_accounts[<?= e($rowIndex) ?>][alias]" value="<?= e($acc['alias']) ?>"></td>
+											<input type="hidden" name="mail_accounts[<?= e($rowIndex) ?>][alias]" value="<?= e($acc['alias']) ?>">
 											<td><input class="form-control form-control-sm" name="mail_accounts[<?= e($rowIndex) ?>][name]" value="<?= e($acc['name']) ?>"></td>
 											<td><input type="email" class="form-control form-control-sm" name="mail_accounts[<?= e($rowIndex) ?>][email]" value="<?= e($acc['email']) ?>"></td>
-											<td><input class="form-control form-control-sm" name="mail_accounts[<?= e($rowIndex) ?>][username]" value="<?= e($acc['username']) ?>"></td>
-											<td><input type="password" class="form-control form-control-sm" name="mail_accounts[<?= e($rowIndex) ?>][password]" value="<?= e($acc['password']) ?>"></td>
-											<td><input class="form-control form-control-sm" name="mail_accounts[<?= e($rowIndex) ?>][host]" value="<?= e($acc['host']) ?>"></td>
-											<td><input class="form-control form-control-sm" name="mail_accounts[<?= e($rowIndex) ?>][port]" value="<?= e($acc['port']) ?>"></td>
-											<td>
-												<select class="form-select form-select-sm" name="mail_accounts[<?= e($rowIndex) ?>][encryption]">
-													<option value="tls" <?= ($acc['encryption'] === 'tls') ? 'selected' : '' ?>>tls</option>
-													<option value="ssl" <?= ($acc['encryption'] === 'ssl') ? 'selected' : '' ?>>ssl</option>
-												</select>
-											</td>
-											<td><input class="form-control form-control-sm" name="mail_accounts[<?= e($rowIndex) ?>][imap_host]" value="<?= e($acc['imap_host'] ?? 'outlook.office365.com') ?>"></td>
-											<td><input class="form-control form-control-sm" name="mail_accounts[<?= e($rowIndex) ?>][imap_port]" value="<?= e($acc['imap_port'] ?? '993') ?>"></td>
-											<td>
-												<select class="form-select form-select-sm" name="mail_accounts[<?= e($rowIndex) ?>][imap_encryption]">
-													<option value="ssl" <?= (($acc['imap_encryption'] ?? 'ssl') === 'ssl') ? 'selected' : '' ?>>ssl</option>
-													<option value="tls" <?= (($acc['imap_encryption'] ?? '') === 'tls') ? 'selected' : '' ?>>tls</option>
-													<option value="none" <?= (($acc['imap_encryption'] ?? '') === 'none') ? 'selected' : '' ?>>none</option>
-												</select>
-											</td>
+											<input type="hidden" name="mail_accounts[<?= e($rowIndex) ?>][username]" value="<?= e($acc['username']) ?>">
+											<input type="hidden" class="form-control form-control-sm" name="mail_accounts[<?= e($rowIndex) ?>][password]" value="<?= e($acc['password']) ?>">
+											<input type="hidden" name="mail_accounts[<?= e($rowIndex) ?>][host]" value="<?= e($acc['host']) ?>">
+											<input type="hidden" name="mail_accounts[<?= e($rowIndex) ?>][port]" value="<?= e($acc['port']) ?>">
+											<input type="hidden" name="mail_accounts[<?= e($rowIndex) ?>][encryption]" value="<?= e($acc['encryption']) ?>">
+											<input type="hidden" name="mail_accounts[<?= e($rowIndex) ?>][imap_host]" value="<?= e($acc['imap_host'] ?? 'outlook.office365.com') ?>">
+											<input type="hidden" name="mail_accounts[<?= e($rowIndex) ?>][imap_port]" value="<?= e($acc['imap_port'] ?? '993') ?>">
+											<input type="hidden" name="mail_accounts[<?= e($rowIndex) ?>][imap_encryption]" value="<?= e($acc['imap_encryption'] ?? 'ssl') ?>">
 											<td><button class="btn btn-sm btn-outline-danger js-remove-mail-account" type="button">Quitar</button></td>
 										</tr>
 									<?php endforeach; ?>
@@ -218,6 +202,7 @@
 
 						<button class="btn btn-outline-primary me-2" id="addMailAccountBtn" type="button">Agregar Cuenta</button>
 						<button class="btn btn-primary" type="submit">Guardar Configuracion Office 365</button>
+						</fieldset>
 					</form>
 				</div>
 			</div>
@@ -229,8 +214,12 @@
 					<h5 class="mb-0">WhatsApp - Numeros y API</h5>
 				</div>
 				<div class="card-body">
+					<div class="alert alert-secondary py-2">
+						Esta seccion esta en modo solo lectura. Los datos se muestran, pero no se pueden modificar desde esta vista.
+					</div>
 					<form method="POST" action="<?= e(base_url('configuracion/whatsapp')) ?>">
 						<?= csrf_field() ?>
+						<fieldset disabled>
 
 						<div class="row g-3">
 							<div class="col-md-2">
@@ -270,6 +259,7 @@
 
 						<button class="btn btn-outline-primary mt-3 me-2" id="addWhatsAppNumberBtn" type="button">Agregar Numero</button>
 						<button class="btn btn-success mt-3" type="submit">Guardar Configuracion WhatsApp</button>
+						</fieldset>
 					</form>
 				</div>
 			</div>
@@ -302,28 +292,17 @@
 		tr.innerHTML = `
 			<td class="mail-row-no">${index + 1}</td>
 			<td><input type="checkbox" name="mail_accounts[${index}][enabled]" checked></td>
-			<td><input class="form-control form-control-sm" name="mail_accounts[${index}][alias]" value="acc${index + 1}"></td>
+			<input type="hidden" name="mail_accounts[${index}][alias]" value="acc${index + 1}">
 			<td><input class="form-control form-control-sm" name="mail_accounts[${index}][name]" value="Cuenta ${index + 1}"></td>
 			<td><input type="email" class="form-control form-control-sm" name="mail_accounts[${index}][email]"></td>
-			<td><input class="form-control form-control-sm" name="mail_accounts[${index}][username]"></td>
+			<input type="hidden" name="mail_accounts[${index}][username]">
 			<td><input type="password" class="form-control form-control-sm" name="mail_accounts[${index}][password]"></td>
-			<td><input class="form-control form-control-sm" name="mail_accounts[${index}][host]" value="smtp.office365.com"></td>
-			<td><input class="form-control form-control-sm" name="mail_accounts[${index}][port]" value="587"></td>
-			<td>
-				<select class="form-select form-select-sm" name="mail_accounts[${index}][encryption]">
-					<option value="tls" selected>tls</option>
-					<option value="ssl">ssl</option>
-				</select>
-			</td>
-			<td><input class="form-control form-control-sm" name="mail_accounts[${index}][imap_host]" value="outlook.office365.com"></td>
-			<td><input class="form-control form-control-sm" name="mail_accounts[${index}][imap_port]" value="993"></td>
-			<td>
-				<select class="form-select form-select-sm" name="mail_accounts[${index}][imap_encryption]">
-					<option value="ssl" selected>ssl</option>
-					<option value="tls">tls</option>
-					<option value="none">none</option>
-				</select>
-			</td>
+			<input type="hidden" name="mail_accounts[${index}][host]" value="smtp.office365.com">
+			<input type="hidden" name="mail_accounts[${index}][port]" value="587">
+			<input type="hidden" name="mail_accounts[${index}][encryption]" value="tls">
+			<input type="hidden" name="mail_accounts[${index}][imap_host]" value="outlook.office365.com">
+			<input type="hidden" name="mail_accounts[${index}][imap_port]" value="993">
+			<input type="hidden" name="mail_accounts[${index}][imap_encryption]" value="ssl">
 			<td><button class="btn btn-sm btn-outline-danger js-remove-mail-account" type="button">Quitar</button></td>
 		`;
 		return tr;
