@@ -572,14 +572,14 @@ class TicketController extends Controller
 			}
 
 			// Enviar correo: si existe hilo de origen, responder en el mismo thread.
-			$ccArr = $cc !== '' ? array_filter(array_map('trim', explode(',', $cc))) : [];
+			$ccArr = $cc !== '' ? array_values(array_filter(array_map('trim', preg_split('/[;,]+/', $cc) ?: []))) : [];
 			$threadMeta = [];
 			$sent = false;
 			$replyError = '';
 			$mailbox = new MailboxService();
 
 			if ($replyToken !== '' && $alias !== '') {
-				$replyResult = $mailbox->replyToMessage($alias, $replyToken, $cuerpoTexto, $cuerpoHtml, $allMailAttachments);
+				$replyResult = $mailbox->replyToMessage($alias, $replyToken, $cuerpoTexto, $cuerpoHtml, $allMailAttachments, $ccArr);
 				$sent = (bool) ($replyResult['ok'] ?? false);
 				$threadMeta = is_array($replyResult['thread'] ?? null) ? $replyResult['thread'] : [];
 				$replyError = trim((string) ($replyResult['error'] ?? ''));
@@ -589,7 +589,7 @@ class TicketController extends Controller
 				$resolved = $mailbox->resolveReplyTokenForThread($alias, $originInternetMessageId, $originConversationId);
 				$resolvedToken = trim((string) ($resolved['token'] ?? ''));
 				if ($resolvedToken !== '') {
-					$retryResult = $mailbox->replyToMessage($alias, $resolvedToken, $cuerpoTexto, $cuerpoHtml, $allMailAttachments);
+					$retryResult = $mailbox->replyToMessage($alias, $resolvedToken, $cuerpoTexto, $cuerpoHtml, $allMailAttachments, $ccArr);
 					$sent = (bool) ($retryResult['ok'] ?? false);
 					$threadMeta = is_array($retryResult['thread'] ?? null) ? $retryResult['thread'] : $threadMeta;
 					$replyError = trim((string) ($retryResult['error'] ?? ''));

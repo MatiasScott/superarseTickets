@@ -635,7 +635,7 @@ class MailboxService
 		];
 	}
 
-	public function replyToMessage(?string $accountAlias, string $uid, string $bodyText, ?string $htmlBody = null, array $attachments = []): array
+	public function replyToMessage(?string $accountAlias, string $uid, string $bodyText, ?string $htmlBody = null, array $attachments = [], array $cc = []): array
 	{
 		if ($this->isGraphMode()) {
 			$account = $this->resolveAccount($accountAlias);
@@ -647,7 +647,7 @@ class MailboxService
 				return ['ok' => false, 'error' => 'No se pudo inicializar servicio Graph.'];
 			}
 
-			return $this->graphService->replyToMessage($account, $uid, $bodyText, $htmlBody, $attachments);
+			return $this->graphService->replyToMessage($account, $uid, $bodyText, $htmlBody, $attachments, $cc);
 		}
 
 		$current = $this->getMessage($accountAlias, $uid);
@@ -695,7 +695,7 @@ class MailboxService
 			$to,
 			$subject,
 			$replyHtmlBody,
-			[],
+			$cc,
 			[],
 			$this->resolveAliasOrDefault($accountAlias),
 			$extraHeaders,

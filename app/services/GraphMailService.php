@@ -330,7 +330,7 @@ class GraphMailService
 		];
 	}
 
-	public function replyToMessage(array $account, string $messageToken, string $bodyText, ?string $htmlBody = null, array $attachments = []): array
+	public function replyToMessage(array $account, string $messageToken, string $bodyText, ?string $htmlBody = null, array $attachments = [], array $cc = []): array
 	{
 		$userPrincipalName = trim((string) ($account['email'] ?? ''));
 		if ($userPrincipalName === '') {
@@ -378,15 +378,21 @@ class GraphMailService
 			$bodyContent = nl2br(htmlspecialchars(trim($bodyText), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
 		}
 
+		$updatePayload = [
+			'body' => [
+				'contentType' => 'HTML',
+				'content' => $bodyContent,
+			],
+		];
+		$ccRecipients = $this->toRecipients($cc);
+		if (!empty($ccRecipients)) {
+			$updatePayload['ccRecipients'] = $ccRecipients;
+		}
+
 		$updateDraft = $this->request(
 			'PATCH',
 			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($draftId),
-			[
-				'body' => [
-					'contentType' => 'HTML',
-					'content' => $bodyContent,
-				],
-			]
+			$updatePayload
 		);
 		if (!$updateDraft['ok']) {
 			$updateErr = (string) ($updateDraft['error'] ?? '');
