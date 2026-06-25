@@ -7,7 +7,19 @@ $tipos       = $tipos       ?? [];
 $grupos      = $grupos      ?? [];
 $usuarios    = $usuarios    ?? [];
 
-$hayFiltros = array_filter($filters, fn($v) => $v !== '');
+$selectedEstados = array_values(array_map('strval', is_array($filters['estado_id'] ?? null) ? $filters['estado_id'] : []));
+$selectedPrioridades = array_values(array_map('strval', is_array($filters['prioridad_id'] ?? null) ? $filters['prioridad_id'] : []));
+$selectedTipos = array_values(array_map('strval', is_array($filters['tipo_id'] ?? null) ? $filters['tipo_id'] : []));
+$selectedGrupos = array_values(array_map('strval', is_array($filters['grupo_id'] ?? null) ? $filters['grupo_id'] : []));
+$selectedAsignados = array_values(array_map('strval', is_array($filters['asignado_id'] ?? null) ? $filters['asignado_id'] : []));
+
+$hayFiltros = array_filter($filters, static function ($value): bool {
+	if (is_array($value)) {
+		return !empty($value);
+	}
+
+	return $value !== '';
+});
 
 $page  = (int) ($page  ?? 1);
 $pages = (int) ($pages ?? 1);
@@ -23,7 +35,13 @@ if (!function_exists('ticketSortUrl')) {
 		$params = $filters;
 		$params['sort'] = $field;
 		$params['direction'] = $nextDirection;
-		$params = array_filter($params, function ($value) { return $value !== ''; });
+		$params = array_filter($params, static function ($value): bool {
+			if (is_array($value)) {
+				return !empty($value);
+			}
+
+			return $value !== '';
+		});
 		return base_url('tickets?' . http_build_query($params));
 	}
 }
@@ -127,7 +145,7 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 		<?php endif; ?>
 
 		<!-- Panel de filtros -->
-		<form method="GET" action="<?= e(base_url('tickets')) ?>" class="card card-body mb-3 p-3 tickets-filter-card" data-validate>
+		<form method="GET" action="<?= e(base_url('tickets')) ?>" class="card card-body mb-3 p-3 tickets-filter-card" data-validate data-ticket-multi-filters>
 			<div class="d-flex align-items-center justify-content-between mb-2">
 				<h2 class="h6 m-0"><i class="bi bi-funnel"></i> Filtros de busqueda</h2>
 				<?php if ($hayFiltros): ?>
@@ -147,49 +165,100 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 
 				<div class="col-12 col-sm-6 col-md-4 col-lg-2">
 					<label class="form-label fw-semibold mb-1 small"><i class="bi bi-hourglass-split"></i> Estado</label>
-					<select name="estado_id" class="form-select form-select-sm">
-						<?= selOpt($estados, $filters['estado_id'] ?? '', 'nombre', 'estado_id', 'Cualquier estado') ?>
-					</select>
+					<div class="dropdown">
+						<button class="btn btn-outline-secondary btn-sm dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" data-ticket-filter-button="estado_id" data-empty-label="Cualquier estado">
+							Cualquier estado
+						</button>
+						<div class="dropdown-menu p-2 w-100" style="max-height: 240px; overflow-y: auto;">
+							<?php foreach ($estados as $item): ?>
+								<?php $itemId = (string) ($item['id'] ?? ''); ?>
+								<div class="form-check">
+									<input class="form-check-input ticket-filter-checkbox" type="checkbox" name="estado_id[]" value="<?= e($itemId) ?>" id="ticketEstado<?= e($itemId) ?>" data-filter-name="estado_id" <?= in_array($itemId, $selectedEstados, true) ? 'checked' : '' ?>>
+									<label class="form-check-label" for="ticketEstado<?= e($itemId) ?>"><?= e((string) ($item['nombre'] ?? '')) ?></label>
+								</div>
+							<?php endforeach; ?>
+						</div>
+					</div>
 				</div>
 
 				<div class="col-12 col-sm-6 col-md-4 col-lg-2">
 					<label class="form-label fw-semibold mb-1 small"><i class="bi bi-flag"></i> Prioridad</label>
-					<select name="prioridad_id" class="form-select form-select-sm">
-						<?= selOpt($prioridades, $filters['prioridad_id'] ?? '', 'nombre', 'prioridad_id', 'Cualquier prioridad') ?>
-					</select>
+					<div class="dropdown">
+						<button class="btn btn-outline-secondary btn-sm dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" data-ticket-filter-button="prioridad_id" data-empty-label="Cualquier prioridad">
+							Cualquier prioridad
+						</button>
+						<div class="dropdown-menu p-2 w-100" style="max-height: 240px; overflow-y: auto;">
+							<?php foreach ($prioridades as $item): ?>
+								<?php $itemId = (string) ($item['id'] ?? ''); ?>
+								<div class="form-check">
+									<input class="form-check-input ticket-filter-checkbox" type="checkbox" name="prioridad_id[]" value="<?= e($itemId) ?>" id="ticketPrioridad<?= e($itemId) ?>" data-filter-name="prioridad_id" <?= in_array($itemId, $selectedPrioridades, true) ? 'checked' : '' ?>>
+									<label class="form-check-label" for="ticketPrioridad<?= e($itemId) ?>"><?= e((string) ($item['nombre'] ?? '')) ?></label>
+								</div>
+							<?php endforeach; ?>
+						</div>
+					</div>
 				</div>
 
 				<div class="col-12 col-sm-6 col-md-4 col-lg-2">
 					<label class="form-label fw-semibold mb-1 small"><i class="bi bi-diagram-2"></i> Grupo</label>
-					<select name="grupo_id" class="form-select form-select-sm">
-						<option value="">Cualquier grupo</option>
-						<option value="0" <?= (($filters['grupo_id'] ?? '') === '0') ? 'selected' : '' ?>>Sin asignar</option>
-						<?php foreach ($grupos as $g): ?>
-							<option value="<?= e($g['id']) ?>" <?= (($filters['grupo_id'] ?? '') === (string)$g['id']) ? 'selected' : '' ?>>
-								<?= e($g['nombre']) ?>
-							</option>
-						<?php endforeach; ?>
-					</select>
+					<div class="dropdown">
+						<button class="btn btn-outline-secondary btn-sm dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" data-ticket-filter-button="grupo_id" data-empty-label="Cualquier grupo">
+							Cualquier grupo
+						</button>
+						<div class="dropdown-menu p-2 w-100" style="max-height: 240px; overflow-y: auto;">
+							<div class="form-check">
+								<input class="form-check-input ticket-filter-checkbox" type="checkbox" name="grupo_id[]" value="0" id="ticketGrupo0" data-filter-name="grupo_id" <?= in_array('0', $selectedGrupos, true) ? 'checked' : '' ?>>
+								<label class="form-check-label" for="ticketGrupo0">Sin asignar</label>
+							</div>
+							<?php foreach ($grupos as $g): ?>
+								<?php $itemId = (string) ($g['id'] ?? ''); ?>
+								<div class="form-check">
+									<input class="form-check-input ticket-filter-checkbox" type="checkbox" name="grupo_id[]" value="<?= e($itemId) ?>" id="ticketGrupo<?= e($itemId) ?>" data-filter-name="grupo_id" <?= in_array($itemId, $selectedGrupos, true) ? 'checked' : '' ?>>
+									<label class="form-check-label" for="ticketGrupo<?= e($itemId) ?>"><?= e((string) ($g['nombre'] ?? '')) ?></label>
+								</div>
+							<?php endforeach; ?>
+						</div>
+					</div>
 				</div>
 
 				<div class="col-12 col-sm-6 col-md-4 col-lg-2">
 					<label class="form-label fw-semibold mb-1 small"><i class="bi bi-person-check"></i> Asignado</label>
-					<select name="asignado_id" class="form-select form-select-sm">
-						<option value="">Cualquier agente</option>
-						<option value="0" <?= (($filters['asignado_id'] ?? '') === '0') ? 'selected' : '' ?>>Sin asignar</option>
-						<?php foreach ($usuarios as $u): ?>
-							<option value="<?= e($u['id']) ?>" <?= (($filters['asignado_id'] ?? '') === (string)$u['id']) ? 'selected' : '' ?>>
-								<?= e($u['nombre']) ?>
-							</option>
-						<?php endforeach; ?>
-					</select>
+					<div class="dropdown">
+						<button class="btn btn-outline-secondary btn-sm dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" data-ticket-filter-button="asignado_id" data-empty-label="Cualquier agente">
+							Cualquier agente
+						</button>
+						<div class="dropdown-menu p-2 w-100" style="max-height: 240px; overflow-y: auto;">
+							<div class="form-check">
+								<input class="form-check-input ticket-filter-checkbox" type="checkbox" name="asignado_id[]" value="0" id="ticketAsignado0" data-filter-name="asignado_id" <?= in_array('0', $selectedAsignados, true) ? 'checked' : '' ?>>
+								<label class="form-check-label" for="ticketAsignado0">Sin asignar</label>
+							</div>
+							<?php foreach ($usuarios as $u): ?>
+								<?php $itemId = (string) ($u['id'] ?? ''); ?>
+								<div class="form-check">
+									<input class="form-check-input ticket-filter-checkbox" type="checkbox" name="asignado_id[]" value="<?= e($itemId) ?>" id="ticketAsignado<?= e($itemId) ?>" data-filter-name="asignado_id" <?= in_array($itemId, $selectedAsignados, true) ? 'checked' : '' ?>>
+									<label class="form-check-label" for="ticketAsignado<?= e($itemId) ?>"><?= e((string) ($u['nombre'] ?? '')) ?></label>
+								</div>
+							<?php endforeach; ?>
+						</div>
+					</div>
 				</div>
 
 				<div class="col-12 col-sm-6 col-md-4 col-lg-2">
 					<label class="form-label fw-semibold mb-1 small"><i class="bi bi-tag"></i> Tipo</label>
-					<select name="tipo_id" class="form-select form-select-sm">
-						<?= selOpt($tipos, $filters['tipo_id'] ?? '', 'nombre', 'tipo_id', 'Cualquier tipo') ?>
-					</select>
+					<div class="dropdown">
+						<button class="btn btn-outline-secondary btn-sm dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" data-ticket-filter-button="tipo_id" data-empty-label="Cualquier tipo">
+							Cualquier tipo
+						</button>
+						<div class="dropdown-menu p-2 w-100" style="max-height: 240px; overflow-y: auto;">
+							<?php foreach ($tipos as $item): ?>
+								<?php $itemId = (string) ($item['id'] ?? ''); ?>
+								<div class="form-check">
+									<input class="form-check-input ticket-filter-checkbox" type="checkbox" name="tipo_id[]" value="<?= e($itemId) ?>" id="ticketTipo<?= e($itemId) ?>" data-filter-name="tipo_id" <?= in_array($itemId, $selectedTipos, true) ? 'checked' : '' ?>>
+									<label class="form-check-label" for="ticketTipo<?= e($itemId) ?>"><?= e((string) ($item['nombre'] ?? '')) ?></label>
+								</div>
+							<?php endforeach; ?>
+						</div>
+					</div>
 				</div>
 
 			</div>
@@ -212,7 +281,13 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 		<!-- Tabla de tickets -->
 		<?php
 		// Construir query string preservando filtros
-		$qBase = http_build_query(array_filter($filters, fn($v) => $v !== ''));
+				$qBase = http_build_query(array_filter($filters, static function ($value): bool {
+					if (is_array($value)) {
+						return !empty($value);
+					}
+
+					return $value !== '';
+				}));
 		$qBase = $qBase !== '' ? $qBase . '&' : '';
 		?>
 		<div class="tickets-table-shell">

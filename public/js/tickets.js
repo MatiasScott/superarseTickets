@@ -1,6 +1,39 @@
 console.debug('Modulo tickets cargado');
 
 document.addEventListener('DOMContentLoaded', () => {
+	const multiFilterForm = document.querySelector('[data-ticket-multi-filters]');
+	if (multiFilterForm) {
+		const updateTicketFilterLabel = (filterName) => {
+			const button = multiFilterForm.querySelector(`[data-ticket-filter-button="${filterName}"]`);
+			if (!button) {
+				return;
+			}
+
+			const checked = Array.from(multiFilterForm.querySelectorAll(`.ticket-filter-checkbox[data-filter-name="${filterName}"]:checked`));
+			const emptyLabel = String(button.getAttribute('data-empty-label') || 'Sin filtro');
+			if (checked.length === 0) {
+				button.textContent = emptyLabel;
+				return;
+			}
+
+			button.textContent = checked.length === 1
+				? '1 seleccionado'
+				: `${checked.length} seleccionados`;
+		};
+
+		const filterNames = ['estado_id', 'prioridad_id', 'grupo_id', 'asignado_id', 'tipo_id'];
+		filterNames.forEach((filterName) => updateTicketFilterLabel(filterName));
+
+		multiFilterForm.querySelectorAll('.ticket-filter-checkbox').forEach((checkbox) => {
+			checkbox.addEventListener('change', () => {
+				const filterName = checkbox.getAttribute('data-filter-name') || '';
+				if (filterName !== '') {
+					updateTicketFilterLabel(filterName);
+				}
+			});
+		});
+	}
+
 	const dashboardRoot = document.querySelector('[data-ticket-dashboard-live="true"]');
 	if (dashboardRoot) {
 		const endpoint = dashboardRoot.getAttribute('data-ticket-dashboard-url') || '';

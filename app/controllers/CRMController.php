@@ -621,10 +621,13 @@ class CRMController extends Controller
 		header('Content-Type: application/json; charset=utf-8');
 
 		$periodos = array_values(array_filter(array_unique(array_map(function ($value): string {
-			return mb_strtolower($this->sanitizePeriodoKey((string) $value), 'UTF-8');
+			return $this->sanitizePeriodoKey((string) $value);
 		}, is_array($_GET['periodo'] ?? null) ? $_GET['periodo'] : [])), static function ($value): bool {
 			return $value !== '';
 		}));
+		$periodosNormalized = array_values(array_map(static function ($value): string {
+			return mb_strtolower(trim((string) $value), 'UTF-8');
+		}, $periodos));
 		$periodo = count($periodos) === 1 ? (string) ($periodos[0] ?? '') : '';
 		$nombre = mb_strtolower(trim((string) ($_GET['nombre'] ?? '')), 'UTF-8');
 		$carreras = array_values(array_filter(array_unique(array_map(static function ($value): string {
@@ -659,7 +662,7 @@ class CRMController extends Controller
 				$rowStage = $normalize($row['pipeline_nombre'] ?? '');
 				$rowLevel = $normalize($row['nivel'] ?? '');
 
-				if (!empty($periodos) && !in_array($rowPeriod, $periodos, true)) {
+				if (!empty($periodosNormalized) && !in_array($rowPeriod, $periodosNormalized, true)) {
 					continue;
 				}
 				if ($nombre !== '' && strpos($fullName, $nombre) === false) {

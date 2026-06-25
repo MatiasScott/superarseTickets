@@ -104,32 +104,103 @@ class Ticket extends Model
 		$where = [];
 		$params = [];
 
-		if (!empty($filters['estado_id'])) {
-			$where[] = 't.estado_id = :estado_id';
-			$params['estado_id'] = (int) $filters['estado_id'];
-		}
-		if (!empty($filters['prioridad_id'])) {
-			$where[] = 't.prioridad_id = :prioridad_id';
-			$params['prioridad_id'] = (int) $filters['prioridad_id'];
-		}
-		if (!empty($filters['tipo_id'])) {
-			$where[] = 't.tipo_id = :tipo_id';
-			$params['tipo_id'] = (int) $filters['tipo_id'];
-		}
-		if (isset($filters['grupo_id']) && $filters['grupo_id'] !== '') {
-			if ($filters['grupo_id'] === '0') {
-				$where[] = 't.grupo_id IS NULL';
-			} else {
-				$where[] = 't.grupo_id = :grupo_id';
-				$params['grupo_id'] = (int) $filters['grupo_id'];
+		$normalizeMultiIds = static function ($raw): array {
+			if (!is_array($raw)) {
+				return [];
+			}
+
+			$values = [];
+			foreach ($raw as $value) {
+				$value = trim((string) $value);
+				if ($value === '') {
+					continue;
+				}
+				$values[$value] = $value;
+			}
+
+			return array_values($values);
+		};
+
+		$buildInCondition = static function (string $column, array $values, string $prefix) use (&$params): ?string {
+			if (empty($values)) {
+				return null;
+			}
+
+			$placeholders = [];
+			foreach (array_values($values) as $index => $value) {
+				$key = $prefix . '_' . $index;
+				$placeholders[] = ':' . $key;
+				$params[$key] = (int) $value;
+			}
+
+			return $column . ' IN (' . implode(', ', $placeholders) . ')';
+		};
+
+		$estadoIds = $normalizeMultiIds($filters['estado_id'] ?? []);
+		if (!empty($estadoIds)) {
+			$condition = $buildInCondition('t.estado_id', $estadoIds, 'estado_id');
+			if ($condition !== null) {
+				$where[] = $condition;
 			}
 		}
-		if (isset($filters['asignado_id']) && $filters['asignado_id'] !== '') {
-			if ($filters['asignado_id'] === '0') {
-				$where[] = 't.asignado_a IS NULL';
-			} else {
-				$where[] = 't.asignado_a = :asignado_id';
-				$params['asignado_id'] = (int) $filters['asignado_id'];
+
+		$prioridadIds = $normalizeMultiIds($filters['prioridad_id'] ?? []);
+		if (!empty($prioridadIds)) {
+			$condition = $buildInCondition('t.prioridad_id', $prioridadIds, 'prioridad_id');
+			if ($condition !== null) {
+				$where[] = $condition;
+			}
+		}
+
+		$tipoIds = $normalizeMultiIds($filters['tipo_id'] ?? []);
+		if (!empty($tipoIds)) {
+			$condition = $buildInCondition('t.tipo_id', $tipoIds, 'tipo_id');
+			if ($condition !== null) {
+				$where[] = $condition;
+			}
+		}
+
+		$grupoIds = $normalizeMultiIds($filters['grupo_id'] ?? []);
+		if (!empty($grupoIds)) {
+			$includeNullGroup = in_array('0', $grupoIds, true);
+			$grupoIds = array_values(array_filter($grupoIds, static function ($value): bool {
+				return $value !== '0';
+			}));
+
+			$groupParts = [];
+			if ($includeNullGroup) {
+				$groupParts[] = 't.grupo_id IS NULL';
+			}
+			if (!empty($grupoIds)) {
+				$condition = $buildInCondition('t.grupo_id', $grupoIds, 'grupo_id');
+				if ($condition !== null) {
+					$groupParts[] = $condition;
+				}
+			}
+			if (!empty($groupParts)) {
+				$where[] = '(' . implode(' OR ', $groupParts) . ')';
+			}
+		}
+
+		$asignadoIds = $normalizeMultiIds($filters['asignado_id'] ?? []);
+		if (!empty($asignadoIds)) {
+			$includeNullAssigned = in_array('0', $asignadoIds, true);
+			$asignadoIds = array_values(array_filter($asignadoIds, static function ($value): bool {
+				return $value !== '0';
+			}));
+
+			$assignedParts = [];
+			if ($includeNullAssigned) {
+				$assignedParts[] = 't.asignado_a IS NULL';
+			}
+			if (!empty($asignadoIds)) {
+				$condition = $buildInCondition('t.asignado_a', $asignadoIds, 'asignado_id');
+				if ($condition !== null) {
+					$assignedParts[] = $condition;
+				}
+			}
+			if (!empty($assignedParts)) {
+				$where[] = '(' . implode(' OR ', $assignedParts) . ')';
 			}
 		}
 		if (!empty($filters['buscar'])) {

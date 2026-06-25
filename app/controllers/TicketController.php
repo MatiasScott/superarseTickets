@@ -73,18 +73,41 @@ class TicketController extends Controller
 		$grupos   = [];
 		$usuarios = [];
 
+		$normalizeMultiSelect = static function ($raw): array {
+			if (!is_array($raw)) {
+				return [];
+			}
+
+			$values = [];
+			foreach ($raw as $value) {
+				$value = trim((string) $value);
+				if ($value === '') {
+					continue;
+				}
+				$values[$value] = $value;
+			}
+
+			return array_values($values);
+		};
+
 		// Filtros activos desde GET
 		$filters = [
-			'estado_id'    => trim((string) ($_GET['estado_id']    ?? '')),
-			'prioridad_id' => trim((string) ($_GET['prioridad_id'] ?? '')),
-			'tipo_id'      => trim((string) ($_GET['tipo_id']      ?? '')),
-			'grupo_id'     => trim((string) ($_GET['grupo_id']     ?? '')),
-			'asignado_id'  => trim((string) ($_GET['asignado_id']  ?? '')),
+			'estado_id'    => $normalizeMultiSelect($_GET['estado_id'] ?? []),
+			'prioridad_id' => $normalizeMultiSelect($_GET['prioridad_id'] ?? []),
+			'tipo_id'      => $normalizeMultiSelect($_GET['tipo_id'] ?? []),
+			'grupo_id'     => $normalizeMultiSelect($_GET['grupo_id'] ?? []),
+			'asignado_id'  => $normalizeMultiSelect($_GET['asignado_id'] ?? []),
 			'buscar'       => trim((string) ($_GET['buscar']       ?? '')),
 			'sort'         => trim((string) ($_GET['sort']         ?? 'id')),
 			'direction'    => trim((string) ($_GET['direction']    ?? 'desc')),
 		];
-		$activeFilters = array_filter($filters, function($v) { return $v !== ''; });
+		$activeFilters = array_filter($filters, static function ($value): bool {
+			if (is_array($value)) {
+				return !empty($value);
+			}
+
+			return $value !== '';
+		});
 
 		$perPage = 30;
 		$page    = max(1, (int) ($_GET['page'] ?? 1));

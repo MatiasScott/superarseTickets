@@ -108,9 +108,9 @@
 							</button>
 							<div class="dropdown-menu p-2 w-100" style="max-height: 240px; overflow-y: auto;">
 								<?php foreach ($periodos as $index => $periodo): ?>
-									<?php $periodoValue = strtolower((string) $periodo); ?>
+									<?php $periodoValue = (string) $periodo; ?>
 									<div class="form-check">
-										<input class="form-check-input crm-filter-checkbox" type="checkbox" value="<?= e($periodoValue) ?>" id="crmPeriodOpt<?= (int) $index ?>" data-filter-group="period" <?= (string) strtolower((string) $periodoSeleccionado) === (string) $periodoValue ? 'checked' : '' ?>>
+										<input class="form-check-input crm-filter-checkbox" type="checkbox" value="<?= e($periodoValue) ?>" id="crmPeriodOpt<?= (int) $index ?>" data-filter-group="period" <?= (string) $periodoSeleccionado === (string) $periodoValue ? 'checked' : '' ?>>
 										<label class="form-check-label" for="crmPeriodOpt<?= (int) $index ?>"><?= e((string) $periodo) ?></label>
 									</div>
 								<?php endforeach; ?>
