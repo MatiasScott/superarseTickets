@@ -334,10 +334,11 @@ document.addEventListener('DOMContentLoaded', () => {
 	};
 
 	const filterNameInput = document.getElementById('crmFilterName');
-	const filterCareerInput = document.getElementById('crmFilterCareer');
-	const filterPipelineSelect = document.getElementById('crmFilterPipeline');
+	const filterPeriodBtn = document.getElementById('crmFilterPeriodBtn');
+	const filterCareerBtn = document.getElementById('crmFilterCareerBtn');
+	const filterPipelineBtn = document.getElementById('crmFilterPipelineBtn');
+	const filterLevelBtn = document.getElementById('crmFilterLevelBtn');
 	const filterClearBtn = document.getElementById('crmFilterClear');
-	const filterPeriodSelect = document.getElementById('crmFilterPeriodo');
 	const studentsCounter = document.getElementById('crmStudentsCounter');
 	const prospectsTable = document.getElementById('crmProspectsTable');
 	const prospectOriginSelect = document.getElementById('crmProspectFilterOrigin');
@@ -346,6 +347,32 @@ document.addEventListener('DOMContentLoaded', () => {
 	const prospectDateToInput = document.getElementById('crmProspectDateTo');
 	const prospectClearBtn = document.getElementById('crmProspectFilterClear');
 	const prospectsCounter = document.getElementById('crmProspectsCounter');
+
+	const getCheckedFilterValues = (group) => {
+		return Array.from(document.querySelectorAll(`.crm-filter-checkbox[data-filter-group="${group}"]:checked`))
+			.map((input) => String(input.value || '').trim())
+			.filter((value) => value !== '');
+	};
+
+	const updateMultiFilterButtonLabel = (button, values, emptyLabel, singularLabel, pluralLabel) => {
+		if (!button) {
+			return;
+		}
+		if (!Array.isArray(values) || values.length === 0) {
+			button.textContent = emptyLabel;
+			return;
+		}
+		button.textContent = values.length === 1
+			? `1 ${singularLabel}`
+			: `${values.length} ${pluralLabel}`;
+	};
+
+	const refreshStudentsMultiFilterLabels = () => {
+		updateMultiFilterButtonLabel(filterPeriodBtn, getCheckedFilterValues('period'), 'Todos los periodos', 'periodo', 'periodos');
+		updateMultiFilterButtonLabel(filterCareerBtn, getCheckedFilterValues('career'), 'Todas las carreras', 'carrera', 'carreras');
+		updateMultiFilterButtonLabel(filterPipelineBtn, getCheckedFilterValues('pipeline'), 'Todas las etapas', 'etapa', 'etapas');
+		updateMultiFilterButtonLabel(filterLevelBtn, getCheckedFilterValues('level'), 'Todos los niveles', 'nivel', 'niveles');
+	};
 
 	const isVisibleRow = (row) => row && row.style.display !== 'none';
 	let studentsRowsCache = [];
@@ -432,15 +459,17 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 
 		const params = new URLSearchParams();
-		const periodo = String(filterPeriodSelect?.value || '').trim();
+		const periodos = getCheckedFilterValues('period');
 		const nombre = String(filterNameInput?.value || '').trim();
-		const carrera = String(filterCareerInput?.value || '').trim();
-		const etapa = String(filterPipelineSelect?.value || '').trim();
+		const carreras = getCheckedFilterValues('career');
+		const etapas = getCheckedFilterValues('pipeline');
+		const niveles = getCheckedFilterValues('level');
 
-		if (periodo !== '') params.set('periodo', periodo);
+		periodos.forEach((periodo) => params.append('periodo[]', periodo));
 		if (nombre !== '') params.set('nombre', nombre);
-		if (carrera !== '') params.set('carrera', carrera);
-		if (etapa !== '') params.set('etapa', etapa);
+		carreras.forEach((carrera) => params.append('carrera[]', carrera));
+		etapas.forEach((etapa) => params.append('etapa[]', etapa));
+		niveles.forEach((nivel) => params.append('nivel[]', nivel));
 
 		try {
 			const response = await fetch(`${BASE_URL}crm/interesados/students-filter?${params.toString()}`);
@@ -490,41 +519,24 @@ document.addEventListener('DOMContentLoaded', () => {
 	};
 
 	filterNameInput?.addEventListener('input', applyTableFilters);
-	filterCareerInput?.addEventListener('change', applyTableFilters);
-	filterPipelineSelect?.addEventListener('change', applyTableFilters);
+	Array.from(document.querySelectorAll('.crm-filter-checkbox')).forEach((checkbox) => {
+		checkbox.addEventListener('change', () => {
+			refreshStudentsMultiFilterLabels();
+			applyTableFilters();
+		});
+	});
 	prospectOriginSelect?.addEventListener('change', applyProspectFilters);
 	prospectStageSelect?.addEventListener('change', applyProspectFilters);
 	prospectDateFromInput?.addEventListener('change', applyProspectFilters);
 	prospectDateToInput?.addEventListener('change', applyProspectFilters);
-	filterPeriodSelect?.addEventListener('change', () => {
-		const selected = String(filterPeriodSelect.value || '').trim();
-		const url = new URL(window.location.href);
-		if (selected === '') {
-			url.searchParams.delete('periodo');
-		} else {
-			url.searchParams.set('periodo', selected);
-		}
-		url.searchParams.set('student_page', '1');
-		window.location.href = url.pathname + (url.search ? url.search : '');
-	});
 	filterClearBtn?.addEventListener('click', () => {
 		if (filterNameInput) {
 			filterNameInput.value = '';
 		}
-		if (filterCareerInput) {
-			filterCareerInput.value = '';
-		}
-		if (filterPipelineSelect) {
-			filterPipelineSelect.value = '';
-		}
-		if (filterPeriodSelect) filterPeriodSelect.value = '';
-
-		const url = new URL(window.location.href);
-		if (url.searchParams.has('periodo')) {
-			url.searchParams.delete('periodo');
-			window.location.href = url.pathname + (url.search ? url.search : '');
-			return;
-		}
+		Array.from(document.querySelectorAll('.crm-filter-checkbox')).forEach((checkbox) => {
+			checkbox.checked = false;
+		});
+		refreshStudentsMultiFilterLabels();
 
 		applyTableFilters();
 	});
@@ -547,6 +559,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 	applyTableFilters();
 	applyProspectFilters();
+	refreshStudentsMultiFilterLabels();
 
 	function bindStudentActions() {
 		const contactLinks = document.querySelectorAll('.student-contact-link');

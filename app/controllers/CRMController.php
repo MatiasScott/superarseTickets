@@ -343,12 +343,13 @@ class CRMController extends Controller
 		}
 		$periodoFiltro = $this->sanitizePeriodoKey((string) ($_GET['periodo'] ?? ''));
 
-		$studentsPerPage = 25;
+		$studentsPerPage = 15;
 		$studentPage = max(1, (int) ($_GET['student_page'] ?? 1));
 		$studentOffset = ($studentPage - 1) * $studentsPerPage;
 		$studentsData = $this->fetchSuperarseStudents($studentsPerPage, $periodoFiltro, $studentOffset);
 		$estudiantesSuperarse = is_array($studentsData['rows'] ?? null) ? $studentsData['rows'] : [];
 		$programas = is_array($studentsData['programas'] ?? null) ? $studentsData['programas'] : [];
+		$nivelesEstudiantes = is_array($studentsData['niveles'] ?? null) ? $studentsData['niveles'] : [];
 		$periodos = is_array($studentsData['periodos'] ?? null) ? $studentsData['periodos'] : [];
 		$totalStudents = max(0, (int) ($studentsData['total'] ?? count($estudiantesSuperarse)));
 		$studentPages = max(1, (int) ceil($totalStudents / $studentsPerPage));
@@ -382,6 +383,7 @@ class CRMController extends Controller
 			'totalStudents'    => $totalStudents,
 			'prospectosLocales' => $prospectosLocales,
 			'programas' => $programas,
+			'nivelesEstudiantes' => $nivelesEstudiantes,
 			'periodos' => $periodos,
 			'periodoSeleccionado' => $periodoFiltro,
 			'pipelineEstados' => $pipelineEstados,
@@ -618,13 +620,31 @@ class CRMController extends Controller
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
 
-		$periodo = $this->sanitizePeriodoKey((string) ($_GET['periodo'] ?? ''));
+		$periodos = array_values(array_filter(array_unique(array_map(function ($value): string {
+			return mb_strtolower($this->sanitizePeriodoKey((string) $value), 'UTF-8');
+		}, is_array($_GET['periodo'] ?? null) ? $_GET['periodo'] : [])), static function ($value): bool {
+			return $value !== '';
+		}));
+		$periodo = count($periodos) === 1 ? (string) ($periodos[0] ?? '') : '';
 		$nombre = mb_strtolower(trim((string) ($_GET['nombre'] ?? '')), 'UTF-8');
-		$carrera = mb_strtolower(trim((string) ($_GET['carrera'] ?? '')), 'UTF-8');
-		$etapa = mb_strtolower(trim((string) ($_GET['etapa'] ?? '')), 'UTF-8');
+		$carreras = array_values(array_filter(array_unique(array_map(static function ($value): string {
+			return mb_strtolower(trim((string) $value), 'UTF-8');
+		}, is_array($_GET['carrera'] ?? null) ? $_GET['carrera'] : [])), static function ($value): bool {
+			return $value !== '';
+		}));
+		$etapas = array_values(array_filter(array_unique(array_map(static function ($value): string {
+			return mb_strtolower(trim((string) $value), 'UTF-8');
+		}, is_array($_GET['etapa'] ?? null) ? $_GET['etapa'] : [])), static function ($value): bool {
+			return $value !== '';
+		}));
+		$niveles = array_values(array_filter(array_unique(array_map(static function ($value): string {
+			return mb_strtolower(trim((string) $value), 'UTF-8');
+		}, is_array($_GET['nivel'] ?? null) ? $_GET['nivel'] : [])), static function ($value): bool {
+			return $value !== '';
+		}));
 
 		try {
-			$studentsData = $this->fetchSuperarseStudents(2000, $periodo, 0);
+			$studentsData = $this->fetchSuperarseStudents(50000, $periodo, 0);
 			$rows = is_array($studentsData['rows'] ?? null) ? $studentsData['rows'] : [];
 
 			$normalize = static function ($value): string {
@@ -634,16 +654,24 @@ class CRMController extends Controller
 			$filtered = [];
 			foreach ($rows as $row) {
 				$fullName = $normalize((string) ($row['nombre'] ?? '') . ' ' . (string) ($row['apellido'] ?? ''));
+				$rowPeriod = $normalize($row['periodo_clave'] ?? ($row['periodo'] ?? ''));
 				$rowCareer = $normalize($row['carrera'] ?? '');
 				$rowStage = $normalize($row['pipeline_nombre'] ?? '');
+				$rowLevel = $normalize($row['nivel'] ?? '');
 
+				if (!empty($periodos) && !in_array($rowPeriod, $periodos, true)) {
+					continue;
+				}
 				if ($nombre !== '' && strpos($fullName, $nombre) === false) {
 					continue;
 				}
-				if ($carrera !== '' && strpos($rowCareer, $carrera) === false) {
+				if (!empty($carreras) && !in_array($rowCareer, $carreras, true)) {
 					continue;
 				}
-				if ($etapa !== '' && $rowStage !== $etapa) {
+				if (!empty($etapas) && !in_array($rowStage, $etapas, true)) {
+					continue;
+				}
+				if (!empty($niveles) && !in_array($rowLevel, $niveles, true)) {
 					continue;
 				}
 
@@ -668,7 +696,7 @@ class CRMController extends Controller
 
 	private function fetchSuperarseStudents(int $limit = 500, string $periodoFiltro = '', int $offset = 0): array
 	{
-		$limit = max(1, min(2000, $limit));
+		$limit = max(1, min(50000, $limit));
 		$offset = max(0, $offset);
 		$periodoFiltro = $this->sanitizePeriodoKey($periodoFiltro);
 		try {
@@ -680,11 +708,13 @@ class CRMController extends Controller
 				$fallbackTotal = $this->countLocalStudents($periodoFiltro);
 				$periodos = $this->fetchLocalPeriodOptions();
 				$programas = $this->fetchLocalCareerOptions();
+				$niveles = $this->fetchLocalLevelOptions();
 				return [
 					'rows' => $fallbackRows,
 					'total' => $fallbackTotal > 0 ? $fallbackTotal : count($fallbackRows),
 					'periodos' => $periodos,
 					'programas' => $programas,
+					'niveles' => $niveles,
 					'source' => 'Local (fallback)',
 					'error' => 'No se pudo conectar a la BD Superarse. Revisa SUPERARSE_DB_* en .env.',
 				];
@@ -697,6 +727,7 @@ class CRMController extends Controller
 
 			$periodos = $this->fetchRemotePeriodOptions($remote, $sourceTable);
 			$programas = $sourceTable === 'users' ? $this->fetchRemoteProgramOptions($remote) : $this->fetchLocalCareerOptions();
+			$niveles = $sourceTable === 'users' ? $this->fetchRemoteLevelOptions($remote) : $this->fetchLocalLevelOptions();
 			$params = [];
 
 			if ($sourceTable === 'users') {
@@ -784,6 +815,7 @@ class CRMController extends Controller
 				'total' => $total,
 				'periodos' => $periodos,
 				'programas' => $programas,
+				'niveles' => $niveles,
 				'source' => 'Superarse (' . $sourceTable . ')',
 				'error' => '',
 			];
@@ -793,11 +825,13 @@ class CRMController extends Controller
 			$fallbackTotal = $this->countLocalStudents($periodoFiltro);
 			$periodos = $this->fetchLocalPeriodOptions();
 			$programas = $this->fetchLocalCareerOptions();
+			$niveles = $this->fetchLocalLevelOptions();
 			return [
 				'rows' => $fallbackRows,
 				'total' => $fallbackTotal > 0 ? $fallbackTotal : count($fallbackRows),
 				'periodos' => $periodos,
 				'programas' => $programas,
+				'niveles' => $niveles,
 				'source' => 'Local (fallback)',
 				'error' => 'No se pudo leer estudiantes de Superarse: ' . $e->getMessage(),
 			];
@@ -824,6 +858,26 @@ class CRMController extends Controller
 		}
 	}
 
+	private function fetchRemoteLevelOptions(PDO $remote): array
+	{
+		try {
+			$rows = $remote->query("SELECT DISTINCT TRIM(COALESCE(nivel, '')) AS nivel
+				FROM users
+				WHERE nivel IS NOT NULL AND TRIM(nivel) <> ''
+				ORDER BY nivel ASC")->fetchAll() ?: [];
+			$niveles = [];
+			foreach ($rows as $row) {
+				$nivel = trim((string) ($row['nivel'] ?? ''));
+				if ($nivel !== '') {
+					$niveles[] = $nivel;
+				}
+			}
+			return array_values(array_unique($niveles));
+		} catch (Throwable $e) {
+			return [];
+		}
+	}
+
 	private function fetchLocalCareerOptions(): array
 	{
 		try {
@@ -837,6 +891,27 @@ class CRMController extends Controller
 				}
 			}
 			return array_values(array_unique($programas));
+		} catch (Throwable $e) {
+			return [];
+		}
+	}
+
+	private function fetchLocalLevelOptions(): array
+	{
+		try {
+			$db = Database::getInstance()->connection();
+			$rows = $db->query("SELECT DISTINCT TRIM(COALESCE(nivel, '')) AS nivel
+				FROM estudiantes
+				WHERE nivel IS NOT NULL AND TRIM(nivel) <> ''
+				ORDER BY nivel ASC")->fetchAll() ?: [];
+			$niveles = [];
+			foreach ($rows as $row) {
+				$nivel = trim((string) ($row['nivel'] ?? ''));
+				if ($nivel !== '') {
+					$niveles[] = $nivel;
+				}
+			}
+			return array_values(array_unique($niveles));
 		} catch (Throwable $e) {
 			return [];
 		}

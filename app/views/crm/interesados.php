@@ -9,6 +9,7 @@
 	<?php $studentPage = (int) ($studentPage ?? 1); ?>
 	<?php $studentPages = (int) ($studentPages ?? 1); ?>
 	<?php $totalStudents = (int) ($totalStudents ?? count($estudiantesSuperarse)); ?>
+	<?php $nivelesEstudiantes = $nivelesEstudiantes ?? []; ?>
 	<?php $prospectosLocales = $prospectosLocales ?? []; ?>
 	<?php $prospectPage = (int) ($prospectPage ?? 1); ?>
 	<?php $prospectPages = (int) ($prospectPages ?? 1); ?>
@@ -16,6 +17,7 @@
 	<?php
 	$prospectOrigins = [];
 	$prospectStages = [];
+	$studentLevels = [];
 	foreach ($prospectosLocales as $prospectoItem) {
 		$originValue = trim((string) ($prospectoItem['origen'] ?? ''));
 		$stageValue = trim((string) ($prospectoItem['etapa'] ?? ''));
@@ -26,10 +28,26 @@
 			$prospectStages[$stageValue] = $stageValue;
 		}
 	}
+	foreach ($nivelesEstudiantes as $levelItem) {
+		$levelValue = trim((string) $levelItem);
+		if ($levelValue !== '') {
+			$studentLevels[$levelValue] = $levelValue;
+		}
+	}
+	if (empty($studentLevels)) {
+	foreach ($estudiantesSuperarse as $studentItem) {
+		$levelValue = trim((string) ($studentItem['nivel'] ?? ''));
+		if ($levelValue !== '') {
+			$studentLevels[$levelValue] = $levelValue;
+		}
+	}
+	}
 	ksort($prospectOrigins, SORT_NATURAL | SORT_FLAG_CASE);
 	ksort($prospectStages, SORT_NATURAL | SORT_FLAG_CASE);
+	ksort($studentLevels, SORT_NATURAL | SORT_FLAG_CASE);
 	$prospectOrigins = array_values($prospectOrigins);
 	$prospectStages = array_values($prospectStages);
+	$studentLevels = array_values($studentLevels);
 	?>
 	<?php
 	$buildCrmUrl = function (array $params = []) use ($periodoSeleccionado, $studentPage, $prospectPage): string {
@@ -63,41 +81,96 @@
 			<div class="alert alert-warning py-2 mb-3"><?= e((string) $sourceError) ?></div>
 		<?php endif; ?>
 
+		<ul class="nav nav-tabs mb-3" id="crmInteresadosTabs" role="tablist">
+			<li class="nav-item" role="presentation">
+				<button class="nav-link active" id="crm-tab-students" data-bs-toggle="tab" data-bs-target="#crm-pane-students" type="button" role="tab" aria-controls="crm-pane-students" aria-selected="true">
+					<i class="bi bi-mortarboard-fill"></i> Estudiantes
+				</button>
+			</li>
+			<li class="nav-item" role="presentation">
+				<button class="nav-link" id="crm-tab-prospects" data-bs-toggle="tab" data-bs-target="#crm-pane-prospects" type="button" role="tab" aria-controls="crm-pane-prospects" aria-selected="false">
+					<i class="bi bi-person-badge"></i> Clientes potenciales
+				</button>
+			</li>
+		</ul>
+
+		<div class="tab-content" id="crmInteresadosTabsContent">
+			<div class="tab-pane fade show active" id="crm-pane-students" role="tabpanel" aria-labelledby="crm-tab-students" tabindex="0">
+
 		<div class="card border-0 shadow-sm mb-3">
 			<div class="card-body py-3">
 				<div class="row g-2 align-items-end">
-					<div class="col-md-4">
-						<label for="crmFilterPeriodo" class="form-label mb-1"><i class="bi bi-calendar3"></i> Periodo</label>
-						<select id="crmFilterPeriodo" name="periodo" class="form-select">
-							<option value="">Todos los periodos</option>
-							<?php foreach ($periodos as $periodo): ?>
-								<option value="<?= e((string) $periodo) ?>" <?= (string) $periodoSeleccionado === (string) $periodo ? 'selected' : '' ?>>
-									<?= e((string) $periodo) ?>
-								</option>
-							<?php endforeach; ?>
-						</select>
+					<div class="col-md-2">
+						<label class="form-label mb-1"><i class="bi bi-calendar3"></i> Periodos</label>
+						<div class="dropdown" id="crmFilterPeriodDropdown">
+							<button class="btn btn-outline-secondary dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" id="crmFilterPeriodBtn">
+								Todos los periodos
+							</button>
+							<div class="dropdown-menu p-2 w-100" style="max-height: 240px; overflow-y: auto;">
+								<?php foreach ($periodos as $index => $periodo): ?>
+									<?php $periodoValue = strtolower((string) $periodo); ?>
+									<div class="form-check">
+										<input class="form-check-input crm-filter-checkbox" type="checkbox" value="<?= e($periodoValue) ?>" id="crmPeriodOpt<?= (int) $index ?>" data-filter-group="period" <?= (string) strtolower((string) $periodoSeleccionado) === (string) $periodoValue ? 'checked' : '' ?>>
+										<label class="form-check-label" for="crmPeriodOpt<?= (int) $index ?>"><?= e((string) $periodo) ?></label>
+									</div>
+								<?php endforeach; ?>
+							</div>
+						</div>
 					</div>
 					<div class="col-md-4">
 						<label for="crmFilterName" class="form-label mb-1"><i class="bi bi-search"></i> Buscar por nombre</label>
 						<input type="text" id="crmFilterName" class="form-control" placeholder="Ej: Francisco Carpio">
 					</div>
 					<div class="col-md-2">
-						<label for="crmFilterCareer" class="form-label mb-1"><i class="bi bi-book"></i> Carrera</label>
-						<select id="crmFilterCareer" class="form-select">
-							<option value="">Todas las carreras</option>
-							<?php foreach ($programas as $programa): ?>
-								<option value="<?= e(strtolower((string) $programa)) ?>"><?= e((string) $programa) ?></option>
-							<?php endforeach; ?>
-						</select>
+						<label class="form-label mb-1"><i class="bi bi-book"></i> Carrera</label>
+						<div class="dropdown" id="crmFilterCareerDropdown">
+							<button class="btn btn-outline-secondary dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" id="crmFilterCareerBtn">
+								Todas las carreras
+							</button>
+							<div class="dropdown-menu p-2 w-100" style="max-height: 240px; overflow-y: auto;">
+								<?php foreach ($programas as $index => $programa): ?>
+									<?php $programaValue = strtolower((string) $programa); ?>
+									<div class="form-check">
+										<input class="form-check-input crm-filter-checkbox" type="checkbox" value="<?= e($programaValue) ?>" id="crmCareerOpt<?= (int) $index ?>" data-filter-group="career">
+										<label class="form-check-label" for="crmCareerOpt<?= (int) $index ?>"><?= e((string) $programa) ?></label>
+									</div>
+								<?php endforeach; ?>
+							</div>
+						</div>
 					</div>
 					<div class="col-md-2">
-						<label for="crmFilterPipeline" class="form-label mb-1"><i class="bi bi-funnel"></i> Etapa</label>
-						<select id="crmFilterPipeline" class="form-select">
-							<option value="">Todas las etapas</option>
-							<?php foreach ($pipelineEstados as $etapa): ?>
-								<option value="<?= e(strtolower((string) ($etapa['nombre'] ?? ''))) ?>"><?= e((string) ($etapa['nombre'] ?? '')) ?></option>
-							<?php endforeach; ?>
-						</select>
+						<label class="form-label mb-1"><i class="bi bi-funnel"></i> Etapa</label>
+						<div class="dropdown" id="crmFilterPipelineDropdown">
+							<button class="btn btn-outline-secondary dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" id="crmFilterPipelineBtn">
+								Todas las etapas
+							</button>
+							<div class="dropdown-menu p-2 w-100" style="max-height: 240px; overflow-y: auto;">
+								<?php foreach ($pipelineEstados as $index => $etapa): ?>
+									<?php $etapaNombre = (string) ($etapa['nombre'] ?? ''); ?>
+									<div class="form-check">
+										<input class="form-check-input crm-filter-checkbox" type="checkbox" value="<?= e(strtolower($etapaNombre)) ?>" id="crmPipelineOpt<?= (int) $index ?>" data-filter-group="pipeline">
+										<label class="form-check-label" for="crmPipelineOpt<?= (int) $index ?>"><?= e($etapaNombre) ?></label>
+									</div>
+								<?php endforeach; ?>
+							</div>
+						</div>
+					</div>
+					<div class="col-md-2">
+						<label class="form-label mb-1"><i class="bi bi-layers"></i> Niveles</label>
+						<div class="dropdown" id="crmFilterLevelDropdown">
+							<button class="btn btn-outline-secondary dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" id="crmFilterLevelBtn">
+								Todos los niveles
+							</button>
+							<div class="dropdown-menu p-2 w-100" style="max-height: 240px; overflow-y: auto;">
+								<?php foreach ($studentLevels as $index => $nivel): ?>
+									<?php $nivelValue = strtolower((string) $nivel); ?>
+									<div class="form-check">
+										<input class="form-check-input crm-filter-checkbox" type="checkbox" value="<?= e($nivelValue) ?>" id="crmLevelOpt<?= (int) $index ?>" data-filter-group="level">
+										<label class="form-check-label" for="crmLevelOpt<?= (int) $index ?>"><?= e((string) $nivel) ?></label>
+									</div>
+								<?php endforeach; ?>
+							</div>
+						</div>
 					</div>
 					<div class="col-md-2 d-grid">
 						<button type="button" id="crmFilterClear" class="btn btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Limpiar filtros</button>
@@ -200,6 +273,9 @@
 			<p class="text-center text-muted small">Pagina <?= $studentPage ?> de <?= $studentPages ?> - <?= $totalStudents ?> estudiantes</p>
 		</nav>
 		<?php endif; ?>
+			</div>
+
+			<div class="tab-pane fade" id="crm-pane-prospects" role="tabpanel" aria-labelledby="crm-tab-prospects" tabindex="0">
 
 		<div class="card border-0 shadow-sm mt-4">
 			<div class="card-header bg-white">
@@ -345,6 +421,8 @@
 			<p class="text-center text-muted small">Pagina <?= $prospectPage ?> de <?= $prospectPages ?> - <?= $totalProspects ?> clientes potenciales</p>
 		</nav>
 		<?php endif; ?>
+			</div>
+		</div>
 	</div>
 </section>
 
