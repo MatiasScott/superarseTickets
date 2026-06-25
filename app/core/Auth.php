@@ -109,6 +109,19 @@ class Auth
 		];
 	}
 
+	public static function visibleMenuModuleKeys(): array
+	{
+		return [
+			'tickets',
+			'chat',
+			'crm',
+			'convenios',
+			'admin',
+			'campanas',
+			'configuracion',
+		];
+	}
+
 	public static function moduleActions(string $moduleKey): array
 	{
 		$catalog = self::moduleCatalog();

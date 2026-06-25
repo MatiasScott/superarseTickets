@@ -4,7 +4,17 @@ class AdminController extends Controller
 {
 	private function permissionModules(): array
 	{
-		return Auth::moduleCatalog();
+		$catalog = Auth::moduleCatalog();
+		$activeMenuModules = Auth::visibleMenuModuleKeys();
+
+		$filtered = [];
+		foreach ($activeMenuModules as $moduleKey) {
+			if (isset($catalog[$moduleKey])) {
+				$filtered[$moduleKey] = $catalog[$moduleKey];
+			}
+		}
+
+		return $filtered;
 	}
 
 	private function ensureRolePermissionTable(PDO $db): void
