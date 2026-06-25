@@ -1083,6 +1083,7 @@ class CorreoController extends Controller
 			'matriculas' => ['contabilidad y facturacion'],
 			'direcciondocencia' => ['docencia'],
 			'docencia' => ['docencia'],
+			'eci' => ['educacion continua e idiomas'],
 			'ingles' => ['educacion continua e idiomas'],
 			'investigacion' => ['investigacion e innovacion'],
 			'practicas' => ['practicas pre pro y vinculacion'],
