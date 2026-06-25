@@ -1087,7 +1087,7 @@ class CRMController extends Controller
 
 	private function currentUserId(): int
 	{
-		return (int) ($_SESSION['user_id'] ?? 0);
+		return (int) (Auth::id() ?? ($_SESSION['user_id'] ?? 0));
 	}
 
 	private function crmHistoryNote(int $studentId, string $sourceType, string $noteText): void
@@ -2506,19 +2506,22 @@ class CRMController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
+			$currentUserId = $this->currentUserId();
 			$sql = "INSERT INTO crm_student_notes (student_id, source_type, note_text, created_by, created_at)
 					VALUES (:student_id, 'note', :note_text, :user_id, NOW())";
 			$stmt = $db->prepare($sql);
 			$stmt->execute([
 				':student_id' => $studentId,
 				':note_text' => $noteText,
-				':user_id' => (int) ($_SESSION['user_id'] ?? 0),
+				':user_id' => $currentUserId,
 			]);
 
 			$noteId = (int) $db->lastInsertId();
 			$userName = 'Usuario';
 			try {
-				$userResult = $db->query("SELECT nombre FROM usuarios WHERE id = " . ((int) ($_SESSION['user_id'] ?? 0)))->fetch();
+				$userStmt = $db->prepare('SELECT nombre FROM usuarios WHERE id = :id LIMIT 1');
+				$userStmt->execute([':id' => $currentUserId]);
+				$userResult = $userStmt->fetch();
 				if ($userResult) {
 					$userName = (string) ($userResult['nombre'] ?? 'Usuario');
 				}
