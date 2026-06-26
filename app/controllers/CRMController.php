@@ -413,6 +413,7 @@ class CRMController extends Controller
 		$correoPersonal = $this->normalizeEmailValue((string) ($_POST['correo_personal'] ?? ''));
 		$origen = trim((string) ($_POST['origen'] ?? 'crm_manual'));
 		$carrera = trim((string) ($_POST['carrera'] ?? ''));
+		$creadoPor = $this->normalizeCreatedByValue((string) ($_POST['creado_por'] ?? ''));
 		$modalidad = trim((string) ($_POST['modalidad'] ?? ''));
 		$provincia = trim((string) ($_POST['provincia'] ?? ''));
 		$ciudad = trim((string) ($_POST['ciudad'] ?? ''));
@@ -489,6 +490,7 @@ class CRMController extends Controller
 				$contactId,
 				$estadoInicialId,
 				$origen !== '' ? $origen : 'crm_manual',
+				$creadoPor,
 				$carrera,
 				$modalidad,
 				$provincia,
@@ -1369,6 +1371,9 @@ class CRMController extends Controller
 			if (!in_array('carrera', $interesadosColumns, true)) {
 				$db->exec('ALTER TABLE interesados ADD COLUMN carrera VARCHAR(180) NULL AFTER origen');
 			}
+			if (!in_array('creado_por', $interesadosColumns, true)) {
+				$db->exec('ALTER TABLE interesados ADD COLUMN creado_por VARCHAR(255) NULL AFTER origen');
+			}
 			if (!in_array('modalidad', $interesadosColumns, true)) {
 				$db->exec('ALTER TABLE interesados ADD COLUMN modalidad VARCHAR(80) NULL AFTER carrera');
 			}
@@ -1395,9 +1400,11 @@ class CRMController extends Controller
 				i.origen,
 				i.convertido,
 				i.carrera,
+				i.creado_por,
 				i.modalidad,
 				i.provincia,
 				i.ciudad,
+				i.estado_id,
 				i.created_at,
 				COALESCE(pe.nombre, 'Sin etapa') AS etapa,
 				c.nombre,
@@ -1474,7 +1481,7 @@ class CRMController extends Controller
 		return $fallbackId > 0 ? $fallbackId : null;
 	}
 
-	private function upsertInteresado(PDO $db, int $contactId, ?int $estadoId, string $origen, string $carrera = '', string $modalidad = '', string $provincia = '', string $ciudad = ''): void
+	private function upsertInteresado(PDO $db, int $contactId, ?int $estadoId, string $origen, string $creadoPor = '', string $carrera = '', string $modalidad = '', string $provincia = '', string $ciudad = ''): void
 	{
 		if ($contactId <= 0) {
 			return;
@@ -1488,6 +1495,10 @@ class CRMController extends Controller
 			$update = $db->prepare('UPDATE interesados
 				SET estado_id = :estado_id,
 					origen = :origen,
+					creado_por = CASE
+						WHEN COALESCE(TRIM(creado_por), "") = "" THEN :creado_por
+						ELSE creado_por
+					END,
 					carrera = :carrera,
 					modalidad = :modalidad,
 					provincia = :provincia,
@@ -1500,6 +1511,7 @@ class CRMController extends Controller
 			$update->execute([
 				'estado_id' => $estadoId,
 				'origen' => mb_substr($origen, 0, 100),
+				'creado_por' => $creadoPor !== '' ? mb_substr($creadoPor, 0, 255) : null,
 				'carrera' => $carrera !== '' ? mb_substr($carrera, 0, 180) : null,
 				'modalidad' => $modalidad !== '' ? mb_substr($modalidad, 0, 80) : null,
 				'provincia' => $provincia !== '' ? mb_substr($provincia, 0, 120) : null,
@@ -1509,12 +1521,13 @@ class CRMController extends Controller
 			return;
 		}
 
-		$insert = $db->prepare('INSERT INTO interesados (contacto_id, estado_id, origen, carrera, modalidad, provincia, ciudad, convertido, estado, created_at, updated_at)
-			VALUES (:contacto_id, :estado_id, :origen, :carrera, :modalidad, :provincia, :ciudad, 0, "activo", NOW(), NOW())');
+		$insert = $db->prepare('INSERT INTO interesados (contacto_id, estado_id, origen, creado_por, carrera, modalidad, provincia, ciudad, convertido, estado, created_at, updated_at)
+			VALUES (:contacto_id, :estado_id, :origen, :creado_por, :carrera, :modalidad, :provincia, :ciudad, 0, "activo", NOW(), NOW())');
 		$insert->execute([
 			'contacto_id' => $contactId,
 			'estado_id' => $estadoId,
 			'origen' => mb_substr($origen, 0, 100),
+			'creado_por' => $creadoPor !== '' ? mb_substr($creadoPor, 0, 255) : null,
 			'carrera' => $carrera !== '' ? mb_substr($carrera, 0, 180) : null,
 			'modalidad' => $modalidad !== '' ? mb_substr($modalidad, 0, 80) : null,
 			'provincia' => $provincia !== '' ? mb_substr($provincia, 0, 120) : null,
@@ -1865,6 +1878,16 @@ class CRMController extends Controller
 
 		try {
 			$this->ensureCrmSupportTables();
+			$db = Database::getInstance()->connection();
+			$beforeEmail = '';
+			$contactStmtBefore = $db->prepare('SELECT c.email
+				FROM estudiantes e
+				LEFT JOIN contactos c ON c.id = e.contacto_id
+				WHERE e.id = :id
+				LIMIT 1');
+			$contactStmtBefore->execute([':id' => $studentId]);
+			$beforeEmail = (string) ($contactStmtBefore->fetchColumn() ?: '');
+
 			$remote = $this->connectSuperarseDatabase();
 			$updated = false;
 			if ($remote instanceof PDO) {
@@ -1899,7 +1922,6 @@ class CRMController extends Controller
 			}
 
 			if (!$updated) {
-				$db = Database::getInstance()->connection();
 				$contactStmt = $db->prepare('SELECT contacto_id FROM estudiantes WHERE id = :id LIMIT 1');
 				$contactStmt->execute([':id' => $studentId]);
 				$contactoId = (int) ($contactStmt->fetchColumn() ?: 0);
@@ -1918,7 +1940,6 @@ class CRMController extends Controller
 				]);
 			}
 
-			$db = Database::getInstance()->connection();
 			$extraSql = "INSERT INTO crm_student_contact_extras (student_id, extra_emails, extra_phones, updated_by, updated_at)
 						 VALUES (:student_id, :extra_emails, :extra_phones, :updated_by, NOW())
 						 ON DUPLICATE KEY UPDATE
@@ -1931,8 +1952,19 @@ class CRMController extends Controller
 				':student_id' => $studentId,
 				':extra_emails' => $extraEmails,
 				':extra_phones' => $extraPhones,
-				':updated_by' => (int) ($_SESSION['user_id'] ?? 0),
+				':updated_by' => $this->currentUserId(),
 			]);
+
+			$historyNote = sprintf(
+				'Actualizó contacto. Email: %s -> %s. Teléfono: %s. Celular: %s. Correos extra: %s. Teléfonos extra: %s.',
+				$beforeEmail !== '' ? $beforeEmail : '-',
+				$email !== '' ? $email : '-',
+				$telefono !== '' ? $telefono : '-',
+				$celular !== '' ? $celular : '-',
+				$extraEmails !== '' ? $extraEmails : '-',
+				$extraPhones !== '' ? $extraPhones : '-'
+			);
+			$this->crmHistoryNote($studentId, 'contact_update', $historyNote);
 
 			echo json_encode([
 				'success' => true,
@@ -1942,6 +1974,226 @@ class CRMController extends Controller
 			http_response_code(500);
 			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
 		}
+		exit;
+	}
+
+	public function getProspectDetail(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		$contactoId = max(0, (int) ($_GET['id'] ?? 0));
+		if ($contactoId <= 0) {
+			http_response_code(400);
+			echo json_encode(['success' => false, 'error' => 'ID inválido']);
+			exit;
+		}
+
+		try {
+			$this->ensureCrmSupportTables();
+			$db = Database::getInstance()->connection();
+
+			$sql = "SELECT
+				c.id AS contacto_id,
+				c.nombre,
+				c.apellido,
+				c.cedula,
+				c.email,
+				COALESCE(tp.telefono, '') AS celular,
+				COALESCE(i.origen, '') AS propietario,
+				COALESCE(i.creado_por, '') AS creado_por,
+				COALESCE(i.carrera, '') AS carrera,
+				COALESCE(i.modalidad, '') AS modalidad,
+				COALESCE(i.provincia, '') AS provincia,
+				COALESCE(i.ciudad, '') AS ciudad,
+				COALESCE(i.estado_id, 0) AS estado_id,
+				COALESCE(pe.nombre, 'Sin etapa') AS etapa
+			FROM contactos c
+			INNER JOIN interesados i ON i.contacto_id = c.id
+			LEFT JOIN pipeline_estados pe ON pe.id = i.estado_id
+			LEFT JOIN (
+				SELECT t1.contacto_id, t1.telefono
+				FROM telefonos_contacto t1
+				INNER JOIN (
+					SELECT contacto_id, MIN(id) AS first_id
+					FROM telefonos_contacto
+					WHERE estado = 'activo'
+					GROUP BY contacto_id
+				) tx ON tx.first_id = t1.id
+			) tp ON tp.contacto_id = c.id
+			WHERE c.id = :id
+			LIMIT 1";
+
+			$stmt = $db->prepare($sql);
+			$stmt->execute([':id' => $contactoId]);
+			$prospect = $stmt->fetch();
+			if (!$prospect) {
+				throw new RuntimeException('Cliente potencial no encontrado');
+			}
+
+			$pipelineEstados = $db->query("SELECT id, nombre FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC")->fetchAll() ?: [];
+
+			echo json_encode([
+				'success' => true,
+				'prospect' => $prospect,
+				'estados' => $pipelineEstados,
+			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		} catch (Throwable $e) {
+			http_response_code(500);
+			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+		}
+
+		exit;
+	}
+
+	public function updateProspect(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		$contactoId = max(0, (int) ($_POST['contacto_id'] ?? 0));
+		$estadoRaw = trim((string) ($_POST['estado_id'] ?? ''));
+		$hasEstadoId = $estadoRaw !== '';
+		$estadoId = max(0, (int) $estadoRaw);
+		$nombres = trim((string) ($_POST['nombres'] ?? ''));
+		$apellidos = trim((string) ($_POST['apellidos'] ?? ''));
+		$identificacion = $this->normalizeIdentityValue((string) ($_POST['identificacion'] ?? ''));
+		$correoPersonal = $this->normalizeEmailValue((string) ($_POST['correo_personal'] ?? ''));
+		$celular = $this->normalizePhoneValue((string) ($_POST['celular'] ?? ''));
+		$propietario = trim((string) ($_POST['propietario'] ?? ''));
+		$carrera = trim((string) ($_POST['carrera'] ?? ''));
+		$modalidad = trim((string) ($_POST['modalidad'] ?? ''));
+		$provincia = trim((string) ($_POST['provincia'] ?? ''));
+		$ciudad = trim((string) ($_POST['ciudad'] ?? ''));
+
+		if ($contactoId <= 0 || $nombres === '' || $apellidos === '') {
+			http_response_code(400);
+			echo json_encode(['success' => false, 'error' => 'Datos incompletos']);
+			exit;
+		}
+
+		try {
+			$this->ensureCrmSupportTables();
+			$db = Database::getInstance()->connection();
+			$db->beginTransaction();
+
+			$contactStmt = $db->prepare('SELECT id FROM contactos WHERE id = :id LIMIT 1');
+			$contactStmt->execute([':id' => $contactoId]);
+			if (!$contactStmt->fetch()) {
+				throw new RuntimeException('Cliente potencial no encontrado');
+			}
+
+			$contactUpdate = $db->prepare('UPDATE contactos
+				SET nombre = :nombre,
+					apellido = :apellido,
+					cedula = :cedula,
+					email = :email,
+					updated_at = NOW()
+				WHERE id = :id
+				LIMIT 1');
+			$contactUpdate->execute([
+				':nombre' => mb_substr($nombres, 0, 150),
+				':apellido' => mb_substr($apellidos, 0, 150),
+				':cedula' => $identificacion !== '' ? mb_substr($identificacion, 0, 20) : null,
+				':email' => $correoPersonal !== '' ? $correoPersonal : null,
+				':id' => $contactoId,
+			]);
+
+			if ($celular !== '') {
+				$this->upsertContactPhone($db, $contactoId, $celular, 'principal');
+			}
+
+			if ($correoPersonal !== '') {
+				$this->upsertContactEmail($db, $contactoId, $correoPersonal, 'personal');
+			}
+
+			if ($hasEstadoId) {
+				$interesadoUpdate = $db->prepare('UPDATE interesados
+					SET estado_id = :estado_id,
+						origen = :origen,
+						carrera = :carrera,
+						modalidad = :modalidad,
+						provincia = :provincia,
+						ciudad = :ciudad,
+						updated_at = NOW()
+					WHERE contacto_id = :contacto_id
+					LIMIT 1');
+				$interesadoUpdate->execute([
+					':estado_id' => $estadoId > 0 ? $estadoId : null,
+					':origen' => $propietario !== '' ? mb_substr($propietario, 0, 100) : 'crm_manual',
+					':carrera' => $carrera !== '' ? mb_substr($carrera, 0, 180) : null,
+					':modalidad' => $modalidad !== '' ? mb_substr($modalidad, 0, 80) : null,
+					':provincia' => $provincia !== '' ? mb_substr($provincia, 0, 120) : null,
+					':ciudad' => $ciudad !== '' ? mb_substr($ciudad, 0, 120) : null,
+					':contacto_id' => $contactoId,
+				]);
+			} else {
+				$interesadoUpdate = $db->prepare('UPDATE interesados
+					SET origen = :origen,
+						carrera = :carrera,
+						modalidad = :modalidad,
+						provincia = :provincia,
+						ciudad = :ciudad,
+						updated_at = NOW()
+					WHERE contacto_id = :contacto_id
+					LIMIT 1');
+				$interesadoUpdate->execute([
+					':origen' => $propietario !== '' ? mb_substr($propietario, 0, 100) : 'crm_manual',
+					':carrera' => $carrera !== '' ? mb_substr($carrera, 0, 180) : null,
+					':modalidad' => $modalidad !== '' ? mb_substr($modalidad, 0, 80) : null,
+					':provincia' => $provincia !== '' ? mb_substr($provincia, 0, 120) : null,
+					':ciudad' => $ciudad !== '' ? mb_substr($ciudad, 0, 120) : null,
+					':contacto_id' => $contactoId,
+				]);
+			}
+
+			if ($hasEstadoId && $estadoId > 0) {
+				$pipelineSql = "INSERT INTO crm_student_pipeline (student_id, estado_id, updated_by, updated_at)
+					VALUES (:student_id, :estado_id, :updated_by, NOW())
+					ON DUPLICATE KEY UPDATE
+					estado_id = VALUES(estado_id),
+					updated_by = VALUES(updated_by),
+					updated_at = NOW()";
+				$pipelineStmt = $db->prepare($pipelineSql);
+				$pipelineStmt->execute([
+					':student_id' => $contactoId,
+					':estado_id' => $estadoId,
+					':updated_by' => $this->currentUserId(),
+				]);
+			}
+
+			$this->crmHistoryNote(
+				$contactoId,
+				'prospect_update',
+				sprintf(
+					'Actualizó cliente potencial. Nombre: %s %s. Identificación: %s. Email: %s. Celular: %s. Propietario: %s. Carrera: %s. Modalidad: %s. Provincia: %s. Ciudad: %s.',
+					$nombres,
+					$apellidos,
+					$identificacion !== '' ? $identificacion : '-',
+					$correoPersonal !== '' ? $correoPersonal : '-',
+					$celular !== '' ? $celular : '-',
+					$propietario !== '' ? $propietario : '-',
+					$carrera !== '' ? $carrera : '-',
+					$modalidad !== '' ? $modalidad : '-',
+					$provincia !== '' ? $provincia : '-',
+					$ciudad !== '' ? $ciudad : '-'
+				)
+			);
+
+			$db->commit();
+
+			echo json_encode([
+				'success' => true,
+				'message' => 'Cliente potencial actualizado correctamente.',
+			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		} catch (Throwable $e) {
+			if (isset($db) && $db instanceof PDO && $db->inTransaction()) {
+				$db->rollBack();
+			}
+			http_response_code(500);
+			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+		}
+
 		exit;
 	}
 
@@ -1976,6 +2228,7 @@ class CRMController extends Controller
 					'' AS segundo_nombre,
 					c.apellido AS primer_apellido,
 					'' AS segundo_apellido,
+					COALESCE(c.cedula, '') AS cedula,
 					c.email AS email,
 					COALESCE(tp.telefono, '') AS telefono,
 					COALESCE(tp.telefono, '') AS celular,
@@ -1984,10 +2237,14 @@ class CRMController extends Controller
 					'' AS sede,
 					COALESCE(c.estado, 'activo') AS estado,
 					c.created_at AS fecha_matricula,
+					i.created_at AS prospect_created_at,
 					COALESCE(i.origen, 'crm_manual') AS origen,
 					COALESCE(i.carrera, '') AS carrera,
+					COALESCE(i.modalidad, '') AS modalidad,
 					COALESCE(i.provincia, '') AS provincia,
 					COALESCE(i.ciudad, '') AS ciudad,
+					COALESCE(i.creado_por, '') AS creado_por,
+					COALESCE(i.estado_id, 0) AS interesado_estado_id,
 					COALESCE(i.convertido, 0) AS convertido,
 					i.id AS interesado_id,
 					e.id AS estudiante_local_id
@@ -2085,7 +2342,11 @@ class CRMController extends Controller
 			$currentPipelineStmt = $db->prepare('SELECT estado_id FROM crm_student_pipeline WHERE student_id = :student_id LIMIT 1');
 			$currentPipelineStmt->execute([':student_id' => $pipelineKey]);
 			$currentPipeline = $currentPipelineStmt->fetch();
-			$student['pipeline_estado_id'] = (int) ($currentPipeline['estado_id'] ?? 0);
+			$pipelineEstadoId = (int) ($currentPipeline['estado_id'] ?? 0);
+			if ($pipelineEstadoId <= 0 && $entityType === 'contact') {
+				$pipelineEstadoId = (int) ($student['interesado_estado_id'] ?? 0);
+			}
+			$student['pipeline_estado_id'] = $pipelineEstadoId;
 			$pipelineEstados = $db->query("SELECT id, nombre FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC")->fetchAll() ?: [];
 
 			$historyStmt = $db->prepare("SELECT
@@ -2096,7 +2357,7 @@ class CRMController extends Controller
 				FROM crm_student_notes csn
 				LEFT JOIN usuarios u ON u.id = csn.created_by
 				WHERE csn.student_id = :student_id
-				AND csn.source_type IN ('prospect_created', 'estado_change', 'task_create', 'task_participants', 'task_result', 'task_complete')
+				AND csn.source_type IN ('prospect_created', 'estado_change', 'task_create', 'task_participants', 'task_result', 'task_complete', 'contact_update', 'prospect_update')
 				ORDER BY csn.created_at DESC
 				LIMIT 30");
 			$historyStmt->execute([':student_id' => $pipelineKey]);
@@ -2162,7 +2423,13 @@ class CRMController extends Controller
 			$pipelineStmt->execute([
 				':student_id' => $studentId,
 				':estado_id' => $estadoId,
-				':updated_by' => (int) ($_SESSION['user_id'] ?? 0),
+				':updated_by' => $this->currentUserId(),
+			]);
+
+			$interesadoStateStmt = $db->prepare('UPDATE interesados SET estado_id = :estado_id, updated_at = NOW() WHERE contacto_id = :contacto_id LIMIT 1');
+			$interesadoStateStmt->execute([
+				':estado_id' => $estadoId,
+				':contacto_id' => $studentId,
 			]);
 
 			$noteSql = "INSERT INTO crm_student_notes (student_id, source_type, note_text, created_by, created_at)
@@ -2171,7 +2438,7 @@ class CRMController extends Controller
 			$noteStmt->execute([
 				':student_id' => $studentId,
 				':note_text' => 'Cambio de pipeline: ' . $previousStateName . ' -> ' . (string) ($estado['nombre'] ?? ('ID ' . $estadoId)),
-				':user_id' => (int) ($_SESSION['user_id'] ?? 0),
+				':user_id' => $this->currentUserId(),
 			]);
 
 			echo json_encode([
@@ -2646,10 +2913,10 @@ class CRMController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
-			$sql = "SELECT csn.created_at, u.nombre AS usuario, csn.note_text
+			$sql = "SELECT csn.created_at, COALESCE(u.nombre, 'Sistema') AS usuario, csn.note_text
 					FROM crm_student_notes csn
 					LEFT JOIN usuarios u ON u.id = csn.created_by
-					WHERE csn.student_id = :student_id AND csn.source_type IN ('prospect_created', 'estado_change', 'task_create', 'task_participants', 'task_result', 'task_complete')
+					WHERE csn.student_id = :student_id AND csn.source_type IN ('prospect_created', 'estado_change', 'task_create', 'task_participants', 'task_result', 'task_complete', 'contact_update', 'prospect_update')
 					ORDER BY csn.created_at DESC";
 			$stmt = $db->prepare($sql);
 			$stmt->execute([':student_id' => $studentId]);
@@ -3222,6 +3489,25 @@ class CRMController extends Controller
 		}
 
 		return $value;
+	}
+
+	private function normalizeCreatedByValue(string $value): string
+	{
+		$items = preg_split('/\s*,\s*/', trim($value), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+		$unique = [];
+		foreach ($items as $item) {
+			$clean = trim((string) $item);
+			if ($clean === '') {
+				continue;
+			}
+			$key = mb_strtolower($clean, 'UTF-8');
+			if (isset($unique[$key])) {
+				continue;
+			}
+			$unique[$key] = mb_substr($clean, 0, 60);
+		}
+
+		return implode(', ', array_values($unique));
 	}
 
 	private function findPrimaryContactIdForMerge(PDO $db, string $identity): ?int

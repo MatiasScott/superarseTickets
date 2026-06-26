@@ -342,7 +342,11 @@ document.addEventListener('DOMContentLoaded', () => {
 	const studentsCounter = document.getElementById('crmStudentsCounter');
 	const prospectsTable = document.getElementById('crmProspectsTable');
 	const prospectOriginSelect = document.getElementById('crmProspectFilterOrigin');
-	const prospectStageSelect = document.getElementById('crmProspectFilterStage');
+	const prospectStageBtn = document.getElementById('crmProspectStageBtn');
+	const prospectCareerBtn = document.getElementById('crmProspectCareerBtn');
+	const prospectCreatedByBtn = document.getElementById('crmProspectCreatedByBtn');
+	const prospectCreatedPreset = document.getElementById('crmProspectCreatedPreset');
+	const prospectCustomWrap = document.getElementById('crmProspectCreatedCustomWrap');
 	const prospectDateFromInput = document.getElementById('crmProspectDateFrom');
 	const prospectDateToInput = document.getElementById('crmProspectDateTo');
 	const prospectClearBtn = document.getElementById('crmProspectFilterClear');
@@ -372,6 +376,18 @@ document.addEventListener('DOMContentLoaded', () => {
 		updateMultiFilterButtonLabel(filterCareerBtn, getCheckedFilterValues('career'), 'Todas las carreras', 'carrera', 'carreras');
 		updateMultiFilterButtonLabel(filterPipelineBtn, getCheckedFilterValues('pipeline'), 'Todas las etapas', 'etapa', 'etapas');
 		updateMultiFilterButtonLabel(filterLevelBtn, getCheckedFilterValues('level'), 'Todos los niveles', 'nivel', 'niveles');
+	};
+
+	const getCheckedProspectFilterValues = (group) => {
+		return Array.from(document.querySelectorAll(`.crm-prospect-filter-checkbox[data-filter-group="${group}"]:checked`))
+			.map((input) => normalizeText(input.value || ''))
+			.filter((value) => value !== '');
+	};
+
+	const refreshProspectMultiFilterLabels = () => {
+		updateMultiFilterButtonLabel(prospectStageBtn, getCheckedProspectFilterValues('prospect-stage'), 'Todas las etapas', 'etapa', 'etapas');
+		updateMultiFilterButtonLabel(prospectCareerBtn, getCheckedProspectFilterValues('prospect-career'), 'Todas las carreras', 'carrera', 'carreras');
+		updateMultiFilterButtonLabel(prospectCreatedByBtn, getCheckedProspectFilterValues('prospect-created-by'), 'Todos', 'persona', 'personas');
 	};
 
 	const isVisibleRow = (row) => row && row.style.display !== 'none';
@@ -498,22 +514,87 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 
 		const selectedOrigin = normalizeText(prospectOriginSelect?.value || '');
-		const selectedStage = normalizeText(prospectStageSelect?.value || '');
+		const selectedStages = getCheckedProspectFilterValues('prospect-stage');
+		const selectedCareers = getCheckedProspectFilterValues('prospect-career');
+		const selectedCreatedBy = getCheckedProspectFilterValues('prospect-created-by');
+		const createdPreset = String(prospectCreatedPreset?.value || '').trim();
 		const fromDate = String(prospectDateFromInput?.value || '').trim();
 		const toDate = String(prospectDateToInput?.value || '').trim();
 		const rows = prospectsTable.querySelectorAll('tbody tr[data-prospect-origin]');
+		const now = new Date();
+
+		const getWeekRange = (referenceDate, previous = false) => {
+			const date = new Date(referenceDate);
+			const day = date.getDay();
+			const deltaToMonday = day === 0 ? -6 : 1 - day;
+			date.setHours(0, 0, 0, 0);
+			date.setDate(date.getDate() + deltaToMonday + (previous ? -7 : 0));
+			const start = new Date(date);
+			const end = new Date(date);
+			end.setDate(end.getDate() + 7);
+			return { start, end };
+		};
+
+		let presetStart = null;
+		let presetEnd = null;
+		if (createdPreset === 'current_week') {
+			const range = getWeekRange(now, false);
+			presetStart = range.start;
+			presetEnd = range.end;
+		} else if (createdPreset === 'previous_week') {
+			const range = getWeekRange(now, true);
+			presetStart = range.start;
+			presetEnd = range.end;
+		} else if (createdPreset === 'last_30_days') {
+			presetStart = new Date(now);
+			presetStart.setHours(0, 0, 0, 0);
+			presetStart.setDate(presetStart.getDate() - 30);
+			presetEnd = null;
+		}
+
+		const customFrom = fromDate !== '' ? new Date(fromDate) : null;
+		const customTo = toDate !== '' ? new Date(toDate) : null;
+
+		if (prospectCustomWrap) {
+			prospectCustomWrap.classList.toggle('d-none', createdPreset !== 'custom');
+		}
 
 		rows.forEach((row) => {
 			const rowOrigin = normalizeText(row.getAttribute('data-prospect-origin') || '');
 			const rowStage = normalizeText(row.getAttribute('data-prospect-stage') || '');
-			const rowDate = String(row.getAttribute('data-prospect-date') || '').trim();
+			const rowCareer = normalizeText(row.getAttribute('data-prospect-career') || '');
+			const rowCreatedByRaw = String(row.getAttribute('data-prospect-created-by') || '');
+			const rowCreatedBy = rowCreatedByRaw === ''
+				? []
+				: rowCreatedByRaw.split('|').map((value) => normalizeText(value)).filter((value) => value !== '');
+			const rowDatetimeRaw = String(row.getAttribute('data-prospect-datetime') || '').trim();
+			const rowDatetime = rowDatetimeRaw !== '' ? new Date(rowDatetimeRaw.replace(' ', 'T')) : null;
 
 			const matchOrigin = selectedOrigin === '' || rowOrigin === selectedOrigin;
-			const matchStage = selectedStage === '' || rowStage === selectedStage;
-			const matchFrom = fromDate === '' || (rowDate !== '' && rowDate >= fromDate);
-			const matchTo = toDate === '' || (rowDate !== '' && rowDate <= toDate);
+			const matchStage = selectedStages.length === 0 || selectedStages.includes(rowStage);
+			const matchCareer = selectedCareers.length === 0 || selectedCareers.includes(rowCareer);
+			const matchCreatedBy = selectedCreatedBy.length === 0 || selectedCreatedBy.some((item) => rowCreatedBy.includes(item));
 
-			row.style.display = (matchOrigin && matchStage && matchFrom && matchTo) ? '' : 'none';
+			let matchCreated = true;
+			if (createdPreset === 'custom') {
+				if (!rowDatetime || Number.isNaN(rowDatetime.getTime())) {
+					matchCreated = false;
+				} else {
+					const afterFrom = !customFrom || rowDatetime >= customFrom;
+					const beforeTo = !customTo || rowDatetime <= customTo;
+					matchCreated = afterFrom && beforeTo;
+				}
+			} else if (presetStart instanceof Date) {
+				if (!rowDatetime || Number.isNaN(rowDatetime.getTime())) {
+					matchCreated = false;
+				} else {
+					const afterStart = rowDatetime >= presetStart;
+					const beforeEnd = !(presetEnd instanceof Date) || rowDatetime < presetEnd;
+					matchCreated = afterStart && beforeEnd;
+				}
+			}
+
+			row.style.display = (matchOrigin && matchStage && matchCareer && matchCreatedBy && matchCreated) ? '' : 'none';
 		});
 		updateProspectsCounter();
 	};
@@ -525,8 +606,14 @@ document.addEventListener('DOMContentLoaded', () => {
 			applyTableFilters();
 		});
 	});
+	Array.from(document.querySelectorAll('.crm-prospect-filter-checkbox')).forEach((checkbox) => {
+		checkbox.addEventListener('change', () => {
+			refreshProspectMultiFilterLabels();
+			applyProspectFilters();
+		});
+	});
 	prospectOriginSelect?.addEventListener('change', applyProspectFilters);
-	prospectStageSelect?.addEventListener('change', applyProspectFilters);
+	prospectCreatedPreset?.addEventListener('change', applyProspectFilters);
 	prospectDateFromInput?.addEventListener('change', applyProspectFilters);
 	prospectDateToInput?.addEventListener('change', applyProspectFilters);
 	filterClearBtn?.addEventListener('click', () => {
@@ -545,21 +632,26 @@ document.addEventListener('DOMContentLoaded', () => {
 		if (prospectOriginSelect) {
 			prospectOriginSelect.value = '';
 		}
-		if (prospectStageSelect) {
-			prospectStageSelect.value = '';
+		if (prospectCreatedPreset) {
+			prospectCreatedPreset.value = '';
 		}
+		Array.from(document.querySelectorAll('.crm-prospect-filter-checkbox')).forEach((checkbox) => {
+			checkbox.checked = false;
+		});
 		if (prospectDateFromInput) {
 			prospectDateFromInput.value = '';
 		}
 		if (prospectDateToInput) {
 			prospectDateToInput.value = '';
 		}
+		refreshProspectMultiFilterLabels();
 		applyProspectFilters();
 	});
 
 	applyTableFilters();
 	applyProspectFilters();
 	refreshStudentsMultiFilterLabels();
+	refreshProspectMultiFilterLabels();
 
 	function bindStudentActions() {
 		const contactLinks = document.querySelectorAll('.student-contact-link');
@@ -594,6 +686,22 @@ document.addEventListener('DOMContentLoaded', () => {
 				loadStudentPipeline(entityId, entityType);
 			});
 		});
+
+		const prospectLinks = document.querySelectorAll('.prospect-edit-link');
+		prospectLinks.forEach((link) => {
+			if (link.dataset.crmBound === '1') {
+				return;
+			}
+			link.dataset.crmBound = '1';
+			link.addEventListener('click', (e) => {
+				e.preventDefault();
+				const contactId = Number(link.getAttribute('data-contact-id') || 0);
+				if (contactId <= 0) {
+					return;
+				}
+				loadProspectDetail(contactId);
+			});
+		});
 	}
 
 	bindStudentActions();
@@ -618,6 +726,111 @@ document.addEventListener('DOMContentLoaded', () => {
 			console.error('Error:', error);
 			document.getElementById('studentContactBody').innerHTML = `<div class="alert alert-danger">${escapeHtml(error.message)}</div>`;
 		}
+	};
+
+	const loadProspectDetail = async (contactId) => {
+		const body = document.getElementById('prospectEditBody');
+		if (!body) {
+			return;
+		}
+
+		body.innerHTML = '<div class="text-center py-4"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Cargando...</span></div></div>';
+
+		try {
+			const response = await fetch(`${BASE_URL}crm/getProspectDetail?id=${encodeURIComponent(String(contactId))}`);
+			if (!response.ok) {
+				throw new Error('No se pudo cargar el cliente potencial');
+			}
+
+			const data = await response.json();
+			if (!data.success) {
+				throw new Error(data.error || 'No se pudo cargar el cliente potencial');
+			}
+
+			renderProspectModal(data.prospect || {}, data.estados || []);
+		} catch (error) {
+			body.innerHTML = `<div class="alert alert-danger">${escapeHtml(error.message || 'Error al cargar el cliente potencial')}</div>`;
+		}
+	};
+
+	const renderProspectModal = (prospect, estados) => {
+		const body = document.getElementById('prospectEditBody');
+		const saveBtn = document.getElementById('saveProspectBtn');
+		if (!body || !saveBtn) {
+			return;
+		}
+
+		saveBtn.setAttribute('data-contact-id', String(prospect.contacto_id || ''));
+		const baseCareerSelect = document.getElementById('prospectCarrera');
+		const currentCareer = normalizeText(prospect.carrera || '');
+		const careerOptions = [];
+		if (baseCareerSelect) {
+			Array.from(baseCareerSelect.options || []).forEach((option) => {
+				const optionValue = String(option.value || '').trim();
+				if (optionValue === '') {
+					return;
+				}
+				const selected = normalizeText(optionValue) === currentCareer ? ' selected' : '';
+				careerOptions.push(`<option value="${escapeHtml(optionValue)}"${selected}>${escapeHtml(option.textContent || optionValue)}</option>`);
+			});
+		}
+		if (careerOptions.length === 0 && String(prospect.carrera || '').trim() !== '') {
+			const fallbackValue = String(prospect.carrera || '').trim();
+			careerOptions.push(`<option value="${escapeHtml(fallbackValue)}" selected>${escapeHtml(fallbackValue)}</option>`);
+		}
+
+		body.innerHTML = `
+			<div id="prospectSaveStatus" class="d-none"></div>
+			<div class="row g-3">
+				<div class="col-md-6">
+					<label class="form-label">Nombres</label>
+					<input type="text" class="form-control" id="prospectEditNombres" value="${escapeHtml(prospect.nombre || '')}">
+				</div>
+				<div class="col-md-6">
+					<label class="form-label">Apellidos</label>
+					<input type="text" class="form-control" id="prospectEditApellidos" value="${escapeHtml(prospect.apellido || '')}">
+				</div>
+				<div class="col-md-6">
+					<label class="form-label">Identificacion</label>
+					<input type="text" class="form-control" id="prospectEditIdentificacion" value="${escapeHtml(prospect.cedula || '')}">
+				</div>
+				<div class="col-md-6">
+					<label class="form-label">Correo personal</label>
+					<input type="email" class="form-control" id="prospectEditCorreo" value="${escapeHtml(prospect.email || '')}">
+				</div>
+				<div class="col-md-6">
+					<label class="form-label">Celular</label>
+					<input type="text" class="form-control" id="prospectEditCelular" value="${escapeHtml(prospect.celular || '')}">
+				</div>
+				<div class="col-md-6">
+					<label class="form-label">Propietario</label>
+					<input type="text" class="form-control" id="prospectEditPropietario" value="${escapeHtml(prospect.propietario || '')}">
+				</div>
+				<div class="col-md-6">
+					<label class="form-label">Carrera</label>
+					<select class="form-select" id="prospectEditCarreraSelect">
+						<option value="">Seleccione carrera</option>
+						${careerOptions.join('')}
+					</select>
+				</div>
+				<div class="col-md-6">
+					<label class="form-label">Modalidad</label>
+					<input type="text" class="form-control" id="prospectEditModalidad" value="${escapeHtml(prospect.modalidad || '')}">
+				</div>
+				<div class="col-md-6">
+					<label class="form-label">Provincia</label>
+					<input type="text" class="form-control" id="prospectEditProvincia" value="${escapeHtml(prospect.provincia || '')}">
+				</div>
+				<div class="col-md-6">
+					<label class="form-label">Ciudad</label>
+					<input type="text" class="form-control" id="prospectEditCiudad" value="${escapeHtml(prospect.ciudad || '')}">
+				</div>
+				<div class="col-md-6">
+					<label class="form-label">Creado por</label>
+					<input type="text" class="form-control" id="prospectEditCreadoPor" value="${escapeHtml(prospect.creado_por || '')}" readonly>
+				</div>
+			</div>
+		`;
 	};
 
 	const renderContactModal = (student, studentId) => {
@@ -745,9 +958,6 @@ document.addEventListener('DOMContentLoaded', () => {
 						<button class="nav-link active" id="detallesTabBtn" data-bs-toggle="tab" data-bs-target="#detallesPane" type="button" role="tab">Detalles de cliente potencial</button>
 					</li>
 					<li class="nav-item" role="presentation">
-						<button class="nav-link" id="tareasTabBtn" data-bs-toggle="tab" data-bs-target="#tareasPane" type="button" role="tab">Tareas</button>
-					</li>
-					<li class="nav-item" role="presentation">
 						<button class="nav-link" id="ticketsTabBtn" data-bs-toggle="tab" data-bs-target="#ticketsPane" type="button" role="tab">Tickets</button>
 					</li>
 					<li class="nav-item" role="presentation">
@@ -797,8 +1007,40 @@ document.addEventListener('DOMContentLoaded', () => {
 								<div class="pipeline-detail-value">${escapeHtml(student.fecha_matricula || '-')}</div>
 							</div>
 							` : `
+							<div class="col-md-3">
+								<div class="pipeline-detail-label">Identificación</div>
+								<div class="pipeline-detail-value">${escapeHtml(student.cedula || '-')}</div>
+							</div>
+							<div class="col-md-3">
+								<div class="pipeline-detail-label">Carrera</div>
+								<div class="pipeline-detail-value">${escapeHtml(student.carrera || '-')}</div>
+							</div>
+							<div class="col-md-3">
+								<div class="pipeline-detail-label">Modalidad</div>
+								<div class="pipeline-detail-value">${escapeHtml(student.modalidad || '-')}</div>
+							</div>
+							<div class="col-md-3">
+								<div class="pipeline-detail-label">Propietario</div>
+								<div class="pipeline-detail-value">${escapeHtml(student.origen || '-')}</div>
+							</div>
+							<div class="col-md-3">
+								<div class="pipeline-detail-label">Creado por</div>
+								<div class="pipeline-detail-value">${escapeHtml(student.creado_por || '-')}</div>
+							</div>
+							<div class="col-md-3">
+								<div class="pipeline-detail-label">Provincia</div>
+								<div class="pipeline-detail-value">${escapeHtml(student.provincia || '-')}</div>
+							</div>
+							<div class="col-md-3">
+								<div class="pipeline-detail-label">Ciudad</div>
+								<div class="pipeline-detail-value">${escapeHtml(student.ciudad || '-')}</div>
+							</div>
+							<div class="col-md-3">
+								<div class="pipeline-detail-label">Creado</div>
+								<div class="pipeline-detail-value">${escapeHtml(student.prospect_created_at || student.fecha_matricula || '-')}</div>
+							</div>
 							<div class="col-md-12">
-								<div class="alert alert-light border mb-0">Aun no existe relacion academica en estudiantes. Se muestran solo datos CRM y seguimiento.</div>
+								<div class="alert alert-light border mb-0">No tiene relación académica activa; se muestran todos los datos CRM de creación y seguimiento.</div>
 							</div>
 							`}
 						</div>
@@ -815,16 +1057,7 @@ document.addEventListener('DOMContentLoaded', () => {
 						</div>
 					</div>
 
-					<!-- Tab 3: Tareas -->
-					<div class="tab-pane fade" id="tareasPane" role="tabpanel">
-						<div id="tareasList" style="max-height: 350px; overflow-y: auto;">
-							<div class="text-center text-muted small py-3">
-								No hay tareas registradas para este estudiante todavía.
-							</div>
-						</div>
-					</div>
-
-					<!-- Tab 4: Tickets -->
+					<!-- Tab 3: Tickets -->
 					<div class="tab-pane fade" id="ticketsPane" role="tabpanel">
 						<div id="ticketsList" style="max-height: 350px; overflow-y: auto;">
 							<div class="text-center text-muted small py-3">
@@ -835,7 +1068,7 @@ document.addEventListener('DOMContentLoaded', () => {
 						</div>
 					</div>
 
-					<!-- Tab 5: Notas internas -->
+					<!-- Tab 4: Notas internas -->
 					<div class="tab-pane fade" id="notasPane" role="tabpanel">
 						<div class="mb-3">
 							<label for="internalNoteText" class="form-label small fw-semibold">Nueva nota interna</label>
@@ -881,7 +1114,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
 		// Cargar datos en tabs
 		loadStudentHistory(entityId, entityType);
-		loadStudentTasks(entityId, entityType);
 		loadStudentTickets(entityId, entityType);
 		loadStudentNotes(entityId);
 
@@ -983,7 +1215,7 @@ document.addEventListener('DOMContentLoaded', () => {
 			html += `
 				<div class="activity-item">
 					<div class="activity-header">
-						<strong class="activity-user">${escapeHtml(item.usuario || 'Usuario')}</strong>
+						<strong class="activity-user">${escapeHtml(item.usuario || 'Sistema')}</strong>
 						<small class="activity-date">${date}</small>
 					</div>
 					<div class="activity-action">${escapeHtml(item.note_text || 'Cambio de etapa')}</div>
@@ -1682,6 +1914,99 @@ document.addEventListener('DOMContentLoaded', () => {
 				}
 			} finally {
 				savePipelineBtn.disabled = false;
+			}
+		});
+	}
+
+	const saveProspectBtn = document.getElementById('saveProspectBtn');
+	if (saveProspectBtn) {
+		saveProspectBtn.addEventListener('click', async () => {
+			const contactId = Number(saveProspectBtn.getAttribute('data-contact-id') || 0);
+			const statusBox = document.getElementById('prospectSaveStatus');
+			if (contactId <= 0) {
+				if (statusBox) {
+					statusBox.className = 'alert alert-warning py-2 mb-3';
+					statusBox.textContent = 'No se pudo identificar el cliente potencial.';
+				}
+				return;
+			}
+
+			const payload = new URLSearchParams({
+				contacto_id: String(contactId),
+				nombres: String(document.getElementById('prospectEditNombres')?.value || '').trim(),
+				apellidos: String(document.getElementById('prospectEditApellidos')?.value || '').trim(),
+				identificacion: String(document.getElementById('prospectEditIdentificacion')?.value || '').trim(),
+				correo_personal: String(document.getElementById('prospectEditCorreo')?.value || '').trim(),
+				celular: String(document.getElementById('prospectEditCelular')?.value || '').trim(),
+				propietario: String(document.getElementById('prospectEditPropietario')?.value || '').trim(),
+				carrera: String(document.getElementById('prospectEditCarreraSelect')?.value || '').trim(),
+				modalidad: String(document.getElementById('prospectEditModalidad')?.value || '').trim(),
+				provincia: String(document.getElementById('prospectEditProvincia')?.value || '').trim(),
+				ciudad: String(document.getElementById('prospectEditCiudad')?.value || '').trim(),
+			});
+
+			try {
+				saveProspectBtn.disabled = true;
+				if (statusBox) {
+					statusBox.className = 'alert alert-info py-2 mb-3';
+					statusBox.textContent = 'Guardando cambios...';
+				}
+
+				const response = await fetch(`${BASE_URL}crm/updateProspect`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: payload,
+				});
+
+				const data = await response.json();
+				if (!response.ok || !data.success) {
+					throw new Error(data.error || 'No se pudo actualizar el cliente potencial');
+				}
+
+				const row = document.querySelector(`tr[data-prospect-contact-id="${contactId}"]`);
+				if (row) {
+					const newName = `${String(document.getElementById('prospectEditNombres')?.value || '').trim()} ${String(document.getElementById('prospectEditApellidos')?.value || '').trim()}`.replace(/\s+/g, ' ').trim();
+					const newPhoneRaw = String(document.getElementById('prospectEditCelular')?.value || '').trim();
+					let digitsPhone = newPhoneRaw.replace(/[^0-9]/g, '');
+					if (digitsPhone.length === 10 && digitsPhone.startsWith('0')) {
+						digitsPhone = `593${digitsPhone.slice(1)}`;
+					}
+					const contactLink = row.querySelector('.prospect-edit-link');
+					if (contactLink) {
+						contactLink.textContent = newName || '-';
+					}
+
+					const cells = row.querySelectorAll('td');
+					if (cells.length >= 7) {
+						const selectedCareerOption = document.getElementById('prospectEditCarreraSelect')?.selectedOptions?.[0];
+						const selectedCareerText = String(selectedCareerOption?.textContent || document.getElementById('prospectEditCarreraSelect')?.value || '-').trim();
+						cells[1].textContent = selectedCareerText || '-';
+						const stageText = String(cells[2]?.textContent || 'Sin etapa').trim();
+						if (digitsPhone !== '') {
+							cells[3].innerHTML = `<a href="https://wa.me/${escapeHtml(digitsPhone)}" target="_blank" rel="noopener noreferrer">${escapeHtml(newPhoneRaw || digitsPhone)}</a>`;
+						} else {
+							cells[3].textContent = newPhoneRaw || '-';
+						}
+						cells[4].textContent = String(document.getElementById('prospectEditPropietario')?.value || '-') || '-';
+						row.setAttribute('data-prospect-origin', normalizeText(document.getElementById('prospectEditPropietario')?.value || ''));
+						row.setAttribute('data-prospect-stage', normalizeText(stageText));
+						row.setAttribute('data-prospect-career', normalizeText(selectedCareerText));
+					}
+				}
+
+				if (statusBox) {
+					statusBox.className = 'alert alert-success py-2 mb-3';
+					statusBox.textContent = 'Cliente potencial actualizado correctamente.';
+				}
+
+				applyProspectFilters();
+			} catch (error) {
+				if (statusBox) {
+					statusBox.className = 'alert alert-danger py-2 mb-3';
+					statusBox.textContent = error.message || 'Error al guardar cambios';
+				}
+			} finally {
+				saveProspectBtn.disabled = false;
 			}
 		});
 	}

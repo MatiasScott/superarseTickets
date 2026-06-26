@@ -17,15 +17,31 @@
 	<?php
 	$prospectOrigins = [];
 	$prospectStages = [];
+	$prospectCareers = [];
+	$prospectCreatedByOptions = [];
 	$studentLevels = [];
 	foreach ($prospectosLocales as $prospectoItem) {
 		$originValue = trim((string) ($prospectoItem['origen'] ?? ''));
 		$stageValue = trim((string) ($prospectoItem['etapa'] ?? ''));
+		$careerValue = trim((string) ($prospectoItem['carrera'] ?? ''));
+		$createdByRaw = trim((string) ($prospectoItem['creado_por'] ?? ''));
 		if ($originValue !== '') {
 			$prospectOrigins[$originValue] = $originValue;
 		}
 		if ($stageValue !== '') {
 			$prospectStages[$stageValue] = $stageValue;
+		}
+		if ($careerValue !== '') {
+			$prospectCareers[$careerValue] = $careerValue;
+		}
+		if ($createdByRaw !== '') {
+			$createdByItems = preg_split('/\s*,\s*/', $createdByRaw, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+			foreach ($createdByItems as $createdByItem) {
+				$createdByItem = trim((string) $createdByItem);
+				if ($createdByItem !== '') {
+					$prospectCreatedByOptions[$createdByItem] = $createdByItem;
+				}
+			}
 		}
 	}
 	foreach ($nivelesEstudiantes as $levelItem) {
@@ -44,9 +60,13 @@
 	}
 	ksort($prospectOrigins, SORT_NATURAL | SORT_FLAG_CASE);
 	ksort($prospectStages, SORT_NATURAL | SORT_FLAG_CASE);
+	ksort($prospectCareers, SORT_NATURAL | SORT_FLAG_CASE);
+	ksort($prospectCreatedByOptions, SORT_NATURAL | SORT_FLAG_CASE);
 	ksort($studentLevels, SORT_NATURAL | SORT_FLAG_CASE);
 	$prospectOrigins = array_values($prospectOrigins);
 	$prospectStages = array_values($prospectStages);
+	$prospectCareers = array_values($prospectCareers);
+	$prospectCreatedByOptions = array_values($prospectCreatedByOptions);
 	$studentLevels = array_values($studentLevels);
 	?>
 	<?php
@@ -283,7 +303,7 @@
 			</div>
 			<div class="card-body pb-0">
 				<div class="row g-2 align-items-end mb-3">
-					<div class="col-md-3">
+					<div class="col-md-2">
 						<label for="crmProspectFilterOrigin" class="form-label mb-1"><i class="bi bi-diagram-3"></i> Asesores</label>
 						<select id="crmProspectFilterOrigin" class="form-select">
 							<option value="">Todos los asesores</option>
@@ -292,22 +312,75 @@
 							<?php endforeach; ?>
 						</select>
 					</div>
-					<div class="col-md-3">
-						<label for="crmProspectFilterStage" class="form-label mb-1"><i class="bi bi-funnel"></i> Etapa</label>
-						<select id="crmProspectFilterStage" class="form-select">
-							<option value="">Todas las etapas</option>
-							<?php foreach ($prospectStages as $stageOption): ?>
-								<option value="<?= e(strtolower((string) $stageOption)) ?>"><?= e((string) $stageOption) ?></option>
-							<?php endforeach; ?>
+					<div class="col-md-2">
+						<label class="form-label mb-1"><i class="bi bi-funnel"></i> Etapa</label>
+						<div class="dropdown" id="crmProspectStageDropdown">
+							<button class="btn btn-outline-secondary dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" id="crmProspectStageBtn">
+								Todas las etapas
+							</button>
+							<div class="dropdown-menu p-2 w-100" style="max-height: 240px; overflow-y: auto;">
+								<?php foreach ($prospectStages as $index => $stageOption): ?>
+									<div class="form-check">
+										<input class="form-check-input crm-prospect-filter-checkbox" type="checkbox" value="<?= e(strtolower((string) $stageOption)) ?>" id="crmProspectStageOpt<?= (int) $index ?>" data-filter-group="prospect-stage">
+										<label class="form-check-label" for="crmProspectStageOpt<?= (int) $index ?>"><?= e((string) $stageOption) ?></label>
+									</div>
+								<?php endforeach; ?>
+							</div>
+						</div>
+					</div>
+					<div class="col-md-2">
+						<label class="form-label mb-1"><i class="bi bi-book"></i> Carrera</label>
+						<div class="dropdown" id="crmProspectCareerDropdown">
+							<button class="btn btn-outline-secondary dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" id="crmProspectCareerBtn">
+								Todas las carreras
+							</button>
+							<div class="dropdown-menu p-2 w-100" style="max-height: 240px; overflow-y: auto;">
+								<?php foreach ($prospectCareers as $index => $careerOption): ?>
+									<div class="form-check">
+										<input class="form-check-input crm-prospect-filter-checkbox" type="checkbox" value="<?= e(strtolower((string) $careerOption)) ?>" id="crmProspectCareerOpt<?= (int) $index ?>" data-filter-group="prospect-career">
+										<label class="form-check-label" for="crmProspectCareerOpt<?= (int) $index ?>"><?= e((string) $careerOption) ?></label>
+									</div>
+								<?php endforeach; ?>
+							</div>
+						</div>
+					</div>
+					<div class="col-md-2">
+						<label class="form-label mb-1"><i class="bi bi-person-lines-fill"></i> Creado por</label>
+						<div class="dropdown" id="crmProspectCreatedByDropdown">
+							<button class="btn btn-outline-secondary dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" id="crmProspectCreatedByBtn">
+								Todos
+							</button>
+							<div class="dropdown-menu p-2 w-100" style="max-height: 240px; overflow-y: auto;">
+								<?php foreach ($prospectCreatedByOptions as $index => $createdByOption): ?>
+									<div class="form-check">
+										<input class="form-check-input crm-prospect-filter-checkbox" type="checkbox" value="<?= e(strtolower((string) $createdByOption)) ?>" id="crmProspectCreatedByOpt<?= (int) $index ?>" data-filter-group="prospect-created-by">
+										<label class="form-check-label" for="crmProspectCreatedByOpt<?= (int) $index ?>"><?= e((string) $createdByOption) ?></label>
+									</div>
+								<?php endforeach; ?>
+							</div>
+						</div>
+					</div>
+					<div class="col-md-2">
+						<label for="crmProspectCreatedPreset" class="form-label mb-1"><i class="bi bi-calendar-event"></i> Creado</label>
+						<select id="crmProspectCreatedPreset" class="form-select">
+							<option value="">Todos</option>
+							<option value="previous_week">Semana anterior</option>
+							<option value="current_week">Semana actual</option>
+							<option value="last_30_days">Hace 30 dias</option>
+							<option value="custom">Personalizado</option>
 						</select>
 					</div>
-					<div class="col-md-3">
-						<label for="crmProspectDateFrom" class="form-label mb-1"><i class="bi bi-calendar-event"></i> Desde</label>
-						<input type="date" id="crmProspectDateFrom" class="form-control">
-					</div>
-					<div class="col-md-3">
-						<label for="crmProspectDateTo" class="form-label mb-1"><i class="bi bi-calendar-check"></i> Hasta</label>
-						<input type="date" id="crmProspectDateTo" class="form-control">
+					<div class="col-md-3 d-none" id="crmProspectCreatedCustomWrap">
+						<div class="row g-2">
+							<div class="col-6">
+								<label for="crmProspectDateFrom" class="form-label mb-1">Desde</label>
+								<input type="datetime-local" id="crmProspectDateFrom" class="form-control">
+							</div>
+							<div class="col-6">
+								<label for="crmProspectDateTo" class="form-label mb-1">Hasta</label>
+								<input type="datetime-local" id="crmProspectDateTo" class="form-control">
+							</div>
+						</div>
 					</div>
 					<div class="col-md-2 d-grid">
 						<button type="button" id="crmProspectFilterClear" class="btn btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Limpiar</button>
@@ -322,19 +395,12 @@
 					<table class="table table-hover align-middle mb-0" id="crmProspectsTable">
 						<thead>
 							<tr>
-								<th>ID</th>
 								<th>Contacto</th>
-								<th>Identificacion</th>
 								<th>Carrera</th>
-								<th>Modalidad</th>
-								<th>Provincia</th>
-								<th>Ciudad</th>
-								<th>Correo personal</th>
-								<th>Celular</th>
-								<th>Estado</th>
 								<th>Etapa</th>
-								<th>Asesor</th>
-								<th>Creado</th>
+								<th>Celular</th>
+								<th>Propietario</th>
+								<th>Creado por</th>
 								<th class="text-end">Acciones</th>
 							</tr>
 						</thead>
@@ -342,6 +408,18 @@
 							<?php foreach ($prospectosLocales as $prospecto): ?>
 								<?php
 								$rawCreatedAt = trim((string) ($prospecto['created_at'] ?? ''));
+								$createdByRaw = trim((string) ($prospecto['creado_por'] ?? ''));
+								$createdByTokens = [];
+								if ($createdByRaw !== '') {
+									$createdByParts = preg_split('/\s*,\s*/', strtolower($createdByRaw), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+									foreach ($createdByParts as $createdByPart) {
+										$createdByPart = trim((string) $createdByPart);
+										if ($createdByPart !== '') {
+											$createdByTokens[] = $createdByPart;
+										}
+									}
+								}
+								$createdByNormalized = implode('|', array_values(array_unique($createdByTokens)));
 								$createdDate = '';
 								if ($rawCreatedAt !== '' && strlen($rawCreatedAt) >= 10) {
 									$createdDate = substr($rawCreatedAt, 0, 10);
@@ -350,21 +428,41 @@
 								<tr
 									data-prospect-origin="<?= e(strtolower((string) ($prospecto['origen'] ?? ''))) ?>"
 									data-prospect-stage="<?= e(strtolower((string) ($prospecto['etapa'] ?? ''))) ?>"
+									data-prospect-career="<?= e(strtolower((string) ($prospecto['carrera'] ?? ''))) ?>"
+									data-prospect-created-by="<?= e($createdByNormalized) ?>"
 									data-prospect-date="<?= e($createdDate) ?>"
+									data-prospect-datetime="<?= e((string) ($prospecto['created_at'] ?? '')) ?>"
+									data-prospect-contact-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
 								>
-									<td><?= e($prospecto['id'] ?? '-') ?></td>
-									<td><?= e(trim((string) (($prospecto['nombre'] ?? '') . ' ' . ($prospecto['apellido'] ?? '')))) ?></td>
-									<td><?= e($prospecto['cedula'] ?? '-') ?></td>
+									<td>
+										<button
+											type="button"
+											class="btn btn-link p-0 text-decoration-none prospect-edit-link"
+											data-contact-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
+											data-bs-toggle="modal"
+											data-bs-target="#prospectEditModal"
+										>
+											<?= e(trim((string) (($prospecto['nombre'] ?? '') . ' ' . ($prospecto['apellido'] ?? '')))) ?>
+										</button>
+									</td>
 									<td><?= e($prospecto['carrera'] ?? '-') ?></td>
-									<td><?= e($prospecto['modalidad'] ?? '-') ?></td>
-									<td><?= e($prospecto['provincia'] ?? '-') ?></td>
-									<td><?= e($prospecto['ciudad'] ?? '-') ?></td>
-									<td><?= e($prospecto['email'] ?? '-') ?></td>
-									<td><?= e($prospecto['celular'] ?? '-') ?></td>
-									<td><?= e($prospecto['estado_cliente'] ?? 'Cliente potencial') ?></td>
 									<td><span class="badge text-bg-light border"><?= e($prospecto['etapa'] ?? 'Sin etapa') ?></span></td>
+									<td>
+										<?php
+										$rawPhone = (string) ($prospecto['celular'] ?? '');
+										$digitsPhone = preg_replace('/[^0-9]/', '', $rawPhone) ?: '';
+										if ($digitsPhone !== '' && strlen($digitsPhone) === 10 && strpos($digitsPhone, '0') === 0) {
+											$digitsPhone = '593' . substr($digitsPhone, 1);
+										}
+										?>
+										<?php if ($digitsPhone !== ''): ?>
+											<a href="https://wa.me/<?= e($digitsPhone) ?>" target="_blank" rel="noopener noreferrer"><?= e($rawPhone !== '' ? $rawPhone : $digitsPhone) ?></a>
+										<?php else: ?>
+											<?= e($rawPhone !== '' ? $rawPhone : '-') ?>
+										<?php endif; ?>
+									</td>
 									<td><?= e($prospecto['origen'] ?? '-') ?></td>
-									<td><?= e($prospecto['created_at'] ?? '-') ?></td>
+									<td><?= e($prospecto['creado_por'] ?? '-') ?></td>
 									<td class="text-end">
 										<button
 											type="button"
@@ -383,7 +481,7 @@
 							<?php endforeach; ?>
 							<?php if (empty($prospectosLocales)): ?>
 								<tr>
-									<td colspan="14" class="text-center text-muted py-4">No hay clientes potenciales CRM creados todavia.</td>
+									<td colspan="7" class="text-center text-muted py-4">No hay clientes potenciales CRM creados todavia.</td>
 								</tr>
 							<?php endif; ?>
 						</tbody>
@@ -462,6 +560,11 @@
 							<input type="text" id="prospectOrigen" name="origen" class="form-control" maxlength="100" placeholder="Asesor que crea el prospecto">
 						</div>
 						<div class="col-md-6">
+							<label for="prospectCreadoPor" class="form-label">Creado por</label>
+							<input type="text" id="prospectCreadoPor" name="creado_por" class="form-control" maxlength="255" placeholder="Ej: Ana Perez, Carlos Ruiz">
+							<small class="text-muted">Puedes ingresar varios nombres separados por coma.</small>
+						</div>
+						<div class="col-md-6">
 							<label for="prospectCarrera" class="form-label">Carrera</label>
 							<select id="prospectCarrera" name="carrera" class="form-select">
 								<option value="">Seleccione carrera</option>
@@ -489,6 +592,26 @@
 					<button type="submit" class="btn btn-primary"><i class="bi bi-check2-circle"></i> Crear cliente potencial</button>
 				</div>
 			</form>
+		</div>
+	</div>
+</div>
+
+<div class="modal fade" id="prospectEditModal" tabindex="-1" aria-labelledby="prospectEditLabel" aria-hidden="true">
+	<div class="modal-dialog modal-lg modal-dialog-scrollable">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h5 class="modal-title" id="prospectEditLabel">Editar cliente potencial</h5>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+			</div>
+			<div class="modal-body" id="prospectEditBody">
+				<div class="text-center py-4">
+					<div class="spinner-border text-primary" role="status"><span class="visually-hidden">Cargando...</span></div>
+				</div>
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-primary" id="saveProspectBtn" data-contact-id="">Guardar cambios</button>
+				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+			</div>
 		</div>
 	</div>
 </div>

@@ -116,7 +116,9 @@ return static function (Router $router): void {
 	$router->get('/crm/estudiantes', 'CRMController@estudiantes');
 	$router->get('/crm/getStudentDetail', 'CRMController@getStudentDetail');
 	$router->get('/crm/getStudentContactDetail', 'CRMController@getStudentContactDetail');
+	$router->get('/crm/getProspectDetail', 'CRMController@getProspectDetail');
 	$router->post('/crm/updateStudentContact', 'CRMController@updateStudentContact');
+	$router->post('/crm/updateProspect', 'CRMController@updateProspect');
 	$router->post('/crm/updateStudentState', 'CRMController@updateStudentState');
 	$router->get('/crm/getStudentTasks', 'CRMController@getStudentTasks');
 	$router->post('/crm/addStudentTask', 'CRMController@addStudentTask');
