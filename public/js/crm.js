@@ -919,7 +919,17 @@ document.addEventListener('DOMContentLoaded', () => {
 		saveBtn.setAttribute('data-entity-type', String(entityType));
 		saveBtn.textContent = 'Guardar etapa';
 
-		const currentStateId = Number(student.pipeline_estado_id || 0);
+		const currentStateIdsRaw = Array.isArray(student.pipeline_estado_ids)
+			? student.pipeline_estado_ids
+			: [];
+		const currentStateIds = currentStateIdsRaw
+			.map((value) => Number(value || 0))
+			.filter((value) => value > 0);
+		const fallbackStateId = Number(student.pipeline_estado_id || 0);
+		if (currentStateIds.length === 0 && fallbackStateId > 0) {
+			currentStateIds.push(fallbackStateId);
+		}
+		const selectedStateSet = new Set(currentStateIds);
 		const isStudent = Number(student.is_student || 0) === 1;
 		const statusBadge = isStudent
 			? '<span class="badge text-bg-success">Estudiante Activo</span>'
@@ -929,9 +939,10 @@ document.addEventListener('DOMContentLoaded', () => {
 		const options = ['<option value="">Seleccionar estado...</option>'];
 		const stageChips = [];
 		estados.forEach((estado) => {
-			const selected = Number(estado.id) === currentStateId ? ' selected' : '';
+			const estadoIdNum = Number(estado.id || 0);
+			const selected = selectedStateSet.has(estadoIdNum) ? ' selected' : '';
 			options.push(`<option value="${escapeHtml(estado.id)}"${selected}>${escapeHtml(estado.nombre)}</option>`);
-			const chipActive = Number(estado.id) === currentStateId ? ' is-active' : '';
+			const chipActive = selectedStateSet.has(estadoIdNum) ? ' is-active' : '';
 			stageChips.push(`<button type="button" class="pipeline-stage-chip${chipActive}" data-stage-id="${escapeHtml(estado.id)}">${escapeHtml(estado.nombre)}</button>`);
 		});
 
@@ -948,7 +959,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 				<div class="pipeline-stage-wrap">
 					<div class="pipeline-stage-title">Etapa del cliente potencial</div>
-					<input type="hidden" id="pipelineStateId" value="${escapeHtml(currentStateId)}">
+					<input type="hidden" id="pipelineStateIds" value="${escapeHtml(currentStateIds.join(','))}">
 					<div class="pipeline-stage-list">${stageChips.join('')}</div>
 				</div>
 
@@ -1096,21 +1107,31 @@ document.addEventListener('DOMContentLoaded', () => {
 		`;
 
 		const pipelineSelect = document.getElementById('pipelineSelect');
-		const pipelineStateId = document.getElementById('pipelineStateId');
+		const pipelineStateIds = document.getElementById('pipelineStateIds');
 		const chips = body.querySelectorAll('.pipeline-stage-chip');
+		const syncPipelineSelection = () => {
+			const selectedIds = Array.from(chips)
+				.filter((item) => item.classList.contains('is-active'))
+				.map((item) => Number(item.getAttribute('data-stage-id') || 0))
+				.filter((item) => item > 0);
+			if (pipelineStateIds) {
+				pipelineStateIds.value = selectedIds.join(',');
+			}
+			if (pipelineSelect) {
+				if (selectedIds.length > 0) {
+					pipelineSelect.value = String(selectedIds[0]);
+				} else {
+					pipelineSelect.value = '';
+				}
+			}
+		};
 		chips.forEach((chip) => {
 			chip.addEventListener('click', () => {
-				chips.forEach((item) => item.classList.remove('is-active'));
-				chip.classList.add('is-active');
-				const nextValue = chip.getAttribute('data-stage-id') || '';
-				if (pipelineSelect) {
-					pipelineSelect.value = nextValue;
-				}
-				if (pipelineStateId) {
-					pipelineStateId.value = nextValue;
-				}
+				chip.classList.toggle('is-active');
+				syncPipelineSelection();
 			});
 		});
+		syncPipelineSelection();
 
 		// Cargar datos en tabs
 		loadStudentHistory(entityId, entityType);
@@ -1856,24 +1877,34 @@ document.addEventListener('DOMContentLoaded', () => {
 		savePipelineBtn.addEventListener('click', async () => {
 			const entityId = Number(savePipelineBtn.getAttribute('data-student-id') || 0);
 			const entityType = String(savePipelineBtn.getAttribute('data-entity-type') || 'student').toLowerCase() === 'contact' ? 'contact' : 'student';
-			const explicitState = Number(document.getElementById('pipelineStateId')?.value || 0);
+			const explicitStatesRaw = String(document.getElementById('pipelineStateIds')?.value || '');
+			const explicitStates = explicitStatesRaw
+				.split(',')
+				.map((value) => Number((value || '').trim() || 0))
+				.filter((value) => value > 0);
 			const fallbackState = Number(document.getElementById('pipelineSelect')?.value || 0);
-			const estadoId = explicitState > 0 ? explicitState : fallbackState;
+			if (explicitStates.length === 0 && fallbackState > 0) {
+				explicitStates.push(fallbackState);
+			}
+			const estadoIds = Array.from(new Set(explicitStates));
 			const statusBox = document.getElementById('pipelineSaveStatus');
 
 			if (statusBox) {
 				statusBox.className = 'd-none';
 				statusBox.textContent = '';
 			}
-			if (entityId <= 0 || estadoId <= 0) {
+			if (entityId <= 0 || estadoIds.length === 0) {
 				if (statusBox) {
 					statusBox.className = 'alert alert-warning py-2 mb-3';
-					statusBox.textContent = 'Selecciona una etapa de pipeline antes de guardar.';
+					statusBox.textContent = 'Selecciona al menos una etapa de pipeline antes de guardar.';
 				}
 				return;
 			}
 
-			const payload = new URLSearchParams({ estado_id: String(estadoId) });
+			const payload = new URLSearchParams({
+				estado_id: String(estadoIds[0]),
+				estado_ids: estadoIds.join(','),
+			});
 			if (entityType === 'contact') {
 				payload.set('contacto_id', String(entityId));
 			} else {
@@ -1904,7 +1935,7 @@ document.addEventListener('DOMContentLoaded', () => {
 				const refreshedStatusBox = document.getElementById('pipelineSaveStatus');
 				if (refreshedStatusBox) {
 					refreshedStatusBox.className = 'alert alert-success py-2 mb-3';
-					refreshedStatusBox.textContent = 'Etapa actualizada correctamente.';
+					refreshedStatusBox.textContent = 'Etapas actualizadas correctamente.';
 				}
 			} catch (error) {
 				console.error(error);

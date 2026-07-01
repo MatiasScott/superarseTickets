@@ -549,6 +549,109 @@ document.addEventListener('DOMContentLoaded', () => {
 			});
 		}
 
+		const quickRepliesModal = document.getElementById('quickRepliesTicketModal');
+		const quickRepliesList = document.getElementById('quick-replies-ticket-list');
+		const quickRepliesForm = document.getElementById('quick-replies-ticket-create');
+		const quickRepliesStatus = document.getElementById('quick-replies-ticket-status');
+
+		const escapeText = (value) => String(value)
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#39;');
+
+		const insertQuickReplyIntoEditor = (text) => {
+			if (!replyEditor) return;
+			const clean = String(text || '').trim();
+			if (clean === '') return;
+			const html = `<p>${escapeText(clean).replace(/\n/g, '<br>')}</p>`;
+			replyEditor.insertAdjacentHTML('beforeend', html);
+			replyEditor.focus();
+		};
+
+		const bindQuickReplyInsertButtons = () => {
+			if (!quickRepliesList) return;
+			quickRepliesList.querySelectorAll('.quick-reply-ticket-item').forEach((btn) => {
+				btn.addEventListener('click', () => {
+					const desc = String(btn.getAttribute('data-description') || '');
+					insertQuickReplyIntoEditor(desc);
+					if (window.bootstrap && quickRepliesModal) {
+						const modal = window.bootstrap.Modal.getInstance(quickRepliesModal);
+						if (modal) modal.hide();
+					}
+				});
+			});
+		};
+
+		const loadQuickReplies = async () => {
+			if (!quickRepliesList) return;
+			quickRepliesList.innerHTML = '<div class="text-muted small">Cargando...</div>';
+			try {
+				const response = await fetch(`${BASE_URL}correo/quick-replies`, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+				const data = await response.json();
+				if (!response.ok || !data.ok) {
+					throw new Error(data.error || 'No se pudo cargar respuestas rápidas.');
+				}
+				const items = Array.isArray(data.items) ? data.items : [];
+				if (items.length === 0) {
+					quickRepliesList.innerHTML = '<div class="text-muted small">Aún no hay respuestas rápidas.</div>';
+					return;
+				}
+				quickRepliesList.innerHTML = items.map((item) => {
+					const title = escapeText(item.title || 'Sin título');
+					const description = escapeText(item.description || '');
+					return `<button type="button" class="list-group-item list-group-item-action quick-reply-ticket-item" data-description="${description}"><div class="fw-semibold">${title}</div><small class="text-muted">${description}</small></button>`;
+				}).join('');
+				bindQuickReplyInsertButtons();
+			} catch (error) {
+				quickRepliesList.innerHTML = `<div class="text-danger small">${escapeText(error.message || 'Error al cargar.')}</div>`;
+			}
+		};
+
+		if (quickRepliesModal) {
+			quickRepliesModal.addEventListener('show.bs.modal', () => {
+				if (quickRepliesStatus) {
+					quickRepliesStatus.className = 'small mb-2 text-muted';
+					quickRepliesStatus.textContent = 'Selecciona una respuesta o crea una nueva.';
+				}
+				loadQuickReplies();
+			});
+		}
+
+		if (quickRepliesForm) {
+			quickRepliesForm.addEventListener('submit', async (event) => {
+				event.preventDefault();
+				const formData = new FormData(quickRepliesForm);
+				try {
+					if (quickRepliesStatus) {
+						quickRepliesStatus.className = 'small mb-2 text-muted';
+						quickRepliesStatus.textContent = 'Guardando respuesta rápida...';
+					}
+					const response = await fetch(`${BASE_URL}correo/quick-replies`, {
+						method: 'POST',
+						body: formData,
+						headers: { 'X-Requested-With': 'XMLHttpRequest' }
+					});
+					const data = await response.json();
+					if (!response.ok || !data.ok) {
+						throw new Error(data.error || 'No se pudo guardar la respuesta rápida.');
+					}
+					quickRepliesForm.reset();
+					if (quickRepliesStatus) {
+						quickRepliesStatus.className = 'small mb-2 text-success';
+						quickRepliesStatus.textContent = data.message || 'Guardado correctamente.';
+					}
+					await loadQuickReplies();
+				} catch (error) {
+					if (quickRepliesStatus) {
+						quickRepliesStatus.className = 'small mb-2 text-danger';
+						quickRepliesStatus.textContent = error.message || 'Error al guardar.';
+					}
+				}
+			});
+		}
+
 		ticketShow.querySelectorAll('[data-toggle-panel]').forEach((button) => {
 			button.addEventListener('click', () => {
 				const key = button.getAttribute('data-toggle-panel') || '';

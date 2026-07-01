@@ -289,6 +289,7 @@ $phones = array_values(array_unique($phones));
                             <button type="button" data-editor-target="reply-editor" data-editor-cmd="italic"><em>I</em></button>
                             <button type="button" data-editor-target="reply-editor" data-editor-cmd="underline"><u>U</u></button>
                             <button type="button" data-editor-target="reply-editor" data-editor-link="true">Link</button>
+                            <button type="button" data-bs-toggle="modal" data-bs-target="#quickRepliesTicketModal"><i class="bi bi-lightning-fill"></i> Respuestas rápidas</button>
                         </div>
                         <div class="compose-editor" id="reply-editor" contenteditable="true"></div>
                         <div class="compose-editor-help">Tip: arrastra imagenes directamente al area de respuesta para insertarlas en el mensaje.</div>
@@ -329,6 +330,33 @@ $phones = array_values(array_unique($phones));
                             <button class="btn btn-warning btn-sm" type="submit">Guardar nota</button>
                         </div>
                     </form>
+                </div>
+            </div>
+
+            <div class="modal fade" id="quickRepliesTicketModal" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog modal-lg modal-dialog-scrollable">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title"><i class="bi bi-lightning-fill text-warning"></i> Respuestas rápidas</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div id="quick-replies-ticket-status" class="small mb-2 text-muted"></div>
+                            <form id="quick-replies-ticket-create" class="row g-2 mb-3">
+                                <input type="hidden" name="_token" value="<?= e(csrf_token()) ?>">
+                                <div class="col-md-4">
+                                    <input type="text" class="form-control form-control-sm" name="title" maxlength="120" placeholder="Título" required>
+                                </div>
+                                <div class="col-md-6">
+                                    <input type="text" class="form-control form-control-sm" name="description" placeholder="Descripción a copiar" required>
+                                </div>
+                                <div class="col-md-2 d-grid">
+                                    <button type="submit" class="btn btn-sm btn-primary">Guardar</button>
+                                </div>
+                            </form>
+                            <div id="quick-replies-ticket-list" class="list-group"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>

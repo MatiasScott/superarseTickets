@@ -59,9 +59,19 @@ class CRMController extends Controller
 				$stageKeyByEstadoId[$estadoId] = $this->dashboardResolveStageKeyFromState($estado);
 			}
 
-			$pipelineRows = $db->query("SELECT p.student_id, p.estado_id, COALESCE(pe.nombre, '') AS estado_nombre
+			$pipelineRows = $db->query("SELECT pm.student_id, pm.estado_id, COALESCE(pe.nombre, '') AS estado_nombre
+				FROM crm_student_pipeline_multi pm
+				LEFT JOIN pipeline_estados pe ON pe.id = pm.estado_id")->fetchAll() ?: [];
+
+			$legacyPipelineRows = $db->query("SELECT p.student_id, p.estado_id, COALESCE(pe.nombre, '') AS estado_nombre
 				FROM crm_student_pipeline p
-				LEFT JOIN pipeline_estados pe ON pe.id = p.estado_id")->fetchAll() ?: [];
+				LEFT JOIN pipeline_estados pe ON pe.id = p.estado_id
+				WHERE NOT EXISTS (
+					SELECT 1 FROM crm_student_pipeline_multi pm WHERE pm.student_id = p.student_id
+				)")->fetchAll() ?: [];
+			if (!empty($legacyPipelineRows)) {
+				$pipelineRows = array_merge($pipelineRows, $legacyPipelineRows);
+			}
 
 			$prospectPipelineRows = $db->query("SELECT i.contacto_id AS student_id, i.estado_id, COALESCE(pe.nombre, '') AS estado_nombre
 				FROM interesados i
@@ -1208,6 +1218,16 @@ class CRMController extends Controller
 				INDEX idx_estado_id (estado_id)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
+			$db->exec("CREATE TABLE IF NOT EXISTS crm_student_pipeline_multi (
+				student_id INT NOT NULL,
+				estado_id INT NOT NULL,
+				updated_by INT NULL,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+				PRIMARY KEY (student_id, estado_id),
+				INDEX idx_pipeline_multi_estado (estado_id),
+				INDEX idx_pipeline_multi_student (student_id)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
 			$db->exec("CREATE TABLE IF NOT EXISTS crm_student_contact_extras (
 				student_id INT NOT NULL PRIMARY KEY,
 				extra_emails TEXT NULL,
@@ -2339,14 +2359,32 @@ class CRMController extends Controller
 			}
 
 			// Obtener estados del pipeline
+			$currentPipelineMultiStmt = $db->prepare('SELECT estado_id FROM crm_student_pipeline_multi WHERE student_id = :student_id ORDER BY estado_id ASC');
+			$currentPipelineMultiStmt->execute([':student_id' => $pipelineKey]);
+			$currentPipelineMultiRows = $currentPipelineMultiStmt->fetchAll() ?: [];
+			$pipelineEstadoIds = [];
+			foreach ($currentPipelineMultiRows as $multiRow) {
+				$multiEstadoId = (int) ($multiRow['estado_id'] ?? 0);
+				if ($multiEstadoId > 0) {
+					$pipelineEstadoIds[] = $multiEstadoId;
+				}
+			}
+
 			$currentPipelineStmt = $db->prepare('SELECT estado_id FROM crm_student_pipeline WHERE student_id = :student_id LIMIT 1');
 			$currentPipelineStmt->execute([':student_id' => $pipelineKey]);
 			$currentPipeline = $currentPipelineStmt->fetch();
 			$pipelineEstadoId = (int) ($currentPipeline['estado_id'] ?? 0);
+			if (!empty($pipelineEstadoIds)) {
+				$pipelineEstadoId = (int) $pipelineEstadoIds[0];
+			}
 			if ($pipelineEstadoId <= 0 && $entityType === 'contact') {
 				$pipelineEstadoId = (int) ($student['interesado_estado_id'] ?? 0);
+				if ($pipelineEstadoId > 0) {
+					$pipelineEstadoIds = [$pipelineEstadoId];
+				}
 			}
 			$student['pipeline_estado_id'] = $pipelineEstadoId;
+			$student['pipeline_estado_ids'] = array_values(array_unique(array_map('intval', $pipelineEstadoIds)));
 			$pipelineEstados = $db->query("SELECT id, nombre FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC")->fetchAll() ?: [];
 
 			$historyStmt = $db->prepare("SELECT
@@ -2382,9 +2420,32 @@ class CRMController extends Controller
 		header('Content-Type: application/json; charset=utf-8');
 
 		$studentId = max(0, (int) ($_POST['student_id'] ?? $_POST['contacto_id'] ?? 0));
-		$estadoId = max(0, (int) ($_POST['estado_id'] ?? 0));
+		$estadoIdsRaw = $_POST['estado_ids'] ?? null;
+		$estadoIds = [];
+		if (is_array($estadoIdsRaw)) {
+			foreach ($estadoIdsRaw as $rawId) {
+				$id = (int) $rawId;
+				if ($id > 0) {
+					$estadoIds[$id] = $id;
+				}
+			}
+		} elseif ($estadoIdsRaw !== null) {
+			$tokens = preg_split('/[;,]+/', (string) $estadoIdsRaw) ?: [];
+			foreach ($tokens as $token) {
+				$id = (int) trim((string) $token);
+				if ($id > 0) {
+					$estadoIds[$id] = $id;
+				}
+			}
+		}
 
-		if ($studentId <= 0 || $estadoId <= 0) {
+		$estadoIdFallback = max(0, (int) ($_POST['estado_id'] ?? 0));
+		if ($estadoIdFallback > 0) {
+			$estadoIds[$estadoIdFallback] = $estadoIdFallback;
+		}
+		$estadoIds = array_values($estadoIds);
+
+		if ($studentId <= 0 || empty($estadoIds)) {
 			http_response_code(400);
 			echo json_encode(['success' => false, 'error' => 'Datos inválidos']);
 			exit;
@@ -2394,25 +2455,70 @@ class CRMController extends Controller
 			$this->ensureCrmSupportTables();
 			$db = Database::getInstance()->connection();
 
-			$previousStateName = 'Sin asignar';
-			$previousStmt = $db->prepare("SELECT p.estado_id, COALESCE(pe.nombre, 'Sin asignar') AS nombre
+			$previousStmt = $db->prepare("SELECT COALESCE(pe.nombre, 'Sin asignar') AS nombre
+					FROM crm_student_pipeline_multi pm
+					LEFT JOIN pipeline_estados pe ON pe.id = pm.estado_id
+					WHERE pm.student_id = :student_id
+					ORDER BY pe.orden ASC, pe.id ASC");
+			$previousStmt->execute([':student_id' => $studentId]);
+			$previousRows = $previousStmt->fetchAll() ?: [];
+			$previousNames = [];
+			foreach ($previousRows as $prevRow) {
+				$name = trim((string) ($prevRow['nombre'] ?? ''));
+				if ($name !== '') {
+					$previousNames[] = $name;
+				}
+			}
+			if (empty($previousNames)) {
+				$legacyPrevStmt = $db->prepare("SELECT COALESCE(pe.nombre, 'Sin asignar') AS nombre
 					FROM crm_student_pipeline p
 					LEFT JOIN pipeline_estados pe ON pe.id = p.estado_id
 					WHERE p.student_id = :student_id
 					LIMIT 1");
-			$previousStmt->execute([':student_id' => $studentId]);
-			$previous = $previousStmt->fetch();
-			if ($previous) {
-				$previousStateName = (string) ($previous['nombre'] ?? 'Sin asignar');
+				$legacyPrevStmt->execute([':student_id' => $studentId]);
+				$legacyPrev = $legacyPrevStmt->fetch();
+				if ($legacyPrev) {
+					$legacyName = trim((string) ($legacyPrev['nombre'] ?? ''));
+					if ($legacyName !== '') {
+						$previousNames[] = $legacyName;
+					}
+				}
 			}
 
+			$validatedIds = [];
+			$validatedNames = [];
 			$estadoStmt = $db->prepare("SELECT id, nombre FROM pipeline_estados WHERE id = :id AND estado = 'activo' LIMIT 1");
-			$estadoStmt->execute([':id' => $estadoId]);
-			$estado = $estadoStmt->fetch();
-			if (!$estado) {
-				throw new RuntimeException('Estado de pipeline inválido');
+			foreach ($estadoIds as $estadoId) {
+				$estadoStmt->execute([':id' => (int) $estadoId]);
+				$estado = $estadoStmt->fetch();
+				if (!$estado) {
+					throw new RuntimeException('Estado de pipeline inválido: ' . (int) $estadoId);
+				}
+				$validatedIds[] = (int) ($estado['id'] ?? 0);
+				$validatedNames[] = (string) ($estado['nombre'] ?? ('ID ' . (int) $estadoId));
 			}
 
+			$validatedIds = array_values(array_unique(array_filter($validatedIds, static fn($id) => (int) $id > 0)));
+			if (empty($validatedIds)) {
+				throw new RuntimeException('Debes seleccionar al menos una etapa válida.');
+			}
+
+			$db->beginTransaction();
+
+			$deleteMultiStmt = $db->prepare('DELETE FROM crm_student_pipeline_multi WHERE student_id = :student_id');
+			$deleteMultiStmt->execute([':student_id' => $studentId]);
+
+			$insertMultiStmt = $db->prepare('INSERT INTO crm_student_pipeline_multi (student_id, estado_id, updated_by, updated_at)
+				VALUES (:student_id, :estado_id, :updated_by, NOW())');
+			foreach ($validatedIds as $estadoId) {
+				$insertMultiStmt->execute([
+					':student_id' => $studentId,
+					':estado_id' => $estadoId,
+					':updated_by' => $this->currentUserId(),
+				]);
+			}
+
+			$primaryEstadoId = (int) $validatedIds[0];
 			$pipelineSql = "INSERT INTO crm_student_pipeline (student_id, estado_id, updated_by, updated_at)
 						VALUES (:student_id, :estado_id, :updated_by, NOW())
 						ON DUPLICATE KEY UPDATE
@@ -2422,31 +2528,39 @@ class CRMController extends Controller
 			$pipelineStmt = $db->prepare($pipelineSql);
 			$pipelineStmt->execute([
 				':student_id' => $studentId,
-				':estado_id' => $estadoId,
+				':estado_id' => $primaryEstadoId,
 				':updated_by' => $this->currentUserId(),
 			]);
 
 			$interesadoStateStmt = $db->prepare('UPDATE interesados SET estado_id = :estado_id, updated_at = NOW() WHERE contacto_id = :contacto_id LIMIT 1');
 			$interesadoStateStmt->execute([
-				':estado_id' => $estadoId,
+				':estado_id' => $primaryEstadoId,
 				':contacto_id' => $studentId,
 			]);
 
 			$noteSql = "INSERT INTO crm_student_notes (student_id, source_type, note_text, created_by, created_at)
 					VALUES (:student_id, 'estado_change', :note_text, :user_id, NOW())";
 			$noteStmt = $db->prepare($noteSql);
+			$previousLabel = !empty($previousNames) ? implode(', ', array_values(array_unique($previousNames))) : 'Sin asignar';
+			$currentLabel = implode(', ', $validatedNames);
 			$noteStmt->execute([
 				':student_id' => $studentId,
-				':note_text' => 'Cambio de pipeline: ' . $previousStateName . ' -> ' . (string) ($estado['nombre'] ?? ('ID ' . $estadoId)),
+				':note_text' => 'Cambio de pipeline: ' . $previousLabel . ' -> ' . $currentLabel,
 				':user_id' => $this->currentUserId(),
 			]);
 
+			$db->commit();
+
 			echo json_encode([
 				'success' => true,
-				'message' => 'Estado actualizado correctamente',
-				'pipeline_nombre' => (string) ($estado['nombre'] ?? 'Estado'),
+				'message' => 'Etapas actualizadas correctamente',
+				'pipeline_nombre' => implode(', ', $validatedNames),
+				'pipeline_estado_ids' => $validatedIds,
 			]);
 		} catch (Throwable $e) {
+			if (isset($db) && $db instanceof PDO && $db->inTransaction()) {
+				$db->rollBack();
+			}
 			http_response_code(500);
 			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
 		}

@@ -81,6 +81,8 @@ return static function (Router $router): void {
 	$router->get('/correo', 'CorreoController@index');
 	$router->get('/correo/compose', 'CorreoController@compose');
 	$router->post('/correo/send', 'CorreoController@send');
+	$router->get('/correo/quick-replies', 'CorreoController@quickReplies');
+	$router->post('/correo/quick-replies', 'CorreoController@createQuickReply');
 	$router->get('/correo/verify', 'CorreoController@verify');
 	$router->post('/correo/sync-tickets', 'CorreoController@syncTickets');
 	$router->post('/correo/sync-tickets/auto', 'CorreoController@syncTicketsAuto');

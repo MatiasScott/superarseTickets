@@ -272,6 +272,12 @@ class CorreoController extends Controller
 	{
 		Auth::requireAuth();
 
+		try {
+			$this->ensureQuickRepliesTable(Database::getInstance()->connection());
+		} catch (Throwable $e) {
+			// No bloquear compose por fallos de inicialización auxiliar.
+		}
+
 		$mailService = new MailService();
 		$accounts = $mailService->getAvailableAccounts();
 		$defaultAlias = $mailService->getDefaultAlias();
@@ -284,6 +290,78 @@ class CorreoController extends Controller
 		], [
 			'title' => 'Correo - Redactar',
 		]);
+	}
+
+	public function quickReplies(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=UTF-8');
+
+		try {
+			$db = Database::getInstance()->connection();
+			$this->ensureQuickRepliesTable($db);
+			$items = $this->fetchQuickReplies($db);
+			echo json_encode([
+				'ok' => true,
+				'items' => $items,
+			], JSON_UNESCAPED_UNICODE);
+		} catch (Throwable $e) {
+			http_response_code(500);
+			echo json_encode([
+				'ok' => false,
+				'error' => 'No se pudo cargar respuestas rapidas.',
+			], JSON_UNESCAPED_UNICODE);
+		}
+	}
+
+	public function createQuickReply(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=UTF-8');
+
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			http_response_code(403);
+			echo json_encode([
+				'ok' => false,
+				'error' => 'Token CSRF invalido.',
+			], JSON_UNESCAPED_UNICODE);
+			return;
+		}
+
+		$title = trim((string) ($_POST['title'] ?? ''));
+		$description = trim((string) ($_POST['description'] ?? ''));
+
+		if ($title === '' || $description === '') {
+			http_response_code(422);
+			echo json_encode([
+				'ok' => false,
+				'error' => 'Titulo y descripcion son obligatorios.',
+			], JSON_UNESCAPED_UNICODE);
+			return;
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+			$this->ensureQuickRepliesTable($db);
+
+			$stmt = $db->prepare('INSERT INTO correo_respuestas_rapidas (titulo, descripcion, estado, created_at, updated_at)
+				VALUES (:titulo, :descripcion, "activo", NOW(), NOW())');
+			$stmt->execute([
+				'titulo' => mb_substr($title, 0, 120),
+				'descripcion' => $description,
+			]);
+
+			echo json_encode([
+				'ok' => true,
+				'message' => 'Respuesta rapida guardada correctamente.',
+			], JSON_UNESCAPED_UNICODE);
+		} catch (Throwable $e) {
+			http_response_code(500);
+			echo json_encode([
+				'ok' => false,
+				'error' => 'No se pudo guardar la respuesta rapida.',
+			], JSON_UNESCAPED_UNICODE);
+		}
 	}
 
 	public function send(): void
@@ -846,6 +924,41 @@ class CorreoController extends Controller
 		}
 
 		@file_put_contents($lockFile, (string) time(), LOCK_EX);
+	}
+
+	private function ensureQuickRepliesTable(PDO $db): void
+	{
+		$db->exec("CREATE TABLE IF NOT EXISTS correo_respuestas_rapidas (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			titulo VARCHAR(120) NOT NULL,
+			descripcion TEXT NOT NULL,
+			estado ENUM('activo','inactivo') NOT NULL DEFAULT 'activo',
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			INDEX idx_correo_respuesta_estado (estado),
+			INDEX idx_correo_respuesta_titulo (titulo)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+	}
+
+	private function fetchQuickReplies(PDO $db): array
+	{
+		$stmt = $db->query("SELECT id, titulo, descripcion
+			FROM correo_respuestas_rapidas
+			WHERE estado = 'activo'
+			ORDER BY id DESC
+			LIMIT 200");
+		$rows = $stmt ? ($stmt->fetchAll() ?: []) : [];
+
+		$items = [];
+		foreach ($rows as $row) {
+			$items[] = [
+				'id' => (int) ($row['id'] ?? 0),
+				'title' => trim((string) ($row['titulo'] ?? '')),
+				'description' => (string) ($row['descripcion'] ?? ''),
+			];
+		}
+
+		return $items;
 	}
 
 	private function buildSyncSummary(array $result): string

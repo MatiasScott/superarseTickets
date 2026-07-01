@@ -943,11 +943,13 @@ class GraphMailService
 
 		$path = trim((string) ($attachment['path'] ?? ''));
 		if ($path === '' || !is_file($path)) {
+			error_log('Graph attachment skipped: invalid path. path=' . $path);
 			return null;
 		}
 
 		$content = @file_get_contents($path);
 		if ($content === false) {
+			error_log('Graph attachment skipped: file read failed. path=' . $path);
 			return null;
 		}
 
