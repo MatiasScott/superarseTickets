@@ -9,7 +9,7 @@
 			<div class="alert alert-danger py-2"><?= e($error) ?></div>
 		<?php endif; ?>
 
-		<form method="post" action="<?= e(base_url('tickets')) ?>" class="card card-body shadow-sm border-0" id="ticketComposeForm" data-validate>
+		<form method="post" action="<?= e(base_url('tickets')) ?>" class="card card-body shadow-sm border-0" id="ticketComposeForm" data-validate enctype="multipart/form-data">
 			<?= csrf_field() ?>
 			<div class="row g-3 mb-3">
 				<div class="col-lg-6">
@@ -58,6 +58,12 @@
 			</div>
 
 			<div class="mb-3">
+				<label class="form-label" for="cc"><i class="bi bi-people"></i> Copia (CC)</label>
+				<input class="form-control" id="cc" name="cc" placeholder="cc1@dominio.com, cc2@dominio.com; cc3@dominio.com">
+				<small class="text-muted">Puedes agregar varios correos separados por coma o punto y coma.</small>
+			</div>
+
+			<div class="mb-3">
 				<label class="form-label" for="ticket-editor"><i class="bi bi-card-text"></i> Descripcion</label>
 				<div class="ticket-editor-shell">
 					<div class="ticket-editor-toolbar" role="toolbar" aria-label="Formato de descripcion">
@@ -79,6 +85,19 @@
 				<div><strong>Estado:</strong> <?= e((string) (($defaults['estado_label'] ?? 'Pendiente'))) ?></div>
 				<div><strong>Grupo:</strong> <?= e((string) (($defaults['grupo_label'] ?? 'Sin asignar'))) ?></div>
 				<div><strong>Tipo:</strong> Vacio</div>
+			</div>
+
+			<div class="mb-3">
+				<label class="form-label" for="adjuntos"><i class="bi bi-paperclip"></i> Archivos adjuntos</label>
+				<input
+					class="form-control"
+					type="file"
+					id="adjuntos"
+					name="adjuntos[]"
+					multiple
+					accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip,.rar"
+				>
+				<small class="text-muted">Maximo 10 archivos, 15MB por archivo y 20MB total.</small>
 			</div>
 
 			<div class="d-flex gap-2">

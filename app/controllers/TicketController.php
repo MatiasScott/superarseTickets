@@ -104,6 +104,19 @@ class TicketController extends Controller
 			'sort'         => trim((string) ($_GET['sort']         ?? 'id')),
 			'direction'    => trim((string) ($_GET['direction']    ?? 'desc')),
 		];
+
+		if (!empty($filters['grupo_id']) && empty($filters['estado_id'])) {
+			try {
+				$db = Database::getInstance()->connection();
+				$catalog = $this->resolveTicketDefaults($db);
+				$estadoAbiertoId = $catalog['estado_abierto_id'] ?? $catalog['estado_pendiente_id'] ?? null;
+				if ($estadoAbiertoId !== null) {
+					$filters['estado_id'] = [(string) $estadoAbiertoId];
+				}
+			} catch (Throwable $e) {
+				// Si falla la resolución de catálogos, mantenemos filtros originales.
+			}
+		}
 		$activeFilters = array_filter($filters, static function ($value): bool {
 			if (is_array($value)) {
 				return !empty($value);
@@ -163,7 +176,7 @@ class TicketController extends Controller
 		$defaultAccountAlias = '';
 		$defaults = [
 			'estado_label' => 'Pendiente',
-			'prioridad_label' => 'Baja',
+			'prioridad_label' => 'Media',
 			'grupo_label' => 'Sin asignar',
 		];
 
@@ -205,8 +218,17 @@ class TicketController extends Controller
 		$contactoId = (int) ($_POST['contacto_id'] ?? 0);
 		$asunto = trim((string) ($_POST['asunto'] ?? ''));
 		$accountAlias = trim((string) ($_POST['account_alias'] ?? ''));
+		$ccRaw = trim((string) ($_POST['cc'] ?? ''));
 		$descripcionHtml = $this->sanitizeRichText((string) ($_POST['descripcion_html'] ?? ''));
 		$descripcionTexto = trim(preg_replace('/\s+/', ' ', strip_tags($descripcionHtml)) ?? '');
+		$ccParsed = $this->parseEmailList($ccRaw);
+		$ccArr = $ccParsed['valid'];
+		$ccInvalid = $ccParsed['invalid'];
+
+		if (!empty($ccInvalid)) {
+			set_flash('error', 'Hay correos en copia invalidos: ' . implode(', ', $ccInvalid));
+			redirect('tickets/create');
+		}
 
 		if ($asunto === '' || $contactoId <= 0 || $descripcionTexto === '') {
 			set_flash('error', 'Completa los campos obligatorios del ticket.');
@@ -215,6 +237,7 @@ class TicketController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
+			$this->ensureReplyAttachmentsTable($db);
 			$catalog = $this->resolveTicketDefaults($db);
 			$ticketMeta = $this->getTableColumnMeta($db, 'tickets');
 
@@ -272,12 +295,40 @@ class TicketController extends Controller
 					'id' => $ticketId,
 				]);
 
-			$mailStatus = $this->sendTicketEmail($db, $contactoId, $asunto, $descripcionHtml, $accountAlias, $codigoFinal);
+			$contactEmail = $this->fetchContactEmail($db, $contactoId);
+			$uid = Auth::user()['id'] ?? null;
+			$stmtMessage = $db->prepare("INSERT INTO ticket_mensajes
+				(tipo, para, cc, asunto, mensaje, cuenta_alias, ticket_id, usuario_id, fecha)
+				VALUES ('original', :para, :cc, :asunto, :mensaje, :alias, :ticket_id, :usuario_id, NOW())");
+			$stmtMessage->execute([
+				'para' => $contactEmail !== '' ? $contactEmail : null,
+				'cc' => !empty($ccArr) ? implode(', ', $ccArr) : null,
+				'asunto' => $asunto,
+				'mensaje' => $descripcionHtml,
+				'alias' => $accountAlias !== '' ? $accountAlias : null,
+				'ticket_id' => $ticketId,
+				'usuario_id' => $uid,
+			]);
+			$mensajeId = (int) $db->lastInsertId();
+
+			$uploadResult = $this->storeReplyAttachments($db, $ticketId, $mensajeId, $_FILES['adjuntos'] ?? null);
+			$mailAttachments = (array) ($uploadResult['mailAttachments'] ?? []);
+			$uploadErrors = (array) ($uploadResult['errors'] ?? []);
+
+			$mailStatus = $this->sendTicketEmail($db, $contactoId, $asunto, $descripcionHtml, $accountAlias, $codigoFinal, $ccArr, $mailAttachments);
 
 			if ($mailStatus) {
-				set_flash('success', 'Ticket creado y correo enviado correctamente.');
+				if (!empty($uploadErrors)) {
+					set_flash('success', 'Ticket creado y correo enviado. Algunos adjuntos no se cargaron: ' . implode(' | ', $uploadErrors));
+				} else {
+					set_flash('success', 'Ticket creado y correo enviado correctamente.');
+				}
 			} else {
-				set_flash('success', 'Ticket creado correctamente. No se pudo enviar el correo o el contacto no tiene email valido.');
+				$baseMsg = 'Ticket creado correctamente. No se pudo enviar el correo o el contacto no tiene email valido.';
+				if (!empty($uploadErrors)) {
+					$baseMsg .= ' Adjuntos con error: ' . implode(' | ', $uploadErrors);
+				}
+				set_flash('success', $baseMsg);
 			}
 
 			redirect('tickets');
@@ -341,7 +392,7 @@ class TicketController extends Controller
 			$mensajes = $this->hydrateMissingInlineImages($db, $ticketId, $mensajes);
 
 			$attachmentsByMessage = [];
-			$stmtAttach = $db->prepare("SELECT id, ticket_mensaje_id, filename_original, mime, size_bytes, is_inline
+			$stmtAttach = $db->prepare("SELECT id, ticket_mensaje_id, filename_original, mime, size_bytes, is_inline, storage_path
 				FROM ticket_mensaje_adjuntos
 				WHERE ticket_id = :tid
 				ORDER BY id ASC");
@@ -360,6 +411,7 @@ class TicketController extends Controller
 					'mime' => (string) ($attRow['mime'] ?? 'application/octet-stream'),
 					'size' => (int) ($attRow['size_bytes'] ?? 0),
 					'is_inline' => !empty($attRow['is_inline']),
+					'missing' => !is_file((string) ($attRow['storage_path'] ?? '')),
 				];
 			}
 
@@ -507,6 +559,14 @@ class TicketController extends Controller
 			redirect($this->buildTicketShowRedirect($ticketId, $return));
 		}
 
+		$ccParsed = $this->parseEmailList($cc);
+		$ccArr = $ccParsed['valid'];
+		$ccInvalid = $ccParsed['invalid'];
+		if (!empty($ccInvalid)) {
+			set_flash('error', 'Hay correos en copia invalidos: ' . implode(', ', $ccInvalid));
+			redirect($this->buildTicketShowRedirect($ticketId, $return));
+		}
+
 		try {
 			$db  = Database::getInstance()->connection();
 			$uid = Auth::user()['id'] ?? null;
@@ -576,7 +636,6 @@ class TicketController extends Controller
 			}
 
 			// Enviar correo: si existe hilo de origen, responder en el mismo thread.
-			$ccArr = $cc !== '' ? array_values(array_filter(array_map('trim', preg_split('/[;,]+/', $cc) ?: []))) : [];
 			$threadMeta = [];
 			$sent = false;
 			$replyError = '';
@@ -969,6 +1028,9 @@ class TicketController extends Controller
 	private function buildGroupBreakdownData(array $tickets = [], array $slaMap = []): array
 	{
 		$db = Database::getInstance()->connection();
+		$catalog = $this->resolveTicketDefaults($db);
+		$estadoAbiertoId = $catalog['estado_abierto_id'] ?? $catalog['estado_pendiente_id'] ?? null;
+		$estadoParam = $estadoAbiertoId !== null ? ('&estado_id=' . (int) $estadoAbiertoId) : '';
 		$rows = [];
 		$groups = [];
 		try {
@@ -991,7 +1053,7 @@ class TicketController extends Controller
 				'por_vencer' => 0,
 				'vencen_hoy' => 0,
 				'total' => 0,
-				'url' => base_url('tickets?grupo_id=' . $groupId),
+				'url' => base_url('tickets?grupo_id=' . $groupId . $estadoParam),
 			];
 
 			$nameNorm = mb_strtolower(trim((string) ($rows[$key]['grupo'] ?? '')), 'UTF-8');
@@ -1009,7 +1071,7 @@ class TicketController extends Controller
 				'por_vencer' => 0,
 				'vencen_hoy' => 0,
 				'total' => 0,
-				'url' => base_url('tickets'),
+				'url' => base_url('tickets' . ($estadoAbiertoId !== null ? ('?estado_id=' . (int) $estadoAbiertoId) : '')),
 			];
 		}
 
@@ -1035,7 +1097,9 @@ class TicketController extends Controller
 					'por_vencer' => 0,
 					'vencen_hoy' => 0,
 					'total' => 0,
-					'url' => $groupId > 0 ? base_url('tickets?grupo_id=' . $groupId) : base_url('tickets'),
+					'url' => $groupId > 0
+						? base_url('tickets?grupo_id=' . $groupId . $estadoParam)
+						: base_url('tickets' . ($estadoAbiertoId !== null ? ('?estado_id=' . (int) $estadoAbiertoId) : '')),
 				];
 			}
 
@@ -1204,24 +1268,52 @@ class TicketController extends Controller
 		return ['id' => (int) $rows[0]['id'], 'nombre' => (string) $rows[0]['nombre']];
 	}
 
-	private function sendTicketEmail(PDO $db, int $contactoId, string $asunto, string $descripcionHtml, string $accountAlias, string $ticketCode): bool
+	private function sendTicketEmail(PDO $db, int $contactoId, string $asunto, string $descripcionHtml, string $accountAlias, string $ticketCode, array $cc = [], array $attachments = []): bool
 	{
-		$contactColumns = $this->getTableColumns($db, 'contactos');
-		$emailColumn = $this->detectEmailColumn($contactColumns);
-		if ($emailColumn === null) {
-			return false;
-		}
-
-		$stmt = $db->prepare("SELECT {$emailColumn} AS email FROM contactos WHERE id = :id LIMIT 1");
-		$stmt->execute(['id' => $contactoId]);
-		$email = strtolower(trim((string) $stmt->fetchColumn()));
+		$email = $this->fetchContactEmail($db, $contactoId);
 		if ($email === '' || !MailService::isValidEmail($email)) {
 			return false;
 		}
 
 		$body = $descripcionHtml . '<hr><p><strong>Codigo ticket:</strong> ' . e($ticketCode) . '</p>';
 		$mail = new MailService();
-		return $mail->send($email, $asunto, $body, [], [], $accountAlias !== '' ? $accountAlias : null);
+		return $mail->send($email, $asunto, $body, $cc, [], $accountAlias !== '' ? $accountAlias : null, [], $attachments);
+	}
+
+	private function fetchContactEmail(PDO $db, int $contactoId): string
+	{
+		$contactColumns = $this->getTableColumns($db, 'contactos');
+		$emailColumn = $this->detectEmailColumn($contactColumns);
+		if ($emailColumn === null) {
+			return '';
+		}
+
+		$stmt = $db->prepare("SELECT {$emailColumn} AS email FROM contactos WHERE id = :id LIMIT 1");
+		$stmt->execute(['id' => $contactoId]);
+		return strtolower(trim((string) $stmt->fetchColumn()));
+	}
+
+	private function parseEmailList(string $raw): array
+	{
+		$valid = [];
+		$invalid = [];
+		$tokens = preg_split('/[;,]+/', $raw) ?: [];
+		foreach ($tokens as $token) {
+			$email = trim((string) $token);
+			if ($email === '') {
+				continue;
+			}
+			if (!MailService::isValidEmail($email)) {
+				$invalid[] = $email;
+				continue;
+			}
+			$valid[strtolower($email)] = $email;
+		}
+
+		return [
+			'valid' => array_values($valid),
+			'invalid' => array_values(array_unique($invalid)),
+		];
 	}
 
 	private function sanitizeRichText(string $html): string

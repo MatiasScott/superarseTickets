@@ -926,6 +926,9 @@ class GraphMailService
 			if ($address === '') {
 				continue;
 			}
+			if (!filter_var($address, FILTER_VALIDATE_EMAIL)) {
+				continue;
+			}
 			$recipients[] = ['emailAddress' => ['address' => $address]];
 		}
 

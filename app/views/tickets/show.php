@@ -197,21 +197,30 @@ $phones = array_values(array_unique($phones));
                                         $adjName = (string) ($adj['filename'] ?? 'Adjunto');
                                         $adjSize = (int) ($adj['size'] ?? 0);
                                         $adjMime = strtolower((string) ($adj['mime'] ?? 'application/octet-stream'));
+                                        $adjMissing = !empty($adj['missing']);
                                         $adjCanPreview = str_starts_with($adjMime, 'image/') || $adjMime === 'application/pdf' || str_starts_with($adjMime, 'text/');
                                         $adjSizeText = $adjSize > 0 ? round($adjSize / 1024, 1) . ' KB' : 'Tamano no disponible';
                                         $adjUrl = base_url('tickets/' . $ticketId . '/reply-attachment/' . $adjId);
                                         $adjPreviewUrl = base_url('tickets/' . $ticketId . '/reply-attachment/' . $adjId . '?mode=inline');
                                         ?>
-                                        <a class="message-attachment-link" href="<?= e($adjUrl) ?>">
-                                            <i class="bi bi-paperclip"></i>
-                                            <span><?= e($adjName) ?></span>
-                                            <small><?= e($adjSizeText) ?></small>
-                                        </a>
-                                        <?php if ($adjCanPreview): ?>
-                                            <a class="message-attachment-link" href="<?= e($adjPreviewUrl) ?>" target="_blank" rel="noopener noreferrer">
-                                                <i class="bi bi-eye"></i>
-                                                <span>Ver</span>
+                                        <?php if ($adjMissing): ?>
+                                            <span class="message-attachment-link" style="opacity:.65;cursor:not-allowed;">
+                                                <i class="bi bi-exclamation-triangle"></i>
+                                                <span><?= e($adjName) ?></span>
+                                                <small>Archivo no disponible</small>
+                                            </span>
+                                        <?php else: ?>
+                                            <a class="message-attachment-link" href="<?= e($adjUrl) ?>">
+                                                <i class="bi bi-paperclip"></i>
+                                                <span><?= e($adjName) ?></span>
+                                                <small><?= e($adjSizeText) ?></small>
                                             </a>
+                                            <?php if ($adjCanPreview): ?>
+                                                <a class="message-attachment-link" href="<?= e($adjPreviewUrl) ?>" target="_blank" rel="noopener noreferrer">
+                                                    <i class="bi bi-eye"></i>
+                                                    <span>Ver</span>
+                                                </a>
+                                            <?php endif; ?>
                                         <?php endif; ?>
                                     <?php endforeach; ?>
                                 </div>
