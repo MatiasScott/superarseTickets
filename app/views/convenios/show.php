@@ -153,10 +153,11 @@ $convenioId = (int) ($convenio['id'] ?? 0);
             </div>
 
             <div class="tab-pane fade" id="tab-notas" role="tabpanel">
-                <form method="post" action="<?= e(base_url('convenios/' . $convenioId . '/notas')) ?>" class="mb-3">
+                <form method="post" action="<?= e(base_url('convenios/' . $convenioId . '/notas')) ?>" class="mb-3" enctype="multipart/form-data">
                     <?= csrf_field() ?>
                     <label class="form-label">Nueva nota interna</label>
                     <textarea name="nota" class="form-control mb-2" rows="3" placeholder="Ej: Pendiente firma del rector"></textarea>
+                    <input type="file" name="attachments[]" class="form-control form-control-sm mb-2" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip,.rar">
                     <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-journal-plus"></i> Guardar nota</button>
                 </form>
 
@@ -170,6 +171,39 @@ $convenioId = (int) ($convenio['id'] ?? 0);
                                     <div>
                                         <div class="fw-semibold"><?= e((string) ($nota['usuario_nombre'] ?? 'Usuario')) ?></div>
                                         <div><?= nl2br(e((string) ($nota['nota'] ?? ''))) ?></div>
+                                        <?php $attachments = (array) ($nota['attachments'] ?? []); ?>
+                                        <?php if (!empty($attachments)): ?>
+                                            <div class="mt-2 d-flex flex-wrap gap-1">
+                                                <?php foreach ($attachments as $att): ?>
+                                                    <a class="btn btn-sm btn-outline-secondary" href="<?= e(base_url('convenios/' . $convenioId . '/notas/' . (int) ($nota['id'] ?? 0) . '/attachment/' . (int) ($att['id'] ?? 0))) ?>">
+                                                        <i class="bi bi-paperclip"></i> <?= e((string) ($att['filename_original'] ?? 'Adjunto')) ?>
+                                                    </a>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        <?php endif; ?>
+
+                                        <details class="mt-2">
+                                            <summary class="small text-primary" style="cursor:pointer;">Editar nota</summary>
+                                            <form method="post" action="<?= e(base_url('convenios/' . $convenioId . '/notas/' . (int) ($nota['id'] ?? 0))) ?>" enctype="multipart/form-data" class="mt-2">
+                                                <?= csrf_field() ?>
+                                                <textarea name="nota" class="form-control form-control-sm mb-2" rows="3" required><?= e((string) ($nota['nota'] ?? '')) ?></textarea>
+
+                                                <?php if (!empty($attachments)): ?>
+                                                    <div class="small text-muted mb-1">Adjuntos existentes (marca para quitar):</div>
+                                                    <div class="mb-2">
+                                                        <?php foreach ($attachments as $att): ?>
+                                                            <label class="form-check form-check-inline me-2 mb-1">
+                                                                <input class="form-check-input" type="checkbox" name="remove_attachment_ids[]" value="<?= (int) ($att['id'] ?? 0) ?>">
+                                                                <span class="form-check-label"><?= e((string) ($att['filename_original'] ?? 'Adjunto')) ?></span>
+                                                            </label>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                <?php endif; ?>
+
+                                                <input type="file" name="attachments[]" class="form-control form-control-sm mb-2" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip,.rar">
+                                                <button type="submit" class="btn btn-outline-primary btn-sm">Guardar cambios</button>
+                                            </form>
+                                        </details>
                                     </div>
                                     <small class="text-muted text-nowrap"><?= e((string) ($nota['created_at'] ?? '')) ?></small>
                                 </div>

@@ -180,6 +180,17 @@ $phones = array_values(array_unique($phones));
                                 <?= e($tipo === 'nota' ? 'Nota interna' : ($tipo === 'respuesta' ? 'Respuesta' : 'Original')) ?>
                             </span>
                         </header>
+                        <?php if ($tipo === 'nota'): ?>
+                            <div class="mb-2">
+                                <button
+                                    type="button"
+                                    class="btn btn-sm btn-outline-primary"
+                                    data-ticket-note-edit-btn="true"
+                                    data-ticket-note-id="<?= (int) ($m['id'] ?? 0) ?>"
+                                    data-ticket-note-html="<?= e((string) ($m['mensaje'] ?? '')) ?>"
+                                >Editar nota</button>
+                            </div>
+                        <?php endif; ?>
                         <div class="message-body"><?= $m['mensaje'] ?? '' ?></div>
                         <?php
                         $messageAttachmentsRaw = is_array($m['attachments'] ?? null) ? $m['attachments'] : [];
@@ -314,7 +325,7 @@ $phones = array_values(array_unique($phones));
                 </div>
 
                 <div id="compose-note" style="display:none;">
-                    <form method="POST" action="<?= e(base_url('tickets/' . $ticketId . '/note')) ?>" data-editor-form="note-editor:note-body">
+                    <form method="POST" action="<?= e(base_url('tickets/' . $ticketId . '/note')) ?>" enctype="multipart/form-data" data-editor-form="note-editor:note-body">
                         <input type="hidden" name="_token" value="<?= csrf_token() ?>">
                         <input type="hidden" name="cuerpo_html" id="note-body">
                            <input type="hidden" name="return" value="<?= e($ticketUrl) ?>">
@@ -325,6 +336,13 @@ $phones = array_values(array_unique($phones));
                             <button type="button" data-editor-target="note-editor" data-editor-cmd="underline"><u>U</u></button>
                         </div>
                         <div class="compose-editor" id="note-editor" contenteditable="true" style="background:#fffdf6;border-color:#f4dda8;"></div>
+
+                        <div class="compose-dropzone" id="note-dropzone" tabindex="0" role="button" aria-label="Arrastra archivos aqui o haz clic para seleccionarlos">
+                            <div class="dropzone-title">Adjuntar archivos a nota</div>
+                            <div class="dropzone-help">Puedes seleccionar varios archivos y quitar los que no quieras antes de guardar.</div>
+                            <input type="file" id="note-attachments" name="adjuntos[]" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip,.rar" hidden>
+                        </div>
+                        <div class="compose-attachments-list" id="note-attachments-list" aria-live="polite"></div>
 
                         <div class="compose-actions">
                             <button class="btn btn-warning btn-sm" type="submit">Guardar nota</button>
@@ -387,7 +405,7 @@ $phones = array_values(array_unique($phones));
 
                     <div class="prop-field">
                         <label>Tipo</label>
-                        <select name="tipo_id">
+                        <select name="tipo_id" required>
                             <option value="">--</option>
                             <?php foreach ($tipos as $item): ?>
                                 <option value="<?= (int) ($item['id'] ?? 0) ?>" <?= ((int) ($ticket['tipo_id'] ?? 0) === (int) ($item['id'] ?? 0)) ? 'selected' : '' ?>>
@@ -423,7 +441,7 @@ $phones = array_values(array_unique($phones));
 
                     <div class="prop-field">
                         <label>Grupo</label>
-                        <select name="grupo_id">
+                        <select name="grupo_id" required>
                             <option value="">Sin asignar</option>
                             <?php foreach ($grupos as $item): ?>
                                 <option value="<?= (int) ($item['id'] ?? 0) ?>" <?= ((int) ($ticket['grupo_id'] ?? 0) === (int) ($item['id'] ?? 0)) ? 'selected' : '' ?>>
@@ -435,10 +453,10 @@ $phones = array_values(array_unique($phones));
 
                     <div class="prop-field">
                         <label>Agente</label>
-                        <select name="asignado_a">
+                        <select name="asignado_a" data-ticket-agente-select="true">
                             <option value="">Sin asignar</option>
                             <?php foreach ($usuarios as $item): ?>
-                                <option value="<?= (int) ($item['id'] ?? 0) ?>" <?= ((int) ($ticket['asignado_a'] ?? 0) === (int) ($item['id'] ?? 0)) ? 'selected' : '' ?>>
+                                <option value="<?= (int) ($item['id'] ?? 0) ?>" data-grupo-ids="<?= e((string) ($item['grupo_ids'] ?? '')) ?>" <?= ((int) ($ticket['asignado_a'] ?? 0) === (int) ($item['id'] ?? 0)) ? 'selected' : '' ?>>
                                     <?= e((string) ($item['nombre'] ?? '')) ?>
                                 </option>
                             <?php endforeach; ?>

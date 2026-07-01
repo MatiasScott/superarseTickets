@@ -135,6 +135,20 @@ class ConvenioController extends Controller
             FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
+        $db->exec("CREATE TABLE IF NOT EXISTS convenio_nota_adjuntos (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            convenio_id INT NOT NULL,
+            nota_id BIGINT NOT NULL,
+            filename_original VARCHAR(255) NOT NULL,
+            filename_storage VARCHAR(255) NOT NULL,
+            mime VARCHAR(120) NOT NULL DEFAULT 'application/octet-stream',
+            size_bytes BIGINT NOT NULL DEFAULT 0,
+            storage_path VARCHAR(1000) NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_convenio_nota_adjuntos_nota (nota_id),
+            INDEX idx_convenio_nota_adjuntos_convenio (convenio_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
         $db->exec("CREATE TABLE IF NOT EXISTS tipo_tarea_convenios (
             id INT AUTO_INCREMENT PRIMARY KEY,
             nombre VARCHAR(150) NOT NULL,
@@ -302,6 +316,41 @@ class ConvenioController extends Controller
         }
 
         $notas = $notaModel->listByConvenio($convenioId);
+        $noteIds = [];
+        foreach ($notas as $noteRow) {
+            $nid = (int) ($noteRow['id'] ?? 0);
+            if ($nid > 0) {
+                $noteIds[$nid] = $nid;
+            }
+        }
+        $attachmentsByNote = [];
+        if (!empty($noteIds)) {
+            $placeholders = implode(',', array_fill(0, count($noteIds), '?'));
+            $sqlAttachments = "SELECT id, nota_id, filename_original, mime, size_bytes, created_at
+                FROM convenio_nota_adjuntos
+                WHERE nota_id IN ($placeholders)
+                ORDER BY id ASC";
+            $stmtAttachments = $localDb->prepare($sqlAttachments);
+            $stmtAttachments->execute(array_values($noteIds));
+            foreach ($stmtAttachments->fetchAll() ?: [] as $row) {
+                $nid = (int) ($row['nota_id'] ?? 0);
+                if ($nid <= 0) {
+                    continue;
+                }
+                $attachmentsByNote[$nid][] = [
+                    'id' => (int) ($row['id'] ?? 0),
+                    'filename_original' => (string) ($row['filename_original'] ?? 'Adjunto'),
+                    'mime' => (string) ($row['mime'] ?? 'application/octet-stream'),
+                    'size_bytes' => (int) ($row['size_bytes'] ?? 0),
+                    'created_at' => (string) ($row['created_at'] ?? ''),
+                ];
+            }
+        }
+        foreach ($notas as &$noteRow) {
+            $nid = (int) ($noteRow['id'] ?? 0);
+            $noteRow['attachments'] = $attachmentsByNote[$nid] ?? [];
+        }
+        unset($noteRow);
         $tareas = $tareaModel->listByConvenio($convenioId);
         $historial = $this->listHistorial($localDb, $convenioId);
         $tiposTarea = $tareaModel->activeTiposTarea();
@@ -339,17 +388,362 @@ class ConvenioController extends Controller
         try {
             $localDb = Database::getInstance()->connection();
             $this->ensureConveniosTables($localDb);
+            $this->ensureUserNotificationsTable($localDb);
 
             $model = new ConvenioNota();
-            $model->createNota($convenioId, (int) (Auth::id() ?? 0), $nota);
+            $notaId = $model->createNota($convenioId, (int) (Auth::id() ?? 0), $nota);
+            $uploadErrors = $this->storeConvenioNoteAttachments($localDb, $convenioId, $notaId, $_FILES['attachments'] ?? null);
+
+            $mentionIds = $this->extractMentionUserIds($nota, $localDb, (int) (Auth::id() ?? 0));
+            if (!empty($mentionIds)) {
+                $this->createMentionNotifications(
+                    $localDb,
+                    $mentionIds,
+                    'Mención en nota de convenio',
+                    'Te mencionaron en una nota de convenio.',
+                    base_url('convenios/' . $convenioId)
+                );
+            }
+
             $this->registerHistorial($localDb, $convenioId, null, 'nota_creada', 'Se registró una nota interna.');
 
-            set_flash('success', 'Nota registrada correctamente.');
+            if (!empty($uploadErrors)) {
+                set_flash('warning', 'Nota guardada con advertencias en adjuntos: ' . implode(' ', $uploadErrors));
+            } else {
+                set_flash('success', 'Nota registrada correctamente.');
+            }
         } catch (Throwable $e) {
             set_flash('error', 'Error al registrar nota: ' . $e->getMessage());
         }
 
         redirect('convenios/' . $convenioId);
+    }
+
+    public function updateNota(string $id, string $notaId): void
+    {
+        $this->ensureAccess();
+        if (!verify_csrf($_POST['_token'] ?? null)) {
+            set_flash('error', 'Token CSRF inválido.');
+            redirect('convenios/' . (int) $id);
+        }
+
+        $convenioId = (int) $id;
+        $noteId = (int) $notaId;
+        $texto = trim((string) ($_POST['nota'] ?? ''));
+        $removeIds = array_values(array_unique(array_map('intval', (array) ($_POST['remove_attachment_ids'] ?? []))));
+
+        if ($convenioId <= 0 || $noteId <= 0 || $texto === '') {
+            set_flash('error', 'Datos inválidos para actualizar la nota.');
+            redirect('convenios/' . $convenioId);
+        }
+
+        try {
+            $localDb = Database::getInstance()->connection();
+            $this->ensureConveniosTables($localDb);
+            $this->ensureUserNotificationsTable($localDb);
+
+            $model = new ConvenioNota();
+            $updated = $model->updateNota($convenioId, $noteId, $texto);
+            if (!$updated) {
+                set_flash('error', 'No se encontró la nota a editar.');
+                redirect('convenios/' . $convenioId);
+            }
+
+            $this->removeConvenioAttachments($localDb, $convenioId, $noteId, $removeIds);
+            $uploadErrors = $this->storeConvenioNoteAttachments($localDb, $convenioId, $noteId, $_FILES['attachments'] ?? null);
+
+            $mentionIds = $this->extractMentionUserIds($texto, $localDb, (int) (Auth::id() ?? 0));
+            if (!empty($mentionIds)) {
+                $this->createMentionNotifications(
+                    $localDb,
+                    $mentionIds,
+                    'Mención en nota de convenio',
+                    'Te mencionaron en una nota editada de convenio.',
+                    base_url('convenios/' . $convenioId)
+                );
+            }
+
+            $this->registerHistorial($localDb, $convenioId, null, 'nota_editada', 'Se editó una nota interna.');
+            if (!empty($uploadErrors)) {
+                set_flash('warning', 'Nota editada con advertencias en adjuntos: ' . implode(' ', $uploadErrors));
+            } else {
+                set_flash('success', 'Nota actualizada correctamente.');
+            }
+        } catch (Throwable $e) {
+            set_flash('error', 'Error al actualizar la nota: ' . $e->getMessage());
+        }
+
+        redirect('convenios/' . $convenioId);
+    }
+
+    public function noteAttachment(string $id, string $notaId, string $attachmentId): void
+    {
+        $this->ensureAccess();
+        $convenioId = (int) $id;
+        $noteId = (int) $notaId;
+        $attId = (int) $attachmentId;
+        if ($convenioId <= 0 || $noteId <= 0 || $attId <= 0) {
+            http_response_code(400);
+            echo 'Adjunto inválido.';
+            return;
+        }
+
+        try {
+            $localDb = Database::getInstance()->connection();
+            $this->ensureConveniosTables($localDb);
+            $stmt = $localDb->prepare('SELECT filename_original, mime, size_bytes, storage_path
+                FROM convenio_nota_adjuntos
+                WHERE id = :id AND convenio_id = :convenio_id AND nota_id = :nota_id
+                LIMIT 1');
+            $stmt->execute([
+                'id' => $attId,
+                'convenio_id' => $convenioId,
+                'nota_id' => $noteId,
+            ]);
+            $row = $stmt->fetch() ?: null;
+            if (!is_array($row)) {
+                http_response_code(404);
+                echo 'Adjunto no encontrado.';
+                return;
+            }
+
+            $fullPath = (string) ($row['storage_path'] ?? '');
+            if ($fullPath === '' || !is_file($fullPath)) {
+                http_response_code(404);
+                echo 'Archivo adjunto no disponible.';
+                return;
+            }
+
+            $basePath = realpath(ROOT_PATH . '/uploads/convenios-notas');
+            $realFile = realpath($fullPath);
+            if (!$this->pathStartsWith($realFile, $basePath)) {
+                http_response_code(403);
+                echo 'Acceso denegado al adjunto.';
+                return;
+            }
+
+            $filename = (string) ($row['filename_original'] ?? 'adjunto.bin');
+            $mime = (string) ($row['mime'] ?? 'application/octet-stream');
+            $size = (int) ($row['size_bytes'] ?? filesize($realFile));
+
+            header('Content-Type: ' . $mime);
+            header('Content-Length: ' . $size);
+            header('Content-Disposition: attachment; filename="' . addslashes($filename) . '"');
+            readfile($realFile);
+        } catch (Throwable $e) {
+            http_response_code(500);
+            echo 'No se pudo servir el adjunto.';
+        }
+    }
+
+    private function storeConvenioNoteAttachments(PDO $db, int $convenioId, int $noteId, $rawFiles): array
+    {
+        $errors = [];
+        if ($convenioId <= 0 || $noteId <= 0 || !is_array($rawFiles) || !isset($rawFiles['name'])) {
+            return $errors;
+        }
+
+        $files = [];
+        if (!is_array($rawFiles['name'])) {
+            $files[] = $rawFiles;
+        } else {
+            $count = count($rawFiles['name']);
+            for ($i = 0; $i < $count; $i++) {
+                $files[] = [
+                    'name' => $rawFiles['name'][$i] ?? '',
+                    'type' => $rawFiles['type'][$i] ?? '',
+                    'tmp_name' => $rawFiles['tmp_name'][$i] ?? '',
+                    'error' => $rawFiles['error'][$i] ?? UPLOAD_ERR_NO_FILE,
+                    'size' => $rawFiles['size'][$i] ?? 0,
+                ];
+            }
+        }
+
+        $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar'];
+        $maxBytes = 15 * 1024 * 1024;
+        $uploadDir = ROOT_PATH . '/uploads/convenios-notas/' . $convenioId . '/' . $noteId;
+        if (!is_dir($uploadDir) && !@mkdir($uploadDir, 0775, true) && !is_dir($uploadDir)) {
+            return ['No se pudo crear el directorio de adjuntos.'];
+        }
+
+        $finfo = function_exists('finfo_open') ? finfo_open(FILEINFO_MIME_TYPE) : null;
+        foreach ($files as $file) {
+            $errorCode = (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE);
+            if ($errorCode === UPLOAD_ERR_NO_FILE) {
+                continue;
+            }
+            if ($errorCode !== UPLOAD_ERR_OK) {
+                $errors[] = 'Archivo no válido (código ' . $errorCode . ').';
+                continue;
+            }
+
+            $tmpName = (string) ($file['tmp_name'] ?? '');
+            $origName = trim((string) ($file['name'] ?? 'adjunto'));
+            $size = (int) ($file['size'] ?? 0);
+            if ($tmpName === '' || !is_uploaded_file($tmpName)) {
+                $errors[] = 'No se recibió correctamente el archivo ' . $origName . '.';
+                continue;
+            }
+            if ($size <= 0 || $size > $maxBytes) {
+                $errors[] = 'El archivo ' . $origName . ' supera 15MB o está vacío.';
+                continue;
+            }
+
+            $ext = strtolower((string) pathinfo($origName, PATHINFO_EXTENSION));
+            if (!in_array($ext, $allowedExtensions, true)) {
+                $errors[] = 'Tipo de archivo no permitido: ' . $origName . '.';
+                continue;
+            }
+
+            $mime = 'application/octet-stream';
+            if ($finfo !== null) {
+                $detected = finfo_file($finfo, $tmpName);
+                if (is_string($detected) && $detected !== '') {
+                    $mime = $detected;
+                }
+            }
+
+            $storageName = bin2hex(random_bytes(16)) . ($ext !== '' ? ('.' . $ext) : '');
+            $targetPath = $uploadDir . '/' . $storageName;
+            if (!move_uploaded_file($tmpName, $targetPath)) {
+                $errors[] = 'No se pudo almacenar el archivo ' . $origName . '.';
+                continue;
+            }
+
+            $stmt = $db->prepare('INSERT INTO convenio_nota_adjuntos (convenio_id, nota_id, filename_original, filename_storage, mime, size_bytes, storage_path, created_at)
+                VALUES (:convenio_id, :nota_id, :filename_original, :filename_storage, :mime, :size_bytes, :storage_path, NOW())');
+            $stmt->execute([
+                'convenio_id' => $convenioId,
+                'nota_id' => $noteId,
+                'filename_original' => substr($origName, 0, 255),
+                'filename_storage' => $storageName,
+                'mime' => substr($mime, 0, 120),
+                'size_bytes' => $size,
+                'storage_path' => $targetPath,
+            ]);
+        }
+
+        if ($finfo !== null) {
+            finfo_close($finfo);
+        }
+
+        return $errors;
+    }
+
+    private function removeConvenioAttachments(PDO $db, int $convenioId, int $noteId, array $removeIds): void
+    {
+        $ids = array_values(array_filter(array_map('intval', $removeIds), static fn($value) => $value > 0));
+        if (empty($ids)) {
+            return;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $sql = "SELECT id, storage_path FROM convenio_nota_adjuntos WHERE convenio_id = ? AND nota_id = ? AND id IN ($placeholders)";
+        $params = array_merge([$convenioId, $noteId], $ids);
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        $rows = $stmt->fetchAll() ?: [];
+
+        if (empty($rows)) {
+            return;
+        }
+
+        $deleteIds = [];
+        foreach ($rows as $row) {
+            $deleteIds[] = (int) ($row['id'] ?? 0);
+            $path = (string) ($row['storage_path'] ?? '');
+            if ($path !== '' && is_file($path)) {
+                @unlink($path);
+            }
+        }
+
+        $deleteIds = array_values(array_filter($deleteIds, static fn($value) => $value > 0));
+        if (!empty($deleteIds)) {
+            $deletePlaceholders = implode(',', array_fill(0, count($deleteIds), '?'));
+            $deleteStmt = $db->prepare("DELETE FROM convenio_nota_adjuntos WHERE id IN ($deletePlaceholders)");
+            $deleteStmt->execute($deleteIds);
+        }
+    }
+
+    private function ensureUserNotificationsTable(PDO $db): void
+    {
+        $db->exec("CREATE TABLE IF NOT EXISTS user_notifications (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            title VARCHAR(180) NOT NULL,
+            message TEXT NOT NULL,
+            url VARCHAR(500) NULL,
+            type VARCHAR(50) NOT NULL DEFAULT 'info',
+            is_read TINYINT(1) NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_user_notifications_user_read (user_id, is_read),
+            INDEX idx_user_notifications_created (created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    }
+
+    private function extractMentionUserIds(string $text, PDO $db, int $excludeUserId = 0): array
+    {
+        if (!preg_match_all('/@([a-zA-Z0-9._-]{2,80})/u', $text, $matches)) {
+            return [];
+        }
+
+        $tokens = array_values(array_unique(array_map(static function ($value): string {
+            return strtolower(trim((string) $value));
+        }, (array) ($matches[1] ?? []))));
+        $tokens = array_values(array_filter($tokens, static fn($token) => $token !== ''));
+        if (empty($tokens)) {
+            return [];
+        }
+
+        $rows = $db->query("SELECT id, nombre, email FROM usuarios WHERE estado = 'activo'")->fetchAll() ?: [];
+        $ids = [];
+        foreach ($rows as $row) {
+            $userId = (int) ($row['id'] ?? 0);
+            if ($userId <= 0 || ($excludeUserId > 0 && $userId === $excludeUserId)) {
+                continue;
+            }
+            $nameKey = strtolower(trim((string) ($row['nombre'] ?? '')));
+            $email = strtolower(trim((string) ($row['email'] ?? '')));
+            $emailLocal = $email !== '' ? strtolower(trim((string) strtok($email, '@'))) : '';
+            if (in_array($nameKey, $tokens, true) || ($emailLocal !== '' && in_array($emailLocal, $tokens, true))) {
+                $ids[$userId] = $userId;
+            }
+        }
+
+        return array_values($ids);
+    }
+
+    private function createMentionNotifications(PDO $db, array $userIds, string $title, string $message, string $url): void
+    {
+        if (empty($userIds)) {
+            return;
+        }
+
+        $stmt = $db->prepare('INSERT INTO user_notifications (user_id, title, message, url, type, is_read, created_at)
+            VALUES (:user_id, :title, :message, :url, :type, 0, NOW())');
+        foreach ($userIds as $userId) {
+            $uid = (int) $userId;
+            if ($uid <= 0) {
+                continue;
+            }
+            $stmt->execute([
+                'user_id' => $uid,
+                'title' => mb_substr($title, 0, 180),
+                'message' => $message,
+                'url' => mb_substr($url, 0, 500),
+                'type' => 'mention',
+            ]);
+        }
+    }
+
+    private function pathStartsWith($fullPath, $basePath): bool
+    {
+        if (!is_string($fullPath) || !is_string($basePath) || $fullPath === '' || $basePath === '') {
+            return false;
+        }
+        $normalizedFull = strtolower(str_replace('\\', '/', $fullPath));
+        $normalizedBase = rtrim(strtolower(str_replace('\\', '/', $basePath)), '/');
+        return str_starts_with($normalizedFull, $normalizedBase . '/') || $normalizedFull === $normalizedBase;
     }
 
     public function storeTarea(string $id): void

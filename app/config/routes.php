@@ -133,6 +133,7 @@ return static function (Router $router): void {
 	$router->post('/crm/addStudentNote', 'CRMController@addStudentNote');
 	$router->post('/crm/updateStudentNote', 'CRMController@updateStudentNote');
 	$router->post('/crm/deleteStudentNote', 'CRMController@deleteStudentNote');
+	$router->get('/crm/note-attachment/{id}', 'CRMController@noteAttachment');
 
 	$router->get('/tickets', 'TicketController@index');
 	$router->get('/tickets/create', 'TicketController@create');
@@ -142,6 +143,7 @@ return static function (Router $router): void {
 	$router->get('/tickets/{id}/reply-attachment/{attachmentId}', 'TicketController@replyAttachment');
 	$router->post('/tickets/{id}/reply', 'TicketController@replyTicket');
 	$router->post('/tickets/{id}/note', 'TicketController@addNote');
+	$router->post('/tickets/{id}/note/{noteId}', 'TicketController@updateNote');
 	$router->post('/tickets/{id}/properties', 'TicketController@updateProperties');
 
 	// Campañas de correo
@@ -161,6 +163,8 @@ return static function (Router $router): void {
 	$router->get('/convenios/{id}', 'ConvenioController@show');
 	$router->post('/convenios/{id}/datos', 'ConvenioController@updateDatos');
 	$router->post('/convenios/{id}/notas', 'ConvenioController@storeNota');
+	$router->post('/convenios/{id}/notas/{notaId}', 'ConvenioController@updateNota');
+	$router->get('/convenios/{id}/notas/{notaId}/attachment/{attachmentId}', 'ConvenioController@noteAttachment');
 	$router->post('/convenios/{id}/tareas', 'ConvenioController@storeTarea');
 	$router->post('/convenios/{id}/tareas/{tareaId}/estado', 'ConvenioController@updateTareaEstado');
 	$router->post('/convenios/{id}/tareas/{tareaId}/participantes', 'ConvenioController@updateTareaParticipantes');

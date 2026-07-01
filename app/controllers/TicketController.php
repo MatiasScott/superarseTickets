@@ -145,7 +145,12 @@ class TicketController extends Controller
 				$grupos = $db->query("SELECT id, nombre FROM ticket_grupos ORDER BY nombre")->fetchAll() ?: [];
 			}
 
-			$usuarios = $db->query("SELECT id, nombre FROM usuarios WHERE estado = 'activo' ORDER BY nombre")->fetchAll() ?: [];
+			$usuarios = $db->query("SELECT u.id, u.nombre, GROUP_CONCAT(ug.grupo_id ORDER BY ug.grupo_id SEPARATOR ',') AS grupo_ids
+				FROM usuarios u
+				LEFT JOIN usuario_grupos ug ON ug.usuario_id = u.id
+				WHERE u.estado = 'activo'
+				GROUP BY u.id, u.nombre
+				ORDER BY u.nombre")->fetchAll() ?: [];
 		} catch (Throwable $e) {
 			// Los catálogos son opcionales para los filtros, continuar
 		}
@@ -742,10 +747,12 @@ class TicketController extends Controller
 
 			$basePath = realpath(ROOT_PATH . '/uploads/tickets');
 			$legacyBasePath = realpath(STORAGE_PATH . '/uploads/ticket_reply_attachments');
+			$legacyRootBasePath = realpath(ROOT_PATH . '/uploads/ticket_reply_attachments');
 			$realFile = realpath($fullPath);
-			$insideNewBase = $basePath !== false && $realFile !== false && strncmp($realFile, $basePath, strlen($basePath)) === 0;
-			$insideLegacyBase = $legacyBasePath !== false && $realFile !== false && strncmp($realFile, $legacyBasePath, strlen($legacyBasePath)) === 0;
-			if (!$insideNewBase && !$insideLegacyBase) {
+			$insideNewBase = $this->pathStartsWith($realFile, $basePath);
+			$insideLegacyBase = $this->pathStartsWith($realFile, $legacyBasePath);
+			$insideLegacyRootBase = $this->pathStartsWith($realFile, $legacyRootBasePath);
+			if (!$insideNewBase && !$insideLegacyBase && !$insideLegacyRootBase) {
 				http_response_code(403);
 				echo 'Acceso denegado al adjunto.';
 				return;
@@ -837,6 +844,8 @@ class TicketController extends Controller
 		try {
 			$db  = Database::getInstance()->connection();
 			$uid = Auth::user()['id'] ?? null;
+			$this->ensureReplyAttachmentsTable($db);
+			$this->ensureUserNotificationsTable($db);
 
 			$stmt = $db->prepare("INSERT INTO ticket_mensajes
 				(tipo, mensaje, ticket_id, usuario_id, fecha)
@@ -846,10 +855,83 @@ class TicketController extends Controller
 				'tid' => $ticketId,
 				'uid' => $uid,
 			]);
+			$mensajeId = (int) $db->lastInsertId();
+			$uploadResult = $this->storeReplyAttachments($db, $ticketId, $mensajeId, $_FILES['adjuntos'] ?? null);
 
-			set_flash('success', 'Nota interna guardada.');
+			$mentionIds = $this->extractMentionUserIds(strip_tags($cuerpoHtml), $db, (int) ($uid ?? 0));
+			if (!empty($mentionIds)) {
+				$this->createMentionNotifications(
+					$db,
+					$mentionIds,
+					'Mención en nota de ticket',
+					'Te mencionaron en una nota del ticket #' . $ticketId,
+					base_url('tickets/' . $ticketId)
+				);
+			}
+
+			$errors = (array) ($uploadResult['errors'] ?? []);
+			if (!empty($errors)) {
+				set_flash('success', 'Nota interna guardada. Algunos adjuntos no se cargaron: ' . implode(' | ', $errors));
+			} else {
+				set_flash('success', 'Nota interna guardada.');
+			}
 		} catch (Throwable $e) {
 			set_flash('error', 'Error al guardar la nota: ' . $e->getMessage());
+		}
+
+		redirect($this->buildTicketShowRedirect($ticketId, $return));
+	}
+
+	public function updateNote(string $id, string $noteId): void
+	{
+		Auth::requireAuth();
+		$return = trim((string) ($_POST['return'] ?? ''));
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			set_flash('error', 'Token CSRF inválido.');
+			redirect($this->buildTicketShowRedirect((int) $id, $return));
+		}
+
+		$ticketId = (int) $id;
+		$messageId = (int) $noteId;
+		$cuerpoHtml = $this->sanitizeRichText((string) ($_POST['cuerpo_html'] ?? ''));
+		if ($ticketId <= 0 || $messageId <= 0 || trim(strip_tags($cuerpoHtml)) === '') {
+			set_flash('error', 'Nota inválida para edición.');
+			redirect($this->buildTicketShowRedirect($ticketId, $return));
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+			$this->ensureUserNotificationsTable($db);
+			$stmt = $db->prepare("UPDATE ticket_mensajes
+				SET mensaje = :mensaje
+				WHERE id = :id AND ticket_id = :ticket_id AND tipo = 'nota'
+				LIMIT 1");
+			$stmt->execute([
+				'mensaje' => $cuerpoHtml,
+				'id' => $messageId,
+				'ticket_id' => $ticketId,
+			]);
+
+			if ($stmt->rowCount() <= 0) {
+				set_flash('error', 'No se pudo editar la nota indicada.');
+				redirect($this->buildTicketShowRedirect($ticketId, $return));
+			}
+
+			$uid = (int) (Auth::id() ?? 0);
+			$mentionIds = $this->extractMentionUserIds(strip_tags($cuerpoHtml), $db, $uid);
+			if (!empty($mentionIds)) {
+				$this->createMentionNotifications(
+					$db,
+					$mentionIds,
+					'Mención en nota de ticket',
+					'Te mencionaron en una nota editada del ticket #' . $ticketId,
+					base_url('tickets/' . $ticketId)
+				);
+			}
+
+			set_flash('success', 'Nota actualizada correctamente.');
+		} catch (Throwable $e) {
+			set_flash('error', 'Error al editar la nota: ' . $e->getMessage());
 		}
 
 		redirect($this->buildTicketShowRedirect($ticketId, $return));
@@ -871,8 +953,25 @@ class TicketController extends Controller
 		$grupoId    = ($_POST['grupo_id']    ?? '') !== '' ? (int) $_POST['grupo_id']    : null;
 		$asignadoA  = ($_POST['asignado_a']  ?? '') !== '' ? (int) $_POST['asignado_a']  : null;
 
+		if ($tipoId === null || $grupoId === null) {
+			set_flash('error', 'Tipo y grupo son obligatorios para actualizar el ticket.');
+			redirect($this->buildTicketShowRedirect($ticketId, $return));
+		}
+
 		try {
 			$db = Database::getInstance()->connection();
+			if ($asignadoA !== null) {
+				$stmtMember = $db->prepare('SELECT 1 FROM usuario_grupos WHERE usuario_id = :usuario_id AND grupo_id = :grupo_id LIMIT 1');
+				$stmtMember->execute([
+					'usuario_id' => $asignadoA,
+					'grupo_id' => $grupoId,
+				]);
+				if (!$stmtMember->fetchColumn()) {
+					set_flash('error', 'El agente seleccionado no pertenece al grupo elegido.');
+					redirect($this->buildTicketShowRedirect($ticketId, $return));
+				}
+			}
+
 			$stmt = $db->prepare("UPDATE tickets SET
 				estado_id    = :estado_id,
 				prioridad_id = :prioridad_id,
@@ -1314,6 +1413,88 @@ class TicketController extends Controller
 			'valid' => array_values($valid),
 			'invalid' => array_values(array_unique($invalid)),
 		];
+	}
+
+	private function ensureUserNotificationsTable(PDO $db): void
+	{
+		$db->exec("CREATE TABLE IF NOT EXISTS user_notifications (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			user_id INT NOT NULL,
+			title VARCHAR(180) NOT NULL,
+			message TEXT NOT NULL,
+			url VARCHAR(500) NULL,
+			type VARCHAR(50) NOT NULL DEFAULT 'info',
+			is_read TINYINT(1) NOT NULL DEFAULT 0,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_user_notifications_user_read (user_id, is_read),
+			INDEX idx_user_notifications_created (created_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+	}
+
+	private function extractMentionUserIds(string $text, PDO $db, int $excludeUserId = 0): array
+	{
+		if (!preg_match_all('/@([a-zA-Z0-9._-]{2,80})/u', $text, $matches)) {
+			return [];
+		}
+
+		$tokens = array_values(array_unique(array_map(static function ($value): string {
+			return strtolower(trim((string) $value));
+		}, (array) ($matches[1] ?? []))));
+		$tokens = array_values(array_filter($tokens, static fn($token) => $token !== ''));
+		if (empty($tokens)) {
+			return [];
+		}
+
+		$rows = $db->query("SELECT id, nombre, email FROM usuarios WHERE estado = 'activo'")->fetchAll() ?: [];
+		$ids = [];
+		foreach ($rows as $row) {
+			$userId = (int) ($row['id'] ?? 0);
+			if ($userId <= 0 || ($excludeUserId > 0 && $userId === $excludeUserId)) {
+				continue;
+			}
+
+			$nameKey = strtolower(trim((string) ($row['nombre'] ?? '')));
+			$email = strtolower(trim((string) ($row['email'] ?? '')));
+			$emailLocal = $email !== '' ? strtolower(trim((string) strtok($email, '@'))) : '';
+			if (in_array($nameKey, $tokens, true) || ($emailLocal !== '' && in_array($emailLocal, $tokens, true))) {
+				$ids[$userId] = $userId;
+			}
+		}
+
+		return array_values($ids);
+	}
+
+	private function createMentionNotifications(PDO $db, array $userIds, string $title, string $message, string $url): void
+	{
+		if (empty($userIds)) {
+			return;
+		}
+
+		$stmt = $db->prepare('INSERT INTO user_notifications (user_id, title, message, url, type, is_read, created_at)
+			VALUES (:user_id, :title, :message, :url, :type, 0, NOW())');
+		foreach ($userIds as $userId) {
+			$uid = (int) $userId;
+			if ($uid <= 0) {
+				continue;
+			}
+			$stmt->execute([
+				'user_id' => $uid,
+				'title' => mb_substr($title, 0, 180),
+				'message' => $message,
+				'url' => mb_substr($url, 0, 500),
+				'type' => 'mention',
+			]);
+		}
+	}
+
+	private function pathStartsWith($fullPath, $basePath): bool
+	{
+		if (!is_string($fullPath) || !is_string($basePath) || $fullPath === '' || $basePath === '') {
+			return false;
+		}
+		$normalizedFull = strtolower(str_replace('\\\\', '/', $fullPath));
+		$normalizedBase = rtrim(strtolower(str_replace('\\\\', '/', $basePath)), '/');
+		return str_starts_with($normalizedFull, $normalizedBase . '/') || $normalizedFull === $normalizedBase;
 	}
 
 	private function sanitizeRichText(string $html): string

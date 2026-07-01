@@ -1087,6 +1087,10 @@ document.addEventListener('DOMContentLoaded', () => {
 								<textarea id="internalNoteText" class="form-control" rows="2" placeholder="Escribe una nota interna del seguimiento CRM..."></textarea>
 								<button type="button" class="btn btn-outline-primary" id="addInternalNoteBtn">Guardar nota</button>
 							</div>
+							<div class="mt-2">
+								<input type="file" id="internalNoteAttachments" class="form-control form-control-sm" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip,.rar">
+								<div id="internalNoteAttachmentsList" class="small text-muted mt-1"></div>
+							</div>
 							<div id="internalNoteStatus" class="small mt-2 text-muted"></div>
 						</div>
 						<div id="internalNotesList" style="max-height: 320px; overflow-y: auto;">
@@ -1139,6 +1143,38 @@ document.addEventListener('DOMContentLoaded', () => {
 		loadStudentNotes(entityId);
 
 		const addNoteBtn = document.getElementById('addInternalNoteBtn');
+		const noteAttachmentsInput = document.getElementById('internalNoteAttachments');
+		const noteAttachmentsList = document.getElementById('internalNoteAttachmentsList');
+
+		const renderSelectedNoteFiles = () => {
+			if (!noteAttachmentsInput || !noteAttachmentsList) return;
+			const files = Array.from(noteAttachmentsInput.files || []);
+			if (files.length === 0) {
+				noteAttachmentsList.innerHTML = '';
+				return;
+			}
+			noteAttachmentsList.innerHTML = files.map((file, index) => {
+				const safeName = escapeHtml(file.name || `archivo-${index + 1}`);
+				return `<button type="button" class="btn btn-sm btn-outline-secondary me-1 mb-1 crm-note-file-chip" data-file-index="${index}">${safeName} &times;</button>`;
+			}).join('');
+			noteAttachmentsList.querySelectorAll('.crm-note-file-chip').forEach((btn) => {
+				btn.addEventListener('click', () => {
+					if (!noteAttachmentsInput) return;
+					const removeIndex = Number(btn.getAttribute('data-file-index') || -1);
+					if (removeIndex < 0) return;
+					const dt = new DataTransfer();
+					Array.from(noteAttachmentsInput.files || []).forEach((file, currentIndex) => {
+						if (currentIndex !== removeIndex) dt.items.add(file);
+					});
+					noteAttachmentsInput.files = dt.files;
+					renderSelectedNoteFiles();
+				});
+			});
+		};
+
+		if (noteAttachmentsInput) {
+			noteAttachmentsInput.addEventListener('change', renderSelectedNoteFiles);
+		}
 		if (addNoteBtn) {
 			addNoteBtn.addEventListener('click', async () => {
 				const noteInput = document.getElementById('internalNoteText');
@@ -1160,14 +1196,15 @@ document.addEventListener('DOMContentLoaded', () => {
 						statusBox.textContent = 'Guardando nota...';
 					}
 
-					const payload = new URLSearchParams({
-						student_id: String(entityId),
-						note_text: noteText,
+					const payload = new FormData();
+					payload.append('student_id', String(entityId));
+					payload.append('note_text', noteText);
+					Array.from(noteAttachmentsInput?.files || []).forEach((file) => {
+						payload.append('attachments[]', file);
 					});
 
 					const response = await fetch(`${BASE_URL}crm/addStudentNote`, {
 						method: 'POST',
-						headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
 						body: payload,
 					});
 					const data = await response.json();
@@ -1177,6 +1214,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
 					if (noteInput) {
 						noteInput.value = '';
+					}
+					if (noteAttachmentsInput) {
+						noteAttachmentsInput.value = '';
+						renderSelectedNoteFiles();
 					}
 					if (statusBox) {
 						statusBox.className = 'small mt-2 text-success';
@@ -1744,12 +1785,26 @@ document.addEventListener('DOMContentLoaded', () => {
 				? parsedDate.toLocaleString('es-ES')
 				: '-';
 
+			const noteId = Number(note.id || 0);
+			const attachments = Array.isArray(note.attachments) ? note.attachments : [];
+			const attachmentsHtml = attachments.length > 0
+				? `<div class="mt-2">${attachments.map((att) => {
+					const attId = Number(att.id || 0);
+					const attName = escapeHtml(att.filename || 'Adjunto');
+					return `<a class="btn btn-sm btn-outline-secondary me-1 mb-1" href="${BASE_URL}crm/note-attachment/${attId}"><i class="bi bi-paperclip"></i> ${attName}</a>`;
+				}).join('')}</div>`
+				: '';
+
 			html += `
 				<div class="list-group-item">
 					<div class="d-flex justify-content-between align-items-start gap-2">
 						<div>
 							<div class="fw-semibold">${escapeHtml(userName)}</div>
 							<div>${escapeHtml(noteText)}</div>
+							${attachmentsHtml}
+							<div class="mt-2">
+								<button type="button" class="btn btn-sm btn-outline-primary crm-note-edit-btn" data-note-id="${noteId}" data-note-text="${escapeHtml(noteText)}">Editar</button>
+							</div>
 						</div>
 						<small class="text-muted text-nowrap">${escapeHtml(dateLabel)}</small>
 					</div>
@@ -1759,6 +1814,39 @@ document.addEventListener('DOMContentLoaded', () => {
 		html += '</div>';
 
 		container.innerHTML = html;
+		container.querySelectorAll('.crm-note-edit-btn').forEach((button) => {
+			button.addEventListener('click', async () => {
+				const noteId = Number(button.getAttribute('data-note-id') || 0);
+				const currentText = String(button.getAttribute('data-note-text') || '');
+				if (noteId <= 0) return;
+				const nextText = window.prompt('Editar nota interna:', currentText);
+				if (nextText === null) return;
+				const finalText = String(nextText).trim();
+				if (finalText === '') {
+					window.showGlobalNotification('La nota no puede quedar vacía.', 'warning');
+					return;
+				}
+				try {
+					const payload = new URLSearchParams({
+						note_id: String(noteId),
+						note_text: finalText,
+					});
+					const response = await fetch(`${BASE_URL}crm/updateStudentNote`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+						body: payload,
+					});
+					const data = await response.json();
+					if (!response.ok || !data.success) {
+						throw new Error(data.error || 'No se pudo editar la nota.');
+					}
+					await loadStudentNotes(entityId);
+					window.showGlobalNotification('Nota actualizada.', 'success');
+				} catch (error) {
+					window.showGlobalNotification(error.message || 'Error al actualizar nota.', 'danger');
+				}
+			});
+		});
 	};
 
 	const renderTickets = (tickets) => {

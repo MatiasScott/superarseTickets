@@ -386,7 +386,162 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 
 		if (replyEditor) {
+		const bootNoteEditing = () => {
+			const buttons = Array.from(document.querySelectorAll('[data-ticket-note-edit-btn="true"]'));
+			if (!buttons.length) return;
+
+			buttons.forEach((btn) => {
+				btn.addEventListener('click', () => {
+					const noteId = Number(btn.getAttribute('data-ticket-note-id') || 0);
+					const currentHtml = String(btn.getAttribute('data-ticket-note-html') || '');
+					if (!noteId) return;
+
+					const temp = document.createElement('textarea');
+					temp.innerHTML = currentHtml;
+					const currentText = temp.value.replace(/<[^>]+>/g, '').trim();
+					const nextText = window.prompt('Editar nota interna:', currentText);
+					if (nextText === null) return;
+					const finalText = String(nextText || '').trim();
+					if (!finalText) {
+						window.alert('La nota no puede quedar vacia.');
+						return;
+					}
+
+					const ticketPath = (window.location.pathname || '').replace(/\/$/, '');
+					const form = document.createElement('form');
+					form.method = 'POST';
+					form.action = `${ticketPath}/note/${noteId}`;
+
+					const csrf = document.querySelector('input[name="_token"]');
+					if (csrf && csrf.value) {
+						const tokenInput = document.createElement('input');
+						tokenInput.type = 'hidden';
+						tokenInput.name = '_token';
+						tokenInput.value = csrf.value;
+						form.appendChild(tokenInput);
+					}
+
+					const msgInput = document.createElement('input');
+					msgInput.type = 'hidden';
+					msgInput.name = 'mensaje';
+					msgInput.value = finalText;
+					form.appendChild(msgInput);
+
+					const returnInput = document.createElement('input');
+					returnInput.type = 'hidden';
+					returnInput.name = 'return';
+					returnInput.value = window.location.href;
+					form.appendChild(returnInput);
+
+					document.body.appendChild(form);
+					form.submit();
+				});
+			});
+		};
+
+		const bootNoteAttachments = () => {
+			const dropzone = document.getElementById('note-dropzone');
+			const input = document.getElementById('note-attachments');
+			const list = document.getElementById('note-attachments-list');
+			if (!dropzone || !input || !list) return;
+
+			const render = () => {
+				const files = Array.from(input.files || []);
+				if (!files.length) {
+					list.innerHTML = '';
+					return;
+				}
+				list.innerHTML = files.map((file, idx) => {
+					const safeName = String(file.name || `archivo-${idx + 1}`).replace(/[<>"]/g, '');
+					return `<button type="button" class="compose-attachment-chip" data-remove-note-file="${idx}">${safeName} <span aria-hidden="true">&times;</span></button>`;
+				}).join('');
+
+				Array.from(list.querySelectorAll('[data-remove-note-file]')).forEach((chip) => {
+					chip.addEventListener('click', () => {
+						const removeIdx = Number(chip.getAttribute('data-remove-note-file') || -1);
+						if (removeIdx < 0) return;
+						const dt = new DataTransfer();
+						Array.from(input.files || []).forEach((file, i) => {
+							if (i !== removeIdx) dt.items.add(file);
+						});
+						input.files = dt.files;
+						render();
+					});
+				});
+			};
+
+			const openPicker = () => input.click();
+			dropzone.addEventListener('click', openPicker);
+			dropzone.addEventListener('keydown', (e) => {
+				if (e.key === 'Enter' || e.key === ' ') {
+					e.preventDefault();
+					openPicker();
+				}
+			});
+
+			['dragenter', 'dragover'].forEach((eventName) => {
+				dropzone.addEventListener(eventName, (e) => {
+					e.preventDefault();
+					dropzone.classList.add('is-dragover');
+				});
+			});
+			['dragleave', 'drop'].forEach((eventName) => {
+				dropzone.addEventListener(eventName, (e) => {
+					e.preventDefault();
+					if (eventName !== 'drop') {
+						dropzone.classList.remove('is-dragover');
+					}
+				});
+			});
+
+			dropzone.addEventListener('drop', (e) => {
+				dropzone.classList.remove('is-dragover');
+				const dropped = e.dataTransfer?.files;
+				if (!dropped || !dropped.length) return;
+				const dt = new DataTransfer();
+				Array.from(input.files || []).forEach((f) => dt.items.add(f));
+				Array.from(dropped).forEach((f) => dt.items.add(f));
+				input.files = dt.files;
+				render();
+			});
+
+			input.addEventListener('change', render);
+			render();
+		};
+
+		const bootAgentFilterByGroup = () => {
+			const groupSelect = document.querySelector('select[name="grupo_id"]');
+			const agentSelect = document.querySelector('select[data-ticket-agente-select="true"]');
+			if (!groupSelect || !agentSelect) return;
+
+			const options = Array.from(agentSelect.querySelectorAll('option'));
+			const applyFilter = () => {
+				const groupId = Number(groupSelect.value || 0);
+				options.forEach((opt, idx) => {
+					if (idx === 0) {
+						opt.hidden = false;
+						opt.disabled = false;
+						return;
+					}
+					const raw = String(opt.getAttribute('data-grupo-ids') || '');
+					const ids = raw.split(',').map((n) => Number(String(n).trim())).filter((n) => n > 0);
+					const visible = groupId <= 0 ? true : ids.includes(groupId);
+					opt.hidden = !visible;
+					opt.disabled = !visible;
+					if (!visible && opt.selected) {
+						agentSelect.value = '';
+					}
+				});
+			};
+
+			groupSelect.addEventListener('change', applyFilter);
+			applyFilter();
+		};
+
 			replyEditor.addEventListener('dragover', (event) => {
+	    bootNoteEditing();
+	    bootNoteAttachments();
+	    bootAgentFilterByGroup();
 				event.preventDefault();
 			});
 

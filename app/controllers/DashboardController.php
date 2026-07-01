@@ -76,6 +76,7 @@ class DashboardController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
+			$this->ensureUserNotificationsTable($db);
 
 			$countSql = "SELECT COUNT(*)
 				FROM tickets t
@@ -94,7 +95,12 @@ class DashboardController extends Controller
 
 			$countStmt = $db->prepare($countSql);
 			$countStmt->execute(['user_id' => $userId]);
-			$total = (int) $countStmt->fetchColumn();
+			$ticketTotal = (int) $countStmt->fetchColumn();
+
+			$customCountStmt = $db->prepare("SELECT COUNT(*) FROM user_notifications WHERE user_id = :user_id AND is_read = 0");
+			$customCountStmt->execute(['user_id' => $userId]);
+			$customTotal = (int) $customCountStmt->fetchColumn();
+			$total = $ticketTotal + $customTotal;
 
 			$listSql = "SELECT
 					t.id,
@@ -160,7 +166,7 @@ class DashboardController extends Controller
 				}
 
 				$items[] = [
-					'id' => (int) ($row['id'] ?? 0),
+					'id' => 'ticket-' . (int) ($row['id'] ?? 0),
 					'title' => $title,
 					'message' => $message,
 					'type' => $type,
@@ -168,6 +174,30 @@ class DashboardController extends Controller
 					'url' => base_url('tickets/' . (int) ($row['id'] ?? 0)),
 				];
 			}
+
+			$customStmt = $db->prepare("SELECT id, title, message, type, url, created_at
+				FROM user_notifications
+				WHERE user_id = :user_id AND is_read = 0
+				ORDER BY created_at DESC, id DESC
+				LIMIT 8");
+			$customStmt->execute(['user_id' => $userId]);
+			foreach ($customStmt->fetchAll() ?: [] as $row) {
+				$items[] = [
+					'id' => 'custom-' . (int) ($row['id'] ?? 0),
+					'title' => trim((string) ($row['title'] ?? 'Notificación')),
+					'message' => trim((string) ($row['message'] ?? '')),
+					'type' => trim((string) ($row['type'] ?? 'info')),
+					'created_at' => (string) ($row['created_at'] ?? ''),
+					'url' => trim((string) ($row['url'] ?? base_url('dashboard'))),
+				];
+			}
+
+			usort($items, static function (array $a, array $b): int {
+				$left = strtotime((string) ($a['created_at'] ?? '')) ?: 0;
+				$right = strtotime((string) ($b['created_at'] ?? '')) ?: 0;
+				return $right <=> $left;
+			});
+			$items = array_slice($items, 0, 8);
 
 			echo json_encode([
 				'ok' => true,
@@ -198,6 +228,22 @@ class DashboardController extends Controller
 		} catch (Throwable $e) {
 			return [];
 		}
+	}
+
+	private function ensureUserNotificationsTable(PDO $db): void
+	{
+		$db->exec("CREATE TABLE IF NOT EXISTS user_notifications (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			user_id INT NOT NULL,
+			title VARCHAR(180) NOT NULL,
+			message TEXT NOT NULL,
+			url VARCHAR(500) NULL,
+			type VARCHAR(50) NOT NULL DEFAULT 'info',
+			is_read TINYINT(1) NOT NULL DEFAULT 0,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_user_notifications_user_read (user_id, is_read),
+			INDEX idx_user_notifications_created (created_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 	}
 
 	private function buildTicketMetrics(PDO $db): array

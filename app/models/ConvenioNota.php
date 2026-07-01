@@ -25,4 +25,19 @@ class ConvenioNota extends Model
             'nota' => trim($nota),
         ]);
     }
+
+    public function updateNota(int $convenioId, int $notaId, string $nota): bool
+    {
+        $sql = "UPDATE convenio_notas
+            SET nota = :nota, updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id AND convenio_id = :convenio_id";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([
+            'nota' => trim($nota),
+            'id' => $notaId,
+            'convenio_id' => $convenioId,
+        ]);
+
+        return $stmt->rowCount() > 0;
+    }
 }

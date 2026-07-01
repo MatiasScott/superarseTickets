@@ -1248,6 +1248,20 @@ class CRMController extends Controller
 				INDEX idx_created_at (created_at)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
+			$db->exec("CREATE TABLE IF NOT EXISTS crm_student_note_adjuntos (
+				id BIGINT AUTO_INCREMENT PRIMARY KEY,
+				note_id BIGINT NOT NULL,
+				student_id INT NOT NULL,
+				filename_original VARCHAR(255) NOT NULL,
+				filename_storage VARCHAR(255) NOT NULL,
+				mime VARCHAR(120) NOT NULL,
+				size_bytes INT NOT NULL DEFAULT 0,
+				storage_path VARCHAR(600) NOT NULL,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				INDEX idx_crm_note_adjuntos_note (note_id),
+				INDEX idx_crm_note_adjuntos_student (student_id)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
 			$db->exec("CREATE TABLE IF NOT EXISTS tipo_tarea_convenios (
 				id INT AUTO_INCREMENT PRIMARY KEY,
 				nombre VARCHAR(150) NOT NULL,
@@ -2851,6 +2865,7 @@ class CRMController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
+			$this->ensureCrmSupportTables();
 			$sql = "SELECT csn.id, csn.note_text, csn.created_at, csn.created_by, u.nombre AS user_name
 					FROM crm_student_notes csn
 					LEFT JOIN usuarios u ON u.id = csn.created_by
@@ -2859,6 +2874,39 @@ class CRMController extends Controller
 			$stmt = $db->prepare($sql);
 			$stmt->execute([':student_id' => $studentId]);
 			$notes = $stmt->fetchAll() ?: [];
+
+			$attachmentsMap = [];
+			if (!empty($notes)) {
+				$noteIds = array_values(array_filter(array_map(static fn($row) => (int) ($row['id'] ?? 0), $notes)));
+				if (!empty($noteIds)) {
+					$placeholders = implode(',', array_fill(0, count($noteIds), '?'));
+					$stmtAdj = $db->prepare("SELECT id, note_id, filename_original, mime, size_bytes
+						FROM crm_student_note_adjuntos
+						WHERE note_id IN ($placeholders)
+						ORDER BY id ASC");
+					$stmtAdj->execute($noteIds);
+					foreach (($stmtAdj->fetchAll() ?: []) as $adjRow) {
+						$noteId = (int) ($adjRow['note_id'] ?? 0);
+						if ($noteId <= 0) {
+							continue;
+						}
+						if (!isset($attachmentsMap[$noteId])) {
+							$attachmentsMap[$noteId] = [];
+						}
+						$attachmentsMap[$noteId][] = [
+							'id' => (int) ($adjRow['id'] ?? 0),
+							'filename' => (string) ($adjRow['filename_original'] ?? 'Adjunto'),
+							'mime' => (string) ($adjRow['mime'] ?? 'application/octet-stream'),
+							'size' => (int) ($adjRow['size_bytes'] ?? 0),
+						];
+					}
+				}
+			}
+
+			foreach ($notes as $idx => $note) {
+				$noteId = (int) ($note['id'] ?? 0);
+				$notes[$idx]['attachments'] = $attachmentsMap[$noteId] ?? [];
+			}
 
 			echo json_encode([
 				'success' => true,
@@ -2887,6 +2935,8 @@ class CRMController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
+			$this->ensureCrmSupportTables();
+			$this->ensureUserNotificationsTable($db);
 			$currentUserId = $this->currentUserId();
 			$sql = "INSERT INTO crm_student_notes (student_id, source_type, note_text, created_by, created_at)
 					VALUES (:student_id, 'note', :note_text, :user_id, NOW())";
@@ -2898,6 +2948,19 @@ class CRMController extends Controller
 			]);
 
 			$noteId = (int) $db->lastInsertId();
+			$uploadErrors = $this->storeCrmNoteAttachments($db, $studentId, $noteId, $_FILES['attachments'] ?? null);
+
+			$mentionIds = $this->extractMentionUserIds($noteText, $db, $currentUserId);
+			if (!empty($mentionIds)) {
+				$this->createMentionNotifications(
+					$db,
+					$mentionIds,
+					'Mención en nota CRM',
+					'Te mencionaron en una nota del CRM.',
+					base_url('crm/interesados')
+				);
+			}
+
 			$userName = 'Usuario';
 			try {
 				$userStmt = $db->prepare('SELECT nombre FROM usuarios WHERE id = :id LIMIT 1');
@@ -2916,6 +2979,7 @@ class CRMController extends Controller
 				'note_text' => $noteText,
 				'created_at' => date('Y-m-d H:i:s'),
 				'user_name' => $userName,
+				'attachment_errors' => $uploadErrors,
 			]);
 		} catch (Throwable $e) {
 			http_response_code(500);
@@ -2940,11 +3004,13 @@ class CRMController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
+			$this->ensureCrmSupportTables();
+			$this->ensureUserNotificationsTable($db);
 			
 			// Verificar que la nota existe y pertenece al usuario actual o es admin
 			$note = $db->prepare("SELECT id, created_by FROM crm_student_notes WHERE id = :id AND source_type = 'note'")
 				->execute([':id' => $noteId]);
-			$stmt = $db->prepare("SELECT id, created_by FROM crm_student_notes WHERE id = :id AND source_type = 'note'");
+			$stmt = $db->prepare("SELECT id, created_by, student_id FROM crm_student_notes WHERE id = :id AND source_type = 'note'");
 			$stmt->execute([':id' => $noteId]);
 			$note = $stmt->fetch();
 
@@ -2959,6 +3025,22 @@ class CRMController extends Controller
 				':note_text' => $noteText,
 				':id' => $noteId,
 			]);
+
+			$studentIdForNote = (int) ($note['student_id'] ?? 0);
+			if ($studentIdForNote > 0) {
+				$this->storeCrmNoteAttachments($db, $studentIdForNote, $noteId, $_FILES['attachments'] ?? null);
+			}
+
+			$mentionIds = $this->extractMentionUserIds($noteText, $db, $this->currentUserId());
+			if (!empty($mentionIds)) {
+				$this->createMentionNotifications(
+					$db,
+					$mentionIds,
+					'Mención en nota CRM',
+					'Te mencionaron en una nota editada del CRM.',
+					base_url('crm/interesados')
+				);
+			}
 
 			echo json_encode([
 				'success' => true,
@@ -2976,41 +3058,239 @@ class CRMController extends Controller
 	{
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
+		http_response_code(405);
+		echo json_encode([
+			'success' => false,
+			'error' => 'La eliminación de notas está deshabilitada. Puedes editar la nota.',
+		]);
+		exit;
+	}
 
-		$noteId = max(0, (int) ($_POST['note_id'] ?? 0));
-
-		if ($noteId <= 0) {
+	public function noteAttachment(string $id): void
+	{
+		Auth::requireAuth();
+		$attachmentId = (int) $id;
+		if ($attachmentId <= 0) {
 			http_response_code(400);
-			echo json_encode(['success' => false, 'error' => 'ID inválido']);
-			exit;
+			echo 'Adjunto invalido.';
+			return;
 		}
 
 		try {
 			$db = Database::getInstance()->connection();
-			
-			// Verificar que la nota existe
-			$stmt = $db->prepare("SELECT id FROM crm_student_notes WHERE id = :id AND source_type = 'note'");
-			$stmt->execute([':id' => $noteId]);
-			$note = $stmt->fetch();
-
-			if (!$note) {
-				throw new RuntimeException('Nota no encontrada');
+			$this->ensureCrmSupportTables();
+			$stmt = $db->prepare('SELECT filename_original, mime, size_bytes, storage_path FROM crm_student_note_adjuntos WHERE id = :id LIMIT 1');
+			$stmt->execute(['id' => $attachmentId]);
+			$row = $stmt->fetch() ?: null;
+			if (!is_array($row)) {
+				http_response_code(404);
+				echo 'Adjunto no encontrado.';
+				return;
 			}
 
-			// Eliminar nota
-			$sql = "DELETE FROM crm_student_notes WHERE id = :id";
-			$stmt = $db->prepare($sql);
-			$stmt->execute([':id' => $noteId]);
+			$fullPath = (string) ($row['storage_path'] ?? '');
+			if ($fullPath === '' || !is_file($fullPath)) {
+				http_response_code(404);
+				echo 'Archivo adjunto no disponible.';
+				return;
+			}
 
-			echo json_encode([
-				'success' => true,
-				'message' => 'Nota eliminada correctamente',
-			]);
+			$basePath = realpath(ROOT_PATH . '/uploads/crm-notes');
+			$realFile = realpath($fullPath);
+			$insideAllowed = $this->pathStartsWith($realFile, $basePath);
+			if (!$insideAllowed) {
+				http_response_code(403);
+				echo 'Acceso denegado al adjunto.';
+				return;
+			}
+
+			$filename = (string) ($row['filename_original'] ?? 'adjunto.bin');
+			$mime = (string) ($row['mime'] ?? 'application/octet-stream');
+			$size = (int) ($row['size_bytes'] ?? filesize($realFile));
+
+			header('Content-Type: ' . $mime);
+			header('Content-Length: ' . $size);
+			header('Content-Disposition: attachment; filename="' . addslashes($filename) . '"');
+			readfile($realFile);
 		} catch (Throwable $e) {
 			http_response_code(500);
-			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+			echo 'No se pudo servir el adjunto.';
 		}
-		exit;
+	}
+
+	private function storeCrmNoteAttachments(PDO $db, int $studentId, int $noteId, $rawFiles): array
+	{
+		$errors = [];
+		if ($studentId <= 0 || $noteId <= 0 || !is_array($rawFiles) || !isset($rawFiles['name'])) {
+			return $errors;
+		}
+
+		$files = [];
+		if (!is_array($rawFiles['name'])) {
+			$files[] = $rawFiles;
+		} else {
+			$count = count($rawFiles['name']);
+			for ($i = 0; $i < $count; $i++) {
+				$files[] = [
+					'name' => $rawFiles['name'][$i] ?? '',
+					'type' => $rawFiles['type'][$i] ?? '',
+					'tmp_name' => $rawFiles['tmp_name'][$i] ?? '',
+					'error' => $rawFiles['error'][$i] ?? UPLOAD_ERR_NO_FILE,
+					'size' => $rawFiles['size'][$i] ?? 0,
+				];
+			}
+		}
+
+		$allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar'];
+		$maxBytes = 15 * 1024 * 1024;
+		$uploadDir = ROOT_PATH . '/uploads/crm-notes/' . $studentId . '/' . $noteId;
+		if (!is_dir($uploadDir) && !@mkdir($uploadDir, 0775, true) && !is_dir($uploadDir)) {
+			return ['No se pudo crear el directorio de adjuntos.'];
+		}
+
+		$finfo = function_exists('finfo_open') ? finfo_open(FILEINFO_MIME_TYPE) : null;
+		foreach ($files as $file) {
+			$errorCode = (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE);
+			if ($errorCode === UPLOAD_ERR_NO_FILE) {
+				continue;
+			}
+			if ($errorCode !== UPLOAD_ERR_OK) {
+				$errors[] = 'Archivo no válido (código ' . $errorCode . ').';
+				continue;
+			}
+
+			$tmpName = (string) ($file['tmp_name'] ?? '');
+			$origName = trim((string) ($file['name'] ?? 'adjunto'));
+			$size = (int) ($file['size'] ?? 0);
+			if ($tmpName === '' || !is_uploaded_file($tmpName)) {
+				$errors[] = 'No se recibió correctamente el archivo ' . $origName . '.';
+				continue;
+			}
+			if ($size <= 0 || $size > $maxBytes) {
+				$errors[] = 'El archivo ' . $origName . ' supera 15MB o está vacío.';
+				continue;
+			}
+
+			$ext = strtolower((string) pathinfo($origName, PATHINFO_EXTENSION));
+			if (!in_array($ext, $allowedExtensions, true)) {
+				$errors[] = 'Tipo de archivo no permitido: ' . $origName . '.';
+				continue;
+			}
+
+			$mime = 'application/octet-stream';
+			if ($finfo !== null) {
+				$detected = finfo_file($finfo, $tmpName);
+				if (is_string($detected) && $detected !== '') {
+					$mime = $detected;
+				}
+			}
+
+			$storageName = bin2hex(random_bytes(16)) . ($ext !== '' ? ('.' . $ext) : '');
+			$targetPath = $uploadDir . '/' . $storageName;
+			if (!move_uploaded_file($tmpName, $targetPath)) {
+				$errors[] = 'No se pudo almacenar el archivo ' . $origName . '.';
+				continue;
+			}
+
+			$stmt = $db->prepare('INSERT INTO crm_student_note_adjuntos (note_id, student_id, filename_original, filename_storage, mime, size_bytes, storage_path, created_at)
+				VALUES (:note_id, :student_id, :filename_original, :filename_storage, :mime, :size_bytes, :storage_path, NOW())');
+			$stmt->execute([
+				'note_id' => $noteId,
+				'student_id' => $studentId,
+				'filename_original' => substr($origName, 0, 255),
+				'filename_storage' => $storageName,
+				'mime' => substr($mime, 0, 120),
+				'size_bytes' => $size,
+				'storage_path' => $targetPath,
+			]);
+		}
+
+		if ($finfo !== null) {
+			finfo_close($finfo);
+		}
+
+		return $errors;
+	}
+
+	private function ensureUserNotificationsTable(PDO $db): void
+	{
+		$db->exec("CREATE TABLE IF NOT EXISTS user_notifications (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			user_id INT NOT NULL,
+			title VARCHAR(180) NOT NULL,
+			message TEXT NOT NULL,
+			url VARCHAR(500) NULL,
+			type VARCHAR(50) NOT NULL DEFAULT 'info',
+			is_read TINYINT(1) NOT NULL DEFAULT 0,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_user_notifications_user_read (user_id, is_read),
+			INDEX idx_user_notifications_created (created_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+	}
+
+	private function extractMentionUserIds(string $text, PDO $db, int $excludeUserId = 0): array
+	{
+		if (!preg_match_all('/@([a-zA-Z0-9._-]{2,80})/u', $text, $matches)) {
+			return [];
+		}
+
+		$tokens = array_values(array_unique(array_map(static function ($value): string {
+			return strtolower(trim((string) $value));
+		}, (array) ($matches[1] ?? []))));
+		$tokens = array_values(array_filter($tokens, static fn($token) => $token !== ''));
+		if (empty($tokens)) {
+			return [];
+		}
+
+		$rows = $db->query("SELECT id, nombre, email FROM usuarios WHERE estado = 'activo'")->fetchAll() ?: [];
+		$ids = [];
+		foreach ($rows as $row) {
+			$userId = (int) ($row['id'] ?? 0);
+			if ($userId <= 0 || ($excludeUserId > 0 && $userId === $excludeUserId)) {
+				continue;
+			}
+			$nameKey = strtolower(trim((string) ($row['nombre'] ?? '')));
+			$email = strtolower(trim((string) ($row['email'] ?? '')));
+			$emailLocal = $email !== '' ? strtolower(trim((string) strtok($email, '@'))) : '';
+			if (in_array($nameKey, $tokens, true) || ($emailLocal !== '' && in_array($emailLocal, $tokens, true))) {
+				$ids[$userId] = $userId;
+			}
+		}
+
+		return array_values($ids);
+	}
+
+	private function createMentionNotifications(PDO $db, array $userIds, string $title, string $message, string $url): void
+	{
+		if (empty($userIds)) {
+			return;
+		}
+
+		$stmt = $db->prepare('INSERT INTO user_notifications (user_id, title, message, url, type, is_read, created_at)
+			VALUES (:user_id, :title, :message, :url, :type, 0, NOW())');
+		foreach ($userIds as $userId) {
+			$uid = (int) $userId;
+			if ($uid <= 0) {
+				continue;
+			}
+			$stmt->execute([
+				'user_id' => $uid,
+				'title' => mb_substr($title, 0, 180),
+				'message' => $message,
+				'url' => mb_substr($url, 0, 500),
+				'type' => 'mention',
+			]);
+		}
+	}
+
+	private function pathStartsWith($fullPath, $basePath): bool
+	{
+		if (!is_string($fullPath) || !is_string($basePath) || $fullPath === '' || $basePath === '') {
+			return false;
+		}
+		$normalizedFull = strtolower(str_replace('\\', '/', $fullPath));
+		$normalizedBase = rtrim(strtolower(str_replace('\\', '/', $basePath)), '/');
+		return str_starts_with($normalizedFull, $normalizedBase . '/') || $normalizedFull === $normalizedBase;
 	}
 
 	public function getCRMPipelineHistory(): void
