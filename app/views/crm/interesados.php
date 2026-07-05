@@ -395,6 +395,7 @@
 					<table class="table table-hover align-middle mb-0" id="crmProspectsTable">
 						<thead>
 							<tr>
+								<th>#</th>
 								<th>Contacto</th>
 								<th>Carrera</th>
 								<th>Etapa</th>
@@ -405,7 +406,7 @@
 							</tr>
 						</thead>
 						<tbody>
-							<?php foreach ($prospectosLocales as $prospecto): ?>
+							<?php foreach ($prospectosLocales as $index => $prospecto): ?>
 								<?php
 								$rawCreatedAt = trim((string) ($prospecto['created_at'] ?? ''));
 								$createdByRaw = trim((string) ($prospecto['creado_por'] ?? ''));
@@ -426,6 +427,7 @@
 								}
 								?>
 								<tr
+									data-prospect-index="<?= (int) ($index + 1) ?>"
 									data-prospect-origin="<?= e(strtolower((string) ($prospecto['origen'] ?? ''))) ?>"
 									data-prospect-stage="<?= e(strtolower((string) ($prospecto['etapa'] ?? ''))) ?>"
 									data-prospect-career="<?= e(strtolower((string) ($prospecto['carrera'] ?? ''))) ?>"
@@ -434,6 +436,7 @@
 									data-prospect-datetime="<?= e((string) ($prospecto['created_at'] ?? '')) ?>"
 									data-prospect-contact-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
 								>
+									<td data-prospect-row-num><?= (int) ($index + 1) ?></td>
 									<td>
 										<button
 											type="button"
@@ -481,7 +484,7 @@
 							<?php endforeach; ?>
 							<?php if (empty($prospectosLocales)): ?>
 								<tr>
-									<td colspan="7" class="text-center text-muted py-4">No hay clientes potenciales CRM creados todavia.</td>
+									<td colspan="8" class="text-center text-muted py-4">No hay clientes potenciales CRM creados todavia.</td>
 								</tr>
 							<?php endif; ?>
 						</tbody>
@@ -657,6 +660,55 @@
 			<div class="modal-footer">
 				<button type="button" class="btn btn-primary" id="saveStudentPipelineBtn" data-student-id="">Guardar pipeline</button>
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+<div class="modal fade" id="crmNoteEditModal" tabindex="-1" aria-hidden="true">
+	<div class="modal-dialog">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h5 class="modal-title">Editar nota interna</h5>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+			</div>
+			<div class="modal-body">
+				<input type="hidden" id="crmNoteEditId" value="">
+				<label for="crmNoteEditText" class="form-label">Contenido</label>
+				<textarea class="form-control" id="crmNoteEditText" rows="6" required></textarea>
+				<div class="mt-3">
+					<label class="form-label mb-1">Adjuntos actuales</label>
+					<div id="crmNoteEditAttachmentsList" class="small text-muted">Sin adjuntos.</div>
+				</div>
+				<div class="mt-3">
+					<label for="crmNoteEditNewAttachments" class="form-label">Agregar nuevos adjuntos</label>
+					<input type="file" class="form-control" id="crmNoteEditNewAttachments" multiple>
+					<small class="text-muted">Puedes subir archivos adicionales al guardar la edición.</small>
+				</div>
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+				<button type="button" class="btn btn-primary" id="crmNoteEditSubmit">Guardar cambios</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+<div class="modal fade" id="crmNoteDeleteModal" tabindex="-1" aria-hidden="true">
+	<div class="modal-dialog">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h5 class="modal-title">Eliminar nota interna</h5>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+			</div>
+			<div class="modal-body">
+				<input type="hidden" id="crmNoteDeleteId" value="">
+				<p class="mb-2">Esta acción eliminará la nota seleccionada.</p>
+				<div class="alert alert-warning py-2 mb-0" id="crmNoteDeletePreview">Nota sin contenido visible.</div>
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+				<button type="button" class="btn btn-danger" id="crmNoteDeleteSubmit">Eliminar</button>
 			</div>
 		</div>
 	</div>

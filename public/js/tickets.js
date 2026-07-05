@@ -385,56 +385,52 @@ document.addEventListener('DOMContentLoaded', () => {
 			});
 		}
 
-		if (replyEditor) {
 		const bootNoteEditing = () => {
 			const buttons = Array.from(document.querySelectorAll('[data-ticket-note-edit-btn="true"]'));
 			if (!buttons.length) return;
+			const modalEl = document.getElementById('ticketNoteEditModal');
+			const form = document.getElementById('ticketNoteEditForm');
+			const textarea = document.getElementById('ticketNoteEditText');
+			if (!modalEl || !form || !textarea) return;
 
 			buttons.forEach((btn) => {
 				btn.addEventListener('click', () => {
 					const noteId = Number(btn.getAttribute('data-ticket-note-id') || 0);
-					const currentHtml = String(btn.getAttribute('data-ticket-note-html') || '');
 					if (!noteId) return;
-
-					const temp = document.createElement('textarea');
-					temp.innerHTML = currentHtml;
-					const currentText = temp.value.replace(/<[^>]+>/g, '').trim();
-					const nextText = window.prompt('Editar nota interna:', currentText);
-					if (nextText === null) return;
-					const finalText = String(nextText || '').trim();
-					if (!finalText) {
-						window.alert('La nota no puede quedar vacia.');
-						return;
+					let currentText = '';
+					const messageCard = btn.closest('.message-card');
+					const messageBody = messageCard ? messageCard.querySelector('.message-body') : null;
+					if (messageBody) {
+						currentText = String(messageBody.innerText || messageBody.textContent || '').trim();
 					}
 
 					const ticketPath = (window.location.pathname || '').replace(/\/$/, '');
-					const form = document.createElement('form');
-					form.method = 'POST';
 					form.action = `${ticketPath}/note/${noteId}`;
-
-					const csrf = document.querySelector('input[name="_token"]');
-					if (csrf && csrf.value) {
-						const tokenInput = document.createElement('input');
-						tokenInput.type = 'hidden';
-						tokenInput.name = '_token';
-						tokenInput.value = csrf.value;
-						form.appendChild(tokenInput);
+					textarea.value = currentText;
+					if (!currentText) {
+						const fallback = String(btn.getAttribute('data-ticket-note-preview') || '').trim();
+						textarea.value = fallback;
 					}
+				});
+			});
+		};
 
-					const msgInput = document.createElement('input');
-					msgInput.type = 'hidden';
-					msgInput.name = 'mensaje';
-					msgInput.value = finalText;
-					form.appendChild(msgInput);
+		const bootNoteDeleteModal = () => {
+			const buttons = Array.from(document.querySelectorAll('[data-ticket-note-delete-btn="true"]'));
+			if (!buttons.length) return;
+			const modalEl = document.getElementById('ticketNoteDeleteModal');
+			const form = document.getElementById('ticketNoteDeleteForm');
+			const preview = document.getElementById('ticketNoteDeletePreview');
+			if (!modalEl || !form || !preview) return;
 
-					const returnInput = document.createElement('input');
-					returnInput.type = 'hidden';
-					returnInput.name = 'return';
-					returnInput.value = window.location.href;
-					form.appendChild(returnInput);
-
-					document.body.appendChild(form);
-					form.submit();
+			buttons.forEach((btn) => {
+				btn.addEventListener('click', () => {
+					const noteId = Number(btn.getAttribute('data-ticket-note-id') || 0);
+					if (!noteId) return;
+					const ticketPath = (window.location.pathname || '').replace(/\/$/, '');
+					form.action = `${ticketPath}/note/${noteId}/delete`;
+					const rawPreview = String(btn.getAttribute('data-ticket-note-preview') || '').trim();
+					preview.textContent = rawPreview !== '' ? rawPreview : 'Nota sin contenido visible.';
 				});
 			});
 		};
@@ -538,10 +534,8 @@ document.addEventListener('DOMContentLoaded', () => {
 			applyFilter();
 		};
 
+		if (replyEditor) {
 			replyEditor.addEventListener('dragover', (event) => {
-	    bootNoteEditing();
-	    bootNoteAttachments();
-	    bootAgentFilterByGroup();
 				event.preventDefault();
 			});
 
@@ -567,6 +561,11 @@ document.addEventListener('DOMContentLoaded', () => {
 				handleEditorFileDrop(files);
 			});
 		}
+
+		bootNoteEditing();
+		bootNoteDeleteModal();
+		bootNoteAttachments();
+		bootAgentFilterByGroup();
 
 		const setComposeMode = (mode) => {
 			const isReply = mode === 'reply';

@@ -388,7 +388,12 @@ class TicketController extends Controller
 			} catch (Throwable $eg) {
 				$grupos = $db->query("SELECT id, nombre FROM ticket_grupos ORDER BY nombre")->fetchAll() ?: [];
 			}
-			$usuarios = $db->query("SELECT id, nombre FROM usuarios WHERE estado = 'activo' ORDER BY nombre")->fetchAll() ?: [];
+			$usuarios = $db->query("SELECT u.id, u.nombre, GROUP_CONCAT(ug.grupo_id ORDER BY ug.grupo_id SEPARATOR ',') AS grupo_ids
+				FROM usuarios u
+				LEFT JOIN usuario_grupos ug ON ug.usuario_id = u.id
+				WHERE u.estado = 'activo'
+				GROUP BY u.id, u.nombre
+				ORDER BY u.nombre")->fetchAll() ?: [];
 
 			// Mensajes / notas / respuestas del ticket
 			$stmtM = $db->prepare("SELECT tm.*, u.nombre AS autor_nombre FROM ticket_mensajes tm LEFT JOIN usuarios u ON u.id = tm.usuario_id WHERE tm.ticket_id = :tid ORDER BY tm.fecha ASC");
@@ -666,9 +671,20 @@ class TicketController extends Controller
 				}
 			}
 
-			if (!$sent && !$hasThreadOrigin) {
+			$usedDirectFallback = false;
+			$usedDefaultAliasFallback = false;
+			if (!$sent) {
 				$mailService = new MailService();
 				$sent = $mailService->send($para, $asunto, $cuerpoHtml, $ccArr, [], $alias ?: null, [], $allMailAttachments);
+				$usedDirectFallback = $sent;
+
+				if (!$sent) {
+					$defaultAlias = trim((string) $mailService->getDefaultAlias());
+					if ($defaultAlias !== '' && $defaultAlias !== trim((string) $alias)) {
+						$sent = $mailService->send($para, $asunto, $cuerpoHtml, $ccArr, [], $defaultAlias, [], $allMailAttachments);
+						$usedDefaultAliasFallback = $sent;
+					}
+				}
 			}
 
 			if (!empty($threadMeta)) {
@@ -683,9 +699,17 @@ class TicketController extends Controller
 
 			if ($sent) {
 				if (!empty($allErrors)) {
-					set_flash('success', 'Respuesta enviada. Algunos archivos no se adjuntaron: ' . implode(' | ', $allErrors));
+					$msg = 'Respuesta enviada. Algunos archivos no se adjuntaron: ' . implode(' | ', $allErrors);
+					if ($usedDefaultAliasFallback) {
+						$msg .= ' Se usó la cuenta por defecto como respaldo para completar el envío.';
+					}
+					set_flash('success', $msg);
 				} else {
-					set_flash('success', 'Respuesta enviada correctamente.');
+					$msg = 'Respuesta enviada correctamente.';
+					if ($usedDirectFallback || $usedDefaultAliasFallback) {
+						$msg .= ' Se aplicó envío directo de respaldo para asegurar la salida del correo.';
+					}
+					set_flash('success', $msg);
 				}
 			} else {
 				if ($hasThreadOrigin) {
@@ -918,6 +942,7 @@ class TicketController extends Controller
 			}
 
 			$uid = (int) (Auth::id() ?? 0);
+			$actor = trim((string) (Auth::user()['nombre'] ?? 'Usuario'));
 			$mentionIds = $this->extractMentionUserIds(strip_tags($cuerpoHtml), $db, $uid);
 			if (!empty($mentionIds)) {
 				$this->createMentionNotifications(
@@ -929,9 +954,94 @@ class TicketController extends Controller
 				);
 			}
 
+			$traceStmt = $db->prepare("INSERT INTO ticket_mensajes
+				(tipo, mensaje, ticket_id, usuario_id, fecha)
+				VALUES ('nota', :mensaje, :ticket_id, :usuario_id, NOW())");
+			$traceStmt->execute([
+				'mensaje' => '<p><em>' . htmlspecialchars($actor, ENT_QUOTES, 'UTF-8') . ' editó la nota interna #' . (int) $messageId . '.</em></p>',
+				'ticket_id' => $ticketId,
+				'usuario_id' => $uid > 0 ? $uid : null,
+			]);
+
 			set_flash('success', 'Nota actualizada correctamente.');
 		} catch (Throwable $e) {
 			set_flash('error', 'Error al editar la nota: ' . $e->getMessage());
+		}
+
+		redirect($this->buildTicketShowRedirect($ticketId, $return));
+	}
+
+	public function deleteNote(string $id, string $noteId): void
+	{
+		Auth::requireAuth();
+		$return = trim((string) ($_POST['return'] ?? ''));
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			set_flash('error', 'Token CSRF inválido.');
+			redirect($this->buildTicketShowRedirect((int) $id, $return));
+		}
+
+		$ticketId = (int) $id;
+		$messageId = (int) $noteId;
+		if ($ticketId <= 0 || $messageId <= 0) {
+			set_flash('error', 'Nota inválida para eliminar.');
+			redirect($this->buildTicketShowRedirect($ticketId, $return));
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+			$uid = (int) (Auth::id() ?? 0);
+			$actor = trim((string) (Auth::user()['nombre'] ?? 'Usuario'));
+
+			$db->beginTransaction();
+
+			$noteStmt = $db->prepare("SELECT id FROM ticket_mensajes WHERE id = :id AND ticket_id = :ticket_id AND tipo = 'nota' LIMIT 1");
+			$noteStmt->execute([
+				'id' => $messageId,
+				'ticket_id' => $ticketId,
+			]);
+			if (!$noteStmt->fetch()) {
+				throw new RuntimeException('No se encontró la nota interna.');
+			}
+
+			$adjStmt = $db->prepare('SELECT storage_path FROM ticket_mensaje_adjuntos WHERE ticket_id = :ticket_id AND ticket_mensaje_id = :mensaje_id');
+			$adjStmt->execute([
+				'ticket_id' => $ticketId,
+				'mensaje_id' => $messageId,
+			]);
+			foreach (($adjStmt->fetchAll() ?: []) as $adjRow) {
+				$path = (string) ($adjRow['storage_path'] ?? '');
+				if ($path !== '' && is_file($path)) {
+					@unlink($path);
+				}
+			}
+
+			$db->prepare('DELETE FROM ticket_mensaje_adjuntos WHERE ticket_id = :ticket_id AND ticket_mensaje_id = :mensaje_id')->execute([
+				'ticket_id' => $ticketId,
+				'mensaje_id' => $messageId,
+			]);
+
+			$deleteStmt = $db->prepare("DELETE FROM ticket_mensajes WHERE id = :id AND ticket_id = :ticket_id AND tipo = 'nota' LIMIT 1");
+			$deleteStmt->execute([
+				'id' => $messageId,
+				'ticket_id' => $ticketId,
+			]);
+
+			$traceStmt = $db->prepare("INSERT INTO ticket_mensajes
+				(tipo, mensaje, ticket_id, usuario_id, fecha)
+				VALUES ('nota', :mensaje, :ticket_id, :usuario_id, NOW())");
+			$traceStmt->execute([
+				'mensaje' => '<p><em>' . htmlspecialchars($actor, ENT_QUOTES, 'UTF-8') . ' eliminó la nota interna #' . (int) $messageId . '.</em></p>',
+				'ticket_id' => $ticketId,
+				'usuario_id' => $uid > 0 ? $uid : null,
+			]);
+
+			$db->commit();
+			set_flash('success', 'Nota eliminada correctamente.');
+		} catch (Throwable $e) {
+			if (isset($db) && $db instanceof PDO && $db->inTransaction()) {
+				$db->rollBack();
+			}
+			set_flash('error', 'Error al eliminar la nota: ' . $e->getMessage());
 		}
 
 		redirect($this->buildTicketShowRedirect($ticketId, $return));

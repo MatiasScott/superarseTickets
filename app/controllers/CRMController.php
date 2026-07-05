@@ -5,6 +5,8 @@ class CRMController extends Controller
 	public function dashboard(): void
 	{
 		Auth::requireAuth();
+		$periodoFiltro = $this->sanitizePeriodoKey((string) ($_GET['periodo'] ?? ''));
+		$periodosDashboard = [];
 
 		$admisionesRows = [];
 		$matriculasRows = [];
@@ -24,6 +26,7 @@ class CRMController extends Controller
 		try {
 			$this->ensureCrmSupportTables();
 			$db = Database::getInstance()->connection();
+			$allowedStudentIds = null;
 			$stageMetaByEstadoId = [];
 			$stageKeyByEstadoId = [];
 			$activeEstados = $db->query("SELECT id, nombre, categoria, orden FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC")->fetchAll() ?: [];
@@ -59,11 +62,11 @@ class CRMController extends Controller
 				$stageKeyByEstadoId[$estadoId] = $this->dashboardResolveStageKeyFromState($estado);
 			}
 
-			$pipelineRows = $db->query("SELECT pm.student_id, pm.estado_id, COALESCE(pe.nombre, '') AS estado_nombre
+			$pipelineRows = $db->query("SELECT pm.student_id, pm.estado_id, COALESCE(pe.nombre, '') AS estado_nombre, 'student' AS source_type
 				FROM crm_student_pipeline_multi pm
 				LEFT JOIN pipeline_estados pe ON pe.id = pm.estado_id")->fetchAll() ?: [];
 
-			$legacyPipelineRows = $db->query("SELECT p.student_id, p.estado_id, COALESCE(pe.nombre, '') AS estado_nombre
+			$legacyPipelineRows = $db->query("SELECT p.student_id, p.estado_id, COALESCE(pe.nombre, '') AS estado_nombre, 'student' AS source_type
 				FROM crm_student_pipeline p
 				LEFT JOIN pipeline_estados pe ON pe.id = p.estado_id
 				WHERE NOT EXISTS (
@@ -73,7 +76,7 @@ class CRMController extends Controller
 				$pipelineRows = array_merge($pipelineRows, $legacyPipelineRows);
 			}
 
-			$prospectPipelineRows = $db->query("SELECT i.contacto_id AS student_id, i.estado_id, COALESCE(pe.nombre, '') AS estado_nombre
+			$prospectPipelineRows = $db->query("SELECT i.contacto_id AS student_id, i.estado_id, COALESCE(pe.nombre, '') AS estado_nombre, 'prospect' AS source_type
 				FROM interesados i
 				LEFT JOIN pipeline_estados pe ON pe.id = i.estado_id
 				WHERE i.estado = 'activo' AND COALESCE(i.convertido, 0) = 0")->fetchAll() ?: [];
@@ -84,20 +87,50 @@ class CRMController extends Controller
 			$userLevels = [];
 			$remote = $this->connectSuperarseDatabase();
 			if ($remote instanceof PDO && $this->resolveSuperarseStudentTable($remote) === 'users') {
-				$userRows = $remote->query('SELECT id, nivel FROM users')->fetchAll() ?: [];
+				$periodosDashboard = $this->fetchRemotePeriodOptions($remote, 'users');
+				$userRows = $remote->query('SELECT id, nivel, TRIM(COALESCE(periodo, "")) AS periodo FROM users')->fetchAll() ?: [];
+				$allowedStudentIds = [];
 				foreach ($userRows as $userRow) {
 					$studentId = (int) ($userRow['id'] ?? 0);
 					if ($studentId <= 0) {
 						continue;
 					}
+					$currentPeriodo = $this->sanitizePeriodoKey((string) ($userRow['periodo'] ?? ''));
+					if ($periodoFiltro !== '' && $currentPeriodo !== $periodoFiltro) {
+						continue;
+					}
+					$allowedStudentIds[$studentId] = true;
 					$nivel = $this->dashboardExtractNivel((string) ($userRow['nivel'] ?? ''));
 					if ($nivel !== null) {
 						$userLevels[$studentId] = $nivel;
 					}
 				}
+			} else {
+				$periodosDashboard = $this->fetchLocalPeriodOptions();
+				if ($periodoFiltro !== '') {
+					$allowedStudentIds = [];
+					$stmtIds = $db->prepare("SELECT id FROM estudiantes WHERE DATE_FORMAT(created_at, '%Y-%m') = :periodo");
+					$stmtIds->execute([':periodo' => $periodoFiltro]);
+					foreach (($stmtIds->fetchAll() ?: []) as $rowId) {
+						$sid = (int) ($rowId['id'] ?? 0);
+						if ($sid > 0) {
+							$allowedStudentIds[$sid] = true;
+						}
+					}
+				}
+			}
+
+			if (empty($periodosDashboard)) {
+				$periodosDashboard = $this->fetchLocalPeriodOptions();
 			}
 
 			foreach ($pipelineRows as $row) {
+				$sourceType = (string) ($row['source_type'] ?? 'student');
+				$studentId = (int) ($row['student_id'] ?? 0);
+				if ($periodoFiltro !== '' && $sourceType === 'student' && is_array($allowedStudentIds) && !isset($allowedStudentIds[$studentId])) {
+					continue;
+				}
+
 				$estadoId = (int) ($row['estado_id'] ?? 0);
 				$stageName = trim((string) ($row['estado_nombre'] ?? ''));
 				$stageMeta = $stageMetaByEstadoId[$estadoId] ?? null;
@@ -138,7 +171,6 @@ class CRMController extends Controller
 					continue;
 				}
 
-				$studentId = (int) ($row['student_id'] ?? 0);
 				$nivel = $userLevels[$studentId] ?? null;
 
 				if ($stageMeta['area'] === 'matriculas' && isset($matriculasRows[$estadoId])) {
@@ -169,6 +201,8 @@ class CRMController extends Controller
 			'docenciaRows' => array_values($docenciaRows),
 			'kpiMatriculas3233' => $kpiMatriculas3233,
 			'kpiMatriculas45' => $kpiMatriculas45,
+			'periodosDashboard' => $periodosDashboard,
+			'periodoDashboardSeleccionado' => $periodoFiltro,
 		], [
 			'title' => 'CRM - Dashboard',
 		]);
@@ -371,12 +405,19 @@ class CRMController extends Controller
 			$periodos = is_array($studentsData['periodos'] ?? null) ? $studentsData['periodos'] : $periodos;
 		}
 
-		$prospectPerPage = 25;
-		$prospectPage = max(1, (int) ($_GET['prospect_page'] ?? 1));
 		$totalProspects = $this->countLocalProspects();
-		$prospectPages = max(1, (int) ceil($totalProspects / $prospectPerPage));
-		$prospectPage = min($prospectPage, $prospectPages);
-		$prospectosLocales = $this->fetchLocalProspects($prospectPerPage, ($prospectPage - 1) * $prospectPerPage);
+		$prospectPerPage = max(25, min(50000, $totalProspects > 0 ? $totalProspects : 25));
+		$prospectPage = 1;
+		$prospectPages = 1;
+		$prospectosLocales = $this->fetchLocalProspects($prospectPerPage, 0);
+
+		if (empty($prospectosLocales) && $totalProspects > 0) {
+			$prospectPerPage = 25;
+			$prospectPage = max(1, (int) ($_GET['prospect_page'] ?? 1));
+			$prospectPages = max(1, (int) ceil($totalProspects / $prospectPerPage));
+			$prospectPage = min($prospectPage, $prospectPages);
+			$prospectosLocales = $this->fetchLocalProspects($prospectPerPage, ($prospectPage - 1) * $prospectPerPage);
+		}
 
 		try {
 			$db = Database::getInstance()->connection();
@@ -632,29 +673,68 @@ class CRMController extends Controller
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
 
+		$readMultiFilter = static function (string $name): array {
+			$raw = $_GET[$name] ?? null;
+			if (is_array($raw)) {
+				return array_values($raw);
+			}
+			if (is_string($raw) && trim($raw) !== '') {
+				return preg_split('/\s*,\s*/', $raw, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+			}
+			return [];
+		};
+
 		$periodos = array_values(array_filter(array_unique(array_map(function ($value): string {
 			return $this->sanitizePeriodoKey((string) $value);
-		}, is_array($_GET['periodo'] ?? null) ? $_GET['periodo'] : [])), static function ($value): bool {
+		}, $readMultiFilter('periodo'))), static function ($value): bool {
 			return $value !== '';
 		}));
-		$periodosNormalized = array_values(array_map(static function ($value): string {
-			return mb_strtolower(trim((string) $value), 'UTF-8');
-		}, $periodos));
+		$normalizeFilter = static function ($value): string {
+			$normalized = mb_strtolower(trim((string) $value), 'UTF-8');
+			$ascii = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $normalized);
+			if (is_string($ascii) && $ascii !== '') {
+				$normalized = $ascii;
+			}
+			$normalized = preg_replace('/[^a-z0-9]+/i', ' ', $normalized) ?: '';
+			return trim((string) preg_replace('/\s+/', ' ', $normalized));
+		};
+
+		$periodosNormalized = array_values(array_filter(array_map($normalizeFilter, $periodos), static function ($value): bool {
+			return $value !== '';
+		}));
 		$periodo = count($periodos) === 1 ? (string) ($periodos[0] ?? '') : '';
-		$nombre = mb_strtolower(trim((string) ($_GET['nombre'] ?? '')), 'UTF-8');
+		$nombre = $normalizeFilter((string) ($_GET['nombre'] ?? ''));
 		$carreras = array_values(array_filter(array_unique(array_map(static function ($value): string {
-			return mb_strtolower(trim((string) $value), 'UTF-8');
-		}, is_array($_GET['carrera'] ?? null) ? $_GET['carrera'] : [])), static function ($value): bool {
+			$normalized = mb_strtolower(trim((string) $value), 'UTF-8');
+			$ascii = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $normalized);
+			if (is_string($ascii) && $ascii !== '') {
+				$normalized = $ascii;
+			}
+			$normalized = preg_replace('/[^a-z0-9]+/i', ' ', $normalized) ?: '';
+			return trim((string) preg_replace('/\s+/', ' ', $normalized));
+		}, $readMultiFilter('carrera'))), static function ($value): bool {
 			return $value !== '';
 		}));
 		$etapas = array_values(array_filter(array_unique(array_map(static function ($value): string {
-			return mb_strtolower(trim((string) $value), 'UTF-8');
-		}, is_array($_GET['etapa'] ?? null) ? $_GET['etapa'] : [])), static function ($value): bool {
+			$normalized = mb_strtolower(trim((string) $value), 'UTF-8');
+			$ascii = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $normalized);
+			if (is_string($ascii) && $ascii !== '') {
+				$normalized = $ascii;
+			}
+			$normalized = preg_replace('/[^a-z0-9]+/i', ' ', $normalized) ?: '';
+			return trim((string) preg_replace('/\s+/', ' ', $normalized));
+		}, $readMultiFilter('etapa'))), static function ($value): bool {
 			return $value !== '';
 		}));
 		$niveles = array_values(array_filter(array_unique(array_map(static function ($value): string {
-			return mb_strtolower(trim((string) $value), 'UTF-8');
-		}, is_array($_GET['nivel'] ?? null) ? $_GET['nivel'] : [])), static function ($value): bool {
+			$normalized = mb_strtolower(trim((string) $value), 'UTF-8');
+			$ascii = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $normalized);
+			if (is_string($ascii) && $ascii !== '') {
+				$normalized = $ascii;
+			}
+			$normalized = preg_replace('/[^a-z0-9]+/i', ' ', $normalized) ?: '';
+			return trim((string) preg_replace('/\s+/', ' ', $normalized));
+		}, $readMultiFilter('nivel'))), static function ($value): bool {
 			return $value !== '';
 		}));
 
@@ -662,9 +742,7 @@ class CRMController extends Controller
 			$studentsData = $this->fetchSuperarseStudents(50000, $periodo, 0);
 			$rows = is_array($studentsData['rows'] ?? null) ? $studentsData['rows'] : [];
 
-			$normalize = static function ($value): string {
-				return mb_strtolower(trim((string) $value), 'UTF-8');
-			};
+			$normalize = $normalizeFilter;
 
 			$filtered = [];
 			foreach ($rows as $row) {
@@ -672,6 +750,11 @@ class CRMController extends Controller
 				$rowPeriod = $normalize($row['periodo_clave'] ?? ($row['periodo'] ?? ''));
 				$rowCareer = $normalize($row['carrera'] ?? '');
 				$rowStage = $normalize($row['pipeline_nombre'] ?? '');
+				$rowStageListRaw = is_array($row['pipeline_nombres'] ?? null) ? $row['pipeline_nombres'] : [];
+				$rowStages = array_values(array_filter(array_map($normalize, $rowStageListRaw), static fn($value) => $value !== ''));
+				if (empty($rowStages) && $rowStage !== '') {
+					$rowStages[] = $rowStage;
+				}
 				$rowLevel = $normalize($row['nivel'] ?? '');
 
 				if (!empty($periodosNormalized) && !in_array($rowPeriod, $periodosNormalized, true)) {
@@ -683,7 +766,7 @@ class CRMController extends Controller
 				if (!empty($carreras) && !in_array($rowCareer, $carreras, true)) {
 					continue;
 				}
-				if (!empty($etapas) && !in_array($rowStage, $etapas, true)) {
+				if (!empty($etapas) && empty(array_intersect($rowStages, $etapas))) {
 					continue;
 				}
 				if (!empty($niveles) && !in_array($rowLevel, $niveles, true)) {
@@ -1424,7 +1507,7 @@ class CRMController extends Controller
 
 	private function fetchLocalProspects(int $perPage = 25, int $offset = 0): array
 	{
-		$perPage = max(10, min(200, $perPage));
+		$perPage = max(10, min(50000, $perPage));
 		$offset  = max(0, $offset);
 		try {
 			$db = Database::getInstance()->connection();
@@ -1719,7 +1802,35 @@ class CRMController extends Controller
 				$pipelineMap[(int) ($pipelineRow['student_id'] ?? 0)] = [
 					'estado_id' => (int) ($pipelineRow['estado_id'] ?? 0),
 					'pipeline_nombre' => (string) ($pipelineRow['pipeline_nombre'] ?? 'Sin asignar'),
+					'pipeline_nombres' => [],
 				];
+			}
+
+			$sqlMulti = "SELECT pm.student_id, pm.estado_id, COALESCE(pe.nombre, '') AS pipeline_nombre
+				FROM crm_student_pipeline_multi pm
+				LEFT JOIN pipeline_estados pe ON pe.id = pm.estado_id
+				WHERE pm.student_id IN ($placeholders)
+				ORDER BY pm.student_id ASC, pe.orden ASC, pe.id ASC";
+			$stmtMulti = $db->prepare($sqlMulti);
+			$stmtMulti->execute($ids);
+			$multiRows = $stmtMulti->fetchAll() ?: [];
+			foreach ($multiRows as $multiRow) {
+				$studentId = (int) ($multiRow['student_id'] ?? 0);
+				$estadoId = (int) ($multiRow['estado_id'] ?? 0);
+				$estadoNombre = trim((string) ($multiRow['pipeline_nombre'] ?? ''));
+				if ($studentId <= 0) {
+					continue;
+				}
+				if (!isset($pipelineMap[$studentId])) {
+					$pipelineMap[$studentId] = [
+						'estado_id' => $estadoId,
+						'pipeline_nombre' => $estadoNombre !== '' ? $estadoNombre : 'Sin asignar',
+						'pipeline_nombres' => [],
+					];
+				}
+				if ($estadoNombre !== '') {
+					$pipelineMap[$studentId]['pipeline_nombres'][] = $estadoNombre;
+				}
 			}
 
 			// Asignar pipeline aleatorio persistente a estudiantes sin estado.
@@ -1749,6 +1860,7 @@ class CRMController extends Controller
 						$pipelineMap[$studentId] = [
 							'estado_id' => $randomEstadoId,
 							'pipeline_nombre' => (string) ($stateNames[$randomEstadoId] ?? 'Sin asignar'),
+							'pipeline_nombres' => [(string) ($stateNames[$randomEstadoId] ?? 'Sin asignar')],
 						];
 					}
 				}
@@ -1756,14 +1868,23 @@ class CRMController extends Controller
 
 			foreach ($rows as &$row) {
 				$studentId = (int) ($row['id'] ?? 0);
+				$allNames = array_values(array_unique(array_filter(array_map('trim', (array) ($pipelineMap[$studentId]['pipeline_nombres'] ?? [])))));
+				if (empty($allNames)) {
+					$fallbackName = (string) ($pipelineMap[$studentId]['pipeline_nombre'] ?? 'Sin asignar');
+					if ($fallbackName !== '') {
+						$allNames[] = $fallbackName;
+					}
+				}
 				$row['pipeline_estado_id'] = (int) ($pipelineMap[$studentId]['estado_id'] ?? 0);
-				$row['pipeline_nombre'] = (string) ($pipelineMap[$studentId]['pipeline_nombre'] ?? 'Sin asignar');
+				$row['pipeline_nombre'] = !empty($allNames) ? implode(', ', $allNames) : 'Sin asignar';
+				$row['pipeline_nombres'] = $allNames;
 			}
 			unset($row);
 		} catch (Throwable $e) {
 			foreach ($rows as &$row) {
 				$row['pipeline_estado_id'] = 0;
 				$row['pipeline_nombre'] = 'Sin asignar';
+				$row['pipeline_nombres'] = [];
 			}
 			unset($row);
 		}
@@ -2095,6 +2216,7 @@ class CRMController extends Controller
 		$correoPersonal = $this->normalizeEmailValue((string) ($_POST['correo_personal'] ?? ''));
 		$celular = $this->normalizePhoneValue((string) ($_POST['celular'] ?? ''));
 		$propietario = trim((string) ($_POST['propietario'] ?? ''));
+		$creadoPor = trim((string) ($_POST['creado_por'] ?? ''));
 		$carrera = trim((string) ($_POST['carrera'] ?? ''));
 		$modalidad = trim((string) ($_POST['modalidad'] ?? ''));
 		$provincia = trim((string) ($_POST['provincia'] ?? ''));
@@ -2145,6 +2267,7 @@ class CRMController extends Controller
 				$interesadoUpdate = $db->prepare('UPDATE interesados
 					SET estado_id = :estado_id,
 						origen = :origen,
+						creado_por = :creado_por,
 						carrera = :carrera,
 						modalidad = :modalidad,
 						provincia = :provincia,
@@ -2155,6 +2278,7 @@ class CRMController extends Controller
 				$interesadoUpdate->execute([
 					':estado_id' => $estadoId > 0 ? $estadoId : null,
 					':origen' => $propietario !== '' ? mb_substr($propietario, 0, 100) : 'crm_manual',
+					':creado_por' => $creadoPor !== '' ? mb_substr($creadoPor, 0, 255) : null,
 					':carrera' => $carrera !== '' ? mb_substr($carrera, 0, 180) : null,
 					':modalidad' => $modalidad !== '' ? mb_substr($modalidad, 0, 80) : null,
 					':provincia' => $provincia !== '' ? mb_substr($provincia, 0, 120) : null,
@@ -2164,6 +2288,7 @@ class CRMController extends Controller
 			} else {
 				$interesadoUpdate = $db->prepare('UPDATE interesados
 					SET origen = :origen,
+						creado_por = :creado_por,
 						carrera = :carrera,
 						modalidad = :modalidad,
 						provincia = :provincia,
@@ -2173,6 +2298,7 @@ class CRMController extends Controller
 					LIMIT 1');
 				$interesadoUpdate->execute([
 					':origen' => $propietario !== '' ? mb_substr($propietario, 0, 100) : 'crm_manual',
+					':creado_por' => $creadoPor !== '' ? mb_substr($creadoPor, 0, 255) : null,
 					':carrera' => $carrera !== '' ? mb_substr($carrera, 0, 180) : null,
 					':modalidad' => $modalidad !== '' ? mb_substr($modalidad, 0, 80) : null,
 					':provincia' => $provincia !== '' ? mb_substr($provincia, 0, 120) : null,
@@ -2200,13 +2326,14 @@ class CRMController extends Controller
 				$contactoId,
 				'prospect_update',
 				sprintf(
-					'Actualizó cliente potencial. Nombre: %s %s. Identificación: %s. Email: %s. Celular: %s. Propietario: %s. Carrera: %s. Modalidad: %s. Provincia: %s. Ciudad: %s.',
+					'Actualizó cliente potencial. Nombre: %s %s. Identificación: %s. Email: %s. Celular: %s. Propietario: %s. Creado por: %s. Carrera: %s. Modalidad: %s. Provincia: %s. Ciudad: %s.',
 					$nombres,
 					$apellidos,
 					$identificacion !== '' ? $identificacion : '-',
 					$correoPersonal !== '' ? $correoPersonal : '-',
 					$celular !== '' ? $celular : '-',
 					$propietario !== '' ? $propietario : '-',
+					$creadoPor !== '' ? $creadoPor : '-',
 					$carrera !== '' ? $carrera : '-',
 					$modalidad !== '' ? $modalidad : '-',
 					$provincia !== '' ? $provincia : '-',
@@ -2409,7 +2536,7 @@ class CRMController extends Controller
 				FROM crm_student_notes csn
 				LEFT JOIN usuarios u ON u.id = csn.created_by
 				WHERE csn.student_id = :student_id
-				AND csn.source_type IN ('prospect_created', 'estado_change', 'task_create', 'task_participants', 'task_result', 'task_complete', 'contact_update', 'prospect_update')
+				AND csn.source_type IN ('prospect_created', 'estado_change', 'task_create', 'task_participants', 'task_result', 'task_complete', 'contact_update', 'prospect_update', 'note_edit', 'note_delete')
 				ORDER BY csn.created_at DESC
 				LIMIT 30");
 			$historyStmt->execute([':student_id' => $pipelineKey]);
@@ -2995,6 +3122,25 @@ class CRMController extends Controller
 
 		$noteId = max(0, (int) ($_POST['note_id'] ?? 0));
 		$noteText = trim((string) ($_POST['note_text'] ?? ''));
+		$removeAttachmentIdsRaw = $_POST['remove_attachment_ids'] ?? '';
+		$removeAttachmentIds = [];
+		if (is_array($removeAttachmentIdsRaw)) {
+			foreach ($removeAttachmentIdsRaw as $rawId) {
+				$id = (int) $rawId;
+				if ($id > 0) {
+					$removeAttachmentIds[$id] = $id;
+				}
+			}
+		} else {
+			$parts = preg_split('/\s*,\s*/', (string) $removeAttachmentIdsRaw, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+			foreach ($parts as $rawId) {
+				$id = (int) $rawId;
+				if ($id > 0) {
+					$removeAttachmentIds[$id] = $id;
+				}
+			}
+		}
+		$removeAttachmentIds = array_values($removeAttachmentIds);
 
 		if ($noteId <= 0 || $noteText === '') {
 			http_response_code(400);
@@ -3006,10 +3152,8 @@ class CRMController extends Controller
 			$db = Database::getInstance()->connection();
 			$this->ensureCrmSupportTables();
 			$this->ensureUserNotificationsTable($db);
-			
-			// Verificar que la nota existe y pertenece al usuario actual o es admin
-			$note = $db->prepare("SELECT id, created_by FROM crm_student_notes WHERE id = :id AND source_type = 'note'")
-				->execute([':id' => $noteId]);
+			$db->beginTransaction();
+
 			$stmt = $db->prepare("SELECT id, created_by, student_id FROM crm_student_notes WHERE id = :id AND source_type = 'note'");
 			$stmt->execute([':id' => $noteId]);
 			$note = $stmt->fetch();
@@ -3026,9 +3170,29 @@ class CRMController extends Controller
 				':id' => $noteId,
 			]);
 
+			if (!empty($removeAttachmentIds)) {
+				$removePlaceholders = implode(',', array_fill(0, count($removeAttachmentIds), '?'));
+				$selectSql = "SELECT id, storage_path FROM crm_student_note_adjuntos WHERE note_id = ? AND id IN ($removePlaceholders)";
+				$selectStmt = $db->prepare($selectSql);
+				$selectStmt->execute(array_merge([$noteId], $removeAttachmentIds));
+				$rowsToDelete = $selectStmt->fetchAll() ?: [];
+
+				foreach ($rowsToDelete as $rowToDelete) {
+					$filePath = (string) ($rowToDelete['storage_path'] ?? '');
+					if ($filePath !== '' && is_file($filePath)) {
+						@unlink($filePath);
+					}
+				}
+
+				$deleteSql = "DELETE FROM crm_student_note_adjuntos WHERE note_id = ? AND id IN ($removePlaceholders)";
+				$deleteStmt = $db->prepare($deleteSql);
+				$deleteStmt->execute(array_merge([$noteId], $removeAttachmentIds));
+			}
+
+			$uploadErrors = [];
 			$studentIdForNote = (int) ($note['student_id'] ?? 0);
 			if ($studentIdForNote > 0) {
-				$this->storeCrmNoteAttachments($db, $studentIdForNote, $noteId, $_FILES['attachments'] ?? null);
+				$uploadErrors = $this->storeCrmNoteAttachments($db, $studentIdForNote, $noteId, $_FILES['attachments'] ?? null);
 			}
 
 			$mentionIds = $this->extractMentionUserIds($noteText, $db, $this->currentUserId());
@@ -3042,12 +3206,28 @@ class CRMController extends Controller
 				);
 			}
 
+			if ($studentIdForNote > 0) {
+				$historyStmt = $db->prepare("INSERT INTO crm_student_notes (student_id, source_type, note_text, created_by, created_at)
+					VALUES (:student_id, 'note_edit', :note_text, :user_id, NOW())");
+				$historyStmt->execute([
+					':student_id' => $studentIdForNote,
+					':note_text' => 'Editó nota interna #' . $noteId,
+					':user_id' => $this->currentUserId(),
+				]);
+			}
+
+			$db->commit();
+
 			echo json_encode([
 				'success' => true,
 				'note_text' => $noteText,
 				'updated_at' => date('Y-m-d H:i:s'),
+				'attachment_errors' => $uploadErrors,
 			]);
 		} catch (Throwable $e) {
+			if (isset($db) && $db instanceof PDO && $db->inTransaction()) {
+				$db->rollBack();
+			}
 			http_response_code(500);
 			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
 		}
@@ -3058,11 +3238,59 @@ class CRMController extends Controller
 	{
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
-		http_response_code(405);
-		echo json_encode([
-			'success' => false,
-			'error' => 'La eliminación de notas está deshabilitada. Puedes editar la nota.',
-		]);
+
+		$noteId = max(0, (int) ($_POST['note_id'] ?? 0));
+		if ($noteId <= 0) {
+			http_response_code(400);
+			echo json_encode(['success' => false, 'error' => 'ID inválido']);
+			exit;
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+			$this->ensureCrmSupportTables();
+			$db->beginTransaction();
+
+			$stmt = $db->prepare("SELECT id, student_id FROM crm_student_notes WHERE id = :id AND source_type = 'note' LIMIT 1");
+			$stmt->execute([':id' => $noteId]);
+			$note = $stmt->fetch();
+			if (!$note) {
+				throw new RuntimeException('Nota no encontrada');
+			}
+
+			$studentId = (int) ($note['student_id'] ?? 0);
+
+			$stmtAdj = $db->prepare('SELECT storage_path FROM crm_student_note_adjuntos WHERE note_id = :note_id');
+			$stmtAdj->execute([':note_id' => $noteId]);
+			foreach (($stmtAdj->fetchAll() ?: []) as $adjRow) {
+				$path = (string) ($adjRow['storage_path'] ?? '');
+				if ($path !== '' && is_file($path)) {
+					@unlink($path);
+				}
+			}
+
+			$db->prepare('DELETE FROM crm_student_note_adjuntos WHERE note_id = :note_id')->execute([':note_id' => $noteId]);
+			$db->prepare("DELETE FROM crm_student_notes WHERE id = :id AND source_type = 'note' LIMIT 1")->execute([':id' => $noteId]);
+
+			if ($studentId > 0) {
+				$historyStmt = $db->prepare("INSERT INTO crm_student_notes (student_id, source_type, note_text, created_by, created_at)
+					VALUES (:student_id, 'note_delete', :note_text, :user_id, NOW())");
+				$historyStmt->execute([
+					':student_id' => $studentId,
+					':note_text' => 'Eliminó nota interna #' . $noteId,
+					':user_id' => $this->currentUserId(),
+				]);
+			}
+
+			$db->commit();
+			echo json_encode(['success' => true, 'message' => 'Nota eliminada correctamente.']);
+		} catch (Throwable $e) {
+			if (isset($db) && $db instanceof PDO && $db->inTransaction()) {
+				$db->rollBack();
+			}
+			http_response_code(500);
+			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+		}
 		exit;
 	}
 
@@ -3310,7 +3538,7 @@ class CRMController extends Controller
 			$sql = "SELECT csn.created_at, COALESCE(u.nombre, 'Sistema') AS usuario, csn.note_text
 					FROM crm_student_notes csn
 					LEFT JOIN usuarios u ON u.id = csn.created_by
-					WHERE csn.student_id = :student_id AND csn.source_type IN ('prospect_created', 'estado_change', 'task_create', 'task_participants', 'task_result', 'task_complete', 'contact_update', 'prospect_update')
+					WHERE csn.student_id = :student_id AND csn.source_type IN ('prospect_created', 'estado_change', 'task_create', 'task_participants', 'task_result', 'task_complete', 'contact_update', 'prospect_update', 'note_edit', 'note_delete')
 					ORDER BY csn.created_at DESC";
 			$stmt = $db->prepare($sql);
 			$stmt->execute([':student_id' => $studentId]);

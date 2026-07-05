@@ -144,6 +144,7 @@ return static function (Router $router): void {
 	$router->post('/tickets/{id}/reply', 'TicketController@replyTicket');
 	$router->post('/tickets/{id}/note', 'TicketController@addNote');
 	$router->post('/tickets/{id}/note/{noteId}', 'TicketController@updateNote');
+	$router->post('/tickets/{id}/note/{noteId}/delete', 'TicketController@deleteNote');
 	$router->post('/tickets/{id}/properties', 'TicketController@updateProperties');
 
 	// Campañas de correo

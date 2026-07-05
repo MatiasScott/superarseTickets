@@ -185,10 +185,20 @@ $phones = array_values(array_unique($phones));
                                 <button
                                     type="button"
                                     class="btn btn-sm btn-outline-primary"
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#ticketNoteEditModal"
                                     data-ticket-note-edit-btn="true"
                                     data-ticket-note-id="<?= (int) ($m['id'] ?? 0) ?>"
-                                    data-ticket-note-html="<?= e((string) ($m['mensaje'] ?? '')) ?>"
                                 >Editar nota</button>
+                                <button
+                                    type="button"
+                                    class="btn btn-sm btn-outline-danger"
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#ticketNoteDeleteModal"
+                                    data-ticket-note-delete-btn="true"
+                                    data-ticket-note-id="<?= (int) ($m['id'] ?? 0) ?>"
+                                    data-ticket-note-preview="<?= e(trim(strip_tags((string) ($m['mensaje'] ?? '')))) ?>"
+                                >Eliminar nota</button>
                             </div>
                         <?php endif; ?>
                         <div class="message-body"><?= $m['mensaje'] ?? '' ?></div>
@@ -374,6 +384,52 @@ $phones = array_values(array_unique($phones));
                             </form>
                             <div id="quick-replies-ticket-list" class="list-group"></div>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal fade" id="ticketNoteEditModal" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <form method="POST" id="ticketNoteEditForm" action="">
+                            <div class="modal-header">
+                                <h5 class="modal-title">Editar nota interna</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+                            </div>
+                            <div class="modal-body">
+                                <input type="hidden" name="_token" value="<?= csrf_token() ?>">
+                                <input type="hidden" name="return" value="<?= e($ticketUrl) ?>">
+                                <label for="ticketNoteEditText" class="form-label">Contenido</label>
+                                <textarea class="form-control" id="ticketNoteEditText" name="cuerpo_html" rows="6" required></textarea>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                                <button type="submit" class="btn btn-primary">Guardar cambios</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal fade" id="ticketNoteDeleteModal" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <form method="POST" id="ticketNoteDeleteForm" action="">
+                            <div class="modal-header">
+                                <h5 class="modal-title">Eliminar nota interna</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+                            </div>
+                            <div class="modal-body">
+                                <input type="hidden" name="_token" value="<?= csrf_token() ?>">
+                                <input type="hidden" name="return" value="<?= e($ticketUrl) ?>">
+                                <p class="mb-2">Esta acción eliminará la nota seleccionada.</p>
+                                <div class="alert alert-warning py-2 mb-0" id="ticketNoteDeletePreview"></div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                                <button type="submit" class="btn btn-danger">Eliminar</button>
+                            </div>
+                        </form>
                     </div>
                 </div>
             </div>

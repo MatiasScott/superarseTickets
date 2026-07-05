@@ -2,6 +2,8 @@
 	<?php $admisionesRows = $admisionesRows ?? []; ?>
 	<?php $matriculasRows = $matriculasRows ?? []; ?>
 	<?php $docenciaRows = $docenciaRows ?? []; ?>
+	<?php $periodosDashboard = $periodosDashboard ?? []; ?>
+	<?php $periodoDashboardSeleccionado = $periodoDashboardSeleccionado ?? ''; ?>
 	<?php $matriculasTotales = ['1' => 0, '2' => 0, '3' => 0, '4' => 0, 'total' => 0]; ?>
 	<?php foreach ($matriculasRows as $row): ?>
 		<?php $matriculasTotales['1'] += (int) ($row['levels']['1'] ?? 0); ?>
@@ -25,7 +27,20 @@
 				<h1 class="h3 m-0"><i class="bi bi-graph-up-arrow"></i> Dashboard CRM</h1>
 				<p class="text-muted mb-0">Vista consolidada por etapas y niveles (1 al 4).</p>
 			</div>
-			<div class="d-flex gap-2">
+			<div class="d-flex gap-2 align-items-end flex-wrap">
+				<form method="get" action="<?= e(base_url('crm/dashboard')) ?>" class="d-flex gap-2 align-items-end">
+					<div>
+						<label class="form-label mb-1 small">Periodo</label>
+						<select name="periodo" class="form-select form-select-sm">
+							<option value="">Todos</option>
+							<?php foreach ($periodosDashboard as $periodo): ?>
+								<?php $periodoValue = (string) $periodo; ?>
+								<option value="<?= e($periodoValue) ?>" <?= (string) $periodoDashboardSeleccionado === $periodoValue ? 'selected' : '' ?>><?= e($periodoValue) ?></option>
+							<?php endforeach; ?>
+						</select>
+					</div>
+					<button class="btn btn-sm btn-outline-primary" type="submit"><i class="bi bi-funnel"></i> Filtrar</button>
+				</form>
 				<a class="btn btn-outline-secondary" href="<?= e(base_url('crm/interesados')) ?>"><i class="bi bi-people"></i> Ver todo CRM</a>
 			</div>
 		</div>

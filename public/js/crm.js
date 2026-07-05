@@ -392,13 +392,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
 	const isVisibleRow = (row) => row && row.style.display !== 'none';
 	let studentsRowsCache = [];
+	let studentsFilterAbortController = null;
+	let studentsFilterRequestId = 0;
+	let studentsFilterRetryTimer = null;
+	let studentsNetworkWarningShown = false;
 
-	const updateStudentsCounter = (total) => {
+	const updateStudentsCounter = (total, options = {}) => {
 		if (!studentsCounter) {
 			return;
 		}
 		const safeTotal = Number.isFinite(Number(total)) ? Number(total) : 0;
-		studentsCounter.textContent = `${safeTotal} estudiantes`;
+		const isLocal = Boolean(options && options.local === true);
+		studentsCounter.textContent = isLocal
+			? `${safeTotal} estudiantes (esta pagina)`
+			: `${safeTotal} estudiantes`;
 	};
 
 	const renderStudentsRows = (rows) => {
@@ -468,6 +475,60 @@ document.addEventListener('DOMContentLoaded', () => {
 		prospectsCounter.textContent = `Mostrando ${visibles} de ${total} clientes potenciales`;
 	};
 
+	const reindexVisibleProspectsRows = () => {
+		if (!prospectsTable) return;
+		let visibleIndex = 0;
+		const rows = Array.from(prospectsTable.querySelectorAll('tbody tr[data-prospect-origin]'));
+		rows.forEach((row) => {
+			if (!isVisibleRow(row)) {
+				return;
+			}
+			visibleIndex += 1;
+			const cell = row.querySelector('[data-prospect-row-num]');
+			if (cell) {
+				cell.textContent = String(visibleIndex);
+			}
+		});
+	};
+
+	const applyStudentsFiltersLocally = () => {
+		if (!studentsTable) {
+			updateStudentsCounter(0);
+			return;
+		}
+
+		const periodos = getCheckedFilterValues('period').map((value) => normalizeText(value));
+		const nombre = normalizeText(String(filterNameInput?.value || '').trim());
+		const carreras = getCheckedFilterValues('career').map((value) => normalizeText(value));
+		const etapas = getCheckedFilterValues('pipeline').map((value) => normalizeText(value));
+		const niveles = getCheckedFilterValues('level').map((value) => normalizeText(value));
+
+		const rows = Array.from(studentsTable.querySelectorAll('tbody tr[data-student-id]'));
+		let visible = 0;
+		rows.forEach((row) => {
+			const rowName = normalizeText(row.getAttribute('data-student-name') || '');
+			const rowCareer = normalizeText(row.getAttribute('data-student-career') || '');
+			const rowPipeline = normalizeText(row.getAttribute('data-student-pipeline') || '');
+			const cells = row.querySelectorAll('td');
+			const rowPeriod = normalizeText(cells[4]?.textContent || '');
+			const rowLevel = normalizeText(cells[5]?.textContent || '');
+
+			const matchPeriod = periodos.length === 0 || periodos.includes(rowPeriod);
+			const matchName = nombre === '' || rowName.includes(nombre);
+			const matchCareer = carreras.length === 0 || carreras.includes(rowCareer);
+			const matchPipeline = etapas.length === 0 || etapas.some((etapa) => rowPipeline.includes(etapa));
+			const matchLevel = niveles.length === 0 || niveles.includes(rowLevel);
+
+			const match = matchPeriod && matchName && matchCareer && matchPipeline && matchLevel;
+			row.style.display = match ? '' : 'none';
+			if (match) {
+				visible += 1;
+			}
+		});
+
+		updateStudentsCounter(visible, { local: true });
+	};
+
 	const applyTableFilters = async () => {
 		if (!studentsTable) {
 			updateStudentsCounter(0);
@@ -481,19 +542,36 @@ document.addEventListener('DOMContentLoaded', () => {
 		const etapas = getCheckedFilterValues('pipeline');
 		const niveles = getCheckedFilterValues('level');
 
-		periodos.forEach((periodo) => params.append('periodo[]', periodo));
+		if (periodos.length > 0) params.set('periodo', periodos.join(','));
 		if (nombre !== '') params.set('nombre', nombre);
-		carreras.forEach((carrera) => params.append('carrera[]', carrera));
-		etapas.forEach((etapa) => params.append('etapa[]', etapa));
-		niveles.forEach((nivel) => params.append('nivel[]', nivel));
+		if (carreras.length > 0) params.set('carrera', carreras.join(','));
+		if (etapas.length > 0) params.set('etapa', etapas.join(','));
+		if (niveles.length > 0) params.set('nivel', niveles.join(','));
+
+		studentsFilterRequestId += 1;
+		const requestId = studentsFilterRequestId;
+		if (studentsFilterRetryTimer) {
+			clearTimeout(studentsFilterRetryTimer);
+			studentsFilterRetryTimer = null;
+		}
+		if (studentsFilterAbortController) {
+			studentsFilterAbortController.abort();
+		}
+		studentsFilterAbortController = new AbortController();
 
 		try {
-			const response = await fetch(`${BASE_URL}crm/interesados/students-filter?${params.toString()}`);
+			const response = await fetch(`${BASE_URL}crm/interesados/students-filter?${params.toString()}`, {
+				signal: studentsFilterAbortController.signal,
+				cache: 'no-store',
+			});
 			if (!response.ok) {
 				throw new Error('No se pudo filtrar estudiantes');
 			}
 
 			const data = await response.json();
+			if (requestId !== studentsFilterRequestId) {
+				return;
+			}
 			if (!data.success) {
 				throw new Error(data.error || 'Error al filtrar estudiantes');
 			}
@@ -501,9 +579,28 @@ document.addEventListener('DOMContentLoaded', () => {
 			studentsRowsCache = Array.isArray(data.students) ? data.students : [];
 			renderStudentsRows(studentsRowsCache);
 			updateStudentsCounter(Number(data.total || studentsRowsCache.length || 0));
+			studentsNetworkWarningShown = false;
 			bindStudentActions();
 		} catch (error) {
+			if (error && error.name === 'AbortError') {
+				return;
+			}
 			console.error('Error filtrando estudiantes:', error);
+			applyStudentsFiltersLocally();
+			const isNetworkChanged = String(error?.message || '').toLowerCase().includes('failed to fetch');
+			if (isNetworkChanged) {
+				if (!studentsNetworkWarningShown) {
+					window.showGlobalNotification?.('La red cambió durante la consulta. Se aplicó filtro local temporal en esta página.', 'warning');
+					studentsNetworkWarningShown = true;
+				}
+				studentsFilterRetryTimer = setTimeout(() => {
+					if (requestId === studentsFilterRequestId) {
+						applyTableFilters();
+					}
+				}, 1500);
+				return;
+			}
+			window.showGlobalNotification?.('No se pudo aplicar filtros de estudiantes. Se aplicó filtro local temporal.', 'warning');
 		}
 	};
 
@@ -596,6 +693,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 			row.style.display = (matchOrigin && matchStage && matchCareer && matchCreatedBy && matchCreated) ? '' : 'none';
 		});
+		reindexVisibleProspectsRows();
 		updateProspectsCounter();
 	};
 
@@ -779,6 +877,14 @@ document.addEventListener('DOMContentLoaded', () => {
 			careerOptions.push(`<option value="${escapeHtml(fallbackValue)}" selected>${escapeHtml(fallbackValue)}</option>`);
 		}
 
+		const currentEstadoId = Number(prospect.estado_id || 0);
+		const estadoOptions = ['<option value="">Sin etapa</option>'];
+		(Array.isArray(estados) ? estados : []).forEach((estado) => {
+			const estadoId = Number(estado.id || 0);
+			const selected = estadoId > 0 && estadoId === currentEstadoId ? ' selected' : '';
+			estadoOptions.push(`<option value="${escapeHtml(estadoId)}"${selected}>${escapeHtml(estado.nombre || '')}</option>`);
+		});
+
 		body.innerHTML = `
 			<div id="prospectSaveStatus" class="d-none"></div>
 			<div class="row g-3">
@@ -827,7 +933,13 @@ document.addEventListener('DOMContentLoaded', () => {
 				</div>
 				<div class="col-md-6">
 					<label class="form-label">Creado por</label>
-					<input type="text" class="form-control" id="prospectEditCreadoPor" value="${escapeHtml(prospect.creado_por || '')}" readonly>
+					<input type="text" class="form-control" id="prospectEditCreadoPor" value="${escapeHtml(prospect.creado_por || '')}">
+				</div>
+				<div class="col-md-6">
+					<label class="form-label">Etapa</label>
+					<select class="form-select" id="prospectEditEstadoId">
+						${estadoOptions.join('')}
+					</select>
 				</div>
 			</div>
 		`;
@@ -1053,6 +1165,11 @@ document.addEventListener('DOMContentLoaded', () => {
 							<div class="col-md-12">
 								<div class="alert alert-light border mb-0">No tiene relación académica activa; se muestran todos los datos CRM de creación y seguimiento.</div>
 							</div>
+							<div class="col-md-12">
+								<button type="button" class="btn btn-outline-primary btn-sm" id="openProspectEditFromPipeline">
+									<i class="bi bi-pencil-square"></i> Editar datos completos del cliente potencial
+								</button>
+							</div>
 							`}
 						</div>
 					</div>
@@ -1137,10 +1254,27 @@ document.addEventListener('DOMContentLoaded', () => {
 		});
 		syncPipelineSelection();
 
+		if (String(entityType).toLowerCase() === 'contact') {
+			const editFromPipelineBtn = document.getElementById('openProspectEditFromPipeline');
+			editFromPipelineBtn?.addEventListener('click', async () => {
+				await loadProspectDetail(Number(entityId || 0));
+				const pipelineModalEl = document.getElementById('studentPipelineModal');
+				if (pipelineModalEl && window.bootstrap?.Modal) {
+					const instance = window.bootstrap.Modal.getInstance(pipelineModalEl);
+					instance?.hide();
+				}
+				const prospectModalEl = document.getElementById('prospectEditModal');
+				if (prospectModalEl && window.bootstrap?.Modal) {
+					const prospectModal = new window.bootstrap.Modal(prospectModalEl);
+					prospectModal.show();
+				}
+			});
+		}
+
 		// Cargar datos en tabs
 		loadStudentHistory(entityId, entityType);
 		loadStudentTickets(entityId, entityType);
-		loadStudentNotes(entityId);
+		loadStudentNotes(entityId, entityType);
 
 		const addNoteBtn = document.getElementById('addInternalNoteBtn');
 		const noteAttachmentsInput = document.getElementById('internalNoteAttachments');
@@ -1223,7 +1357,8 @@ document.addEventListener('DOMContentLoaded', () => {
 						statusBox.className = 'small mt-2 text-success';
 						statusBox.textContent = 'Nota guardada correctamente.';
 					}
-					await loadStudentNotes(entityId);
+					await loadStudentNotes(entityId, entityType);
+					await loadStudentHistory(entityId, entityType);
 				} catch (error) {
 					if (statusBox) {
 						statusBox.className = 'small mt-2 text-danger';
@@ -1743,7 +1878,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 	};
 
-	const loadStudentNotes = async (entityId) => {
+	const loadStudentNotes = async (entityId, entityType = 'student') => {
 		try {
 			const response = await fetch(`${BASE_URL}crm/getStudentNotes?student_id=${encodeURIComponent(String(entityId || 0))}`);
 			let data = null;
@@ -1757,7 +1892,7 @@ document.addEventListener('DOMContentLoaded', () => {
 				throw new Error((data && data.error) ? data.error : 'Error al cargar notas internas');
 			}
 
-			renderStudentNotes(data.notes || [], entityId);
+			renderStudentNotes(data.notes || [], entityId, entityType);
 		} catch (error) {
 			const container = document.getElementById('internalNotesList');
 			if (container) {
@@ -1766,12 +1901,102 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 	};
 
-	const renderStudentNotes = (notes, entityId) => {
+	const renderStudentNotes = (notes, entityId, entityType = 'student') => {
 		const container = document.getElementById('internalNotesList');
 		if (!container) return;
+		const pipelineModalEl = document.getElementById('studentPipelineModal');
+		const editModalEl = document.getElementById('crmNoteEditModal');
+		const editNoteIdInput = document.getElementById('crmNoteEditId');
+		const editTextarea = document.getElementById('crmNoteEditText');
+		const editSubmitBtn = document.getElementById('crmNoteEditSubmit');
+		const editAttachmentsList = document.getElementById('crmNoteEditAttachmentsList');
+		const editNewAttachmentsInput = document.getElementById('crmNoteEditNewAttachments');
+		const deleteModalEl = document.getElementById('crmNoteDeleteModal');
+		const deleteNoteIdInput = document.getElementById('crmNoteDeleteId');
+		const deletePreview = document.getElementById('crmNoteDeletePreview');
+		const deleteSubmitBtn = document.getElementById('crmNoteDeleteSubmit');
+		let restorePipelineAfterNoteModal = false;
+		let removeAttachmentIds = new Set();
+
+		const noteById = new Map();
+		notes.forEach((note) => {
+			const id = Number(note?.id || 0);
+			if (id > 0) {
+				noteById.set(id, note);
+			}
+		});
+
+		const renderEditAttachments = (note) => {
+			if (!editAttachmentsList) {
+				return;
+			}
+			const attachments = Array.isArray(note?.attachments) ? note.attachments : [];
+			if (!attachments.length) {
+				editAttachmentsList.innerHTML = '<span class="text-muted">Sin adjuntos.</span>';
+				return;
+			}
+
+			const html = attachments.map((att) => {
+				const attId = Number(att?.id || 0);
+				const attName = escapeHtml(att?.filename || 'Adjunto');
+				const checked = removeAttachmentIds.has(attId) ? 'checked' : '';
+				return `
+					<div class="form-check mb-1">
+						<input class="form-check-input crm-note-remove-att" type="checkbox" value="${attId}" id="crmNoteRemoveAtt${attId}" ${checked}>
+						<label class="form-check-label" for="crmNoteRemoveAtt${attId}">
+							Quitar ${attName}
+							<a class="ms-1" href="${BASE_URL}crm/note-attachment/${attId}" target="_blank" rel="noopener noreferrer">(ver)</a>
+						</label>
+					</div>
+				`;
+			}).join('');
+
+			editAttachmentsList.innerHTML = html;
+			editAttachmentsList.querySelectorAll('.crm-note-remove-att').forEach((checkbox) => {
+				checkbox.addEventListener('change', () => {
+					const id = Number(checkbox.value || 0);
+					if (id <= 0) return;
+					if (checkbox.checked) {
+						removeAttachmentIds.add(id);
+					} else {
+						removeAttachmentIds.delete(id);
+					}
+				});
+			});
+		};
+
+		const markRestorePipeline = () => {
+			restorePipelineAfterNoteModal = Boolean(pipelineModalEl && pipelineModalEl.classList.contains('show'));
+		};
+
+		const restorePipelineModal = () => {
+			if (!restorePipelineAfterNoteModal || !pipelineModalEl || !window.bootstrap?.Modal) {
+				restorePipelineAfterNoteModal = false;
+				return;
+			}
+			const instance = window.bootstrap.Modal.getOrCreateInstance(pipelineModalEl);
+			instance.show();
+			restorePipelineAfterNoteModal = false;
+		};
+
+		if (editModalEl && !editModalEl.dataset.restoreBound) {
+			editModalEl.addEventListener('hidden.bs.modal', () => {
+				restorePipelineModal();
+			});
+			editModalEl.dataset.restoreBound = '1';
+		}
+
+		if (deleteModalEl && !deleteModalEl.dataset.restoreBound) {
+			deleteModalEl.addEventListener('hidden.bs.modal', () => {
+				restorePipelineModal();
+			});
+			deleteModalEl.dataset.restoreBound = '1';
+		}
 
 		if (!Array.isArray(notes) || notes.length === 0) {
 			container.innerHTML = '<p class="text-muted small text-center py-3">No hay notas internas registradas.</p>';
+			if (editNoteIdInput) editNoteIdInput.value = '';
+			if (deleteNoteIdInput) deleteNoteIdInput.value = '';
 			return;
 		}
 
@@ -1803,7 +2028,8 @@ document.addEventListener('DOMContentLoaded', () => {
 							<div>${escapeHtml(noteText)}</div>
 							${attachmentsHtml}
 							<div class="mt-2">
-								<button type="button" class="btn btn-sm btn-outline-primary crm-note-edit-btn" data-note-id="${noteId}" data-note-text="${escapeHtml(noteText)}">Editar</button>
+								<button type="button" class="btn btn-sm btn-outline-primary crm-note-edit-btn" data-note-id="${noteId}" data-note-text="${escapeHtml(noteText)}" data-bs-toggle="modal" data-bs-target="#crmNoteEditModal">Editar</button>
+								<button type="button" class="btn btn-sm btn-outline-danger crm-note-delete-btn" data-note-id="${noteId}" data-note-text="${escapeHtml(noteText)}" data-bs-toggle="modal" data-bs-target="#crmNoteDeleteModal">Eliminar</button>
 							</div>
 						</div>
 						<small class="text-muted text-nowrap">${escapeHtml(dateLabel)}</small>
@@ -1815,38 +2041,117 @@ document.addEventListener('DOMContentLoaded', () => {
 
 		container.innerHTML = html;
 		container.querySelectorAll('.crm-note-edit-btn').forEach((button) => {
-			button.addEventListener('click', async () => {
+			button.addEventListener('click', () => {
+				markRestorePipeline();
 				const noteId = Number(button.getAttribute('data-note-id') || 0);
 				const currentText = String(button.getAttribute('data-note-text') || '');
 				if (noteId <= 0) return;
-				const nextText = window.prompt('Editar nota interna:', currentText);
-				if (nextText === null) return;
-				const finalText = String(nextText).trim();
+				removeAttachmentIds = new Set();
+				if (editNoteIdInput) editNoteIdInput.value = String(noteId);
+				if (editTextarea) editTextarea.value = currentText;
+				if (editNewAttachmentsInput) {
+					editNewAttachmentsInput.value = '';
+				}
+				renderEditAttachments(noteById.get(noteId) || null);
+			});
+		});
+
+		container.querySelectorAll('.crm-note-delete-btn').forEach((button) => {
+			button.addEventListener('click', () => {
+				markRestorePipeline();
+				const noteId = Number(button.getAttribute('data-note-id') || 0);
+				if (noteId <= 0) return;
+				if (deleteNoteIdInput) deleteNoteIdInput.value = String(noteId);
+				if (deletePreview) {
+					const previewText = String(button.getAttribute('data-note-text') || '').trim();
+					deletePreview.textContent = previewText !== '' ? previewText : 'Nota sin contenido visible.';
+				}
+			});
+		});
+
+		if (editSubmitBtn) {
+			editSubmitBtn.onclick = async () => {
+				const noteId = Number(editNoteIdInput?.value || 0);
+				const finalText = String(editTextarea?.value || '').trim();
+				if (noteId <= 0) {
+					window.showGlobalNotification('No se pudo identificar la nota.', 'warning');
+					return;
+				}
 				if (finalText === '') {
 					window.showGlobalNotification('La nota no puede quedar vacía.', 'warning');
 					return;
 				}
 				try {
-					const payload = new URLSearchParams({
-						note_id: String(noteId),
-						note_text: finalText,
+					editSubmitBtn.disabled = true;
+					const payload = new FormData();
+					payload.append('note_id', String(noteId));
+					payload.append('note_text', finalText);
+					if (removeAttachmentIds.size > 0) {
+						payload.append('remove_attachment_ids', Array.from(removeAttachmentIds).join(','));
+					}
+					const newFiles = Array.from(editNewAttachmentsInput?.files || []);
+					newFiles.forEach((file) => {
+						payload.append('attachments[]', file);
 					});
 					const response = await fetch(`${BASE_URL}crm/updateStudentNote`, {
 						method: 'POST',
-						headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
 						body: payload,
 					});
 					const data = await response.json();
 					if (!response.ok || !data.success) {
 						throw new Error(data.error || 'No se pudo editar la nota.');
 					}
-					await loadStudentNotes(entityId);
-					window.showGlobalNotification('Nota actualizada.', 'success');
+					if (editModalEl && window.bootstrap?.Modal) {
+						window.bootstrap.Modal.getOrCreateInstance(editModalEl).hide();
+					}
+					await loadStudentNotes(entityId, entityType);
+					await loadStudentHistory(entityId, entityType);
+					if (Array.isArray(data?.attachment_errors) && data.attachment_errors.length > 0) {
+						window.showGlobalNotification(`Nota actualizada con advertencias: ${data.attachment_errors.join(' ')}`, 'warning');
+					} else {
+						window.showGlobalNotification('Nota actualizada.', 'success');
+					}
 				} catch (error) {
 					window.showGlobalNotification(error.message || 'Error al actualizar nota.', 'danger');
+				} finally {
+					editSubmitBtn.disabled = false;
+					removeAttachmentIds = new Set();
 				}
-			});
-		});
+			};
+		}
+
+		if (deleteSubmitBtn) {
+			deleteSubmitBtn.onclick = async () => {
+				const noteId = Number(deleteNoteIdInput?.value || 0);
+				if (noteId <= 0) {
+					window.showGlobalNotification('No se pudo identificar la nota.', 'warning');
+					return;
+				}
+				try {
+					deleteSubmitBtn.disabled = true;
+					const payload = new URLSearchParams({ note_id: String(noteId) });
+					const response = await fetch(`${BASE_URL}crm/deleteStudentNote`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+						body: payload,
+					});
+					const data = await response.json();
+					if (!response.ok || !data.success) {
+						throw new Error(data.error || 'No se pudo eliminar la nota.');
+					}
+					if (deleteModalEl && window.bootstrap?.Modal) {
+						window.bootstrap.Modal.getOrCreateInstance(deleteModalEl).hide();
+					}
+					await loadStudentNotes(entityId, entityType);
+					await loadStudentHistory(entityId, entityType);
+					window.showGlobalNotification('Nota eliminada.', 'success');
+				} catch (error) {
+					window.showGlobalNotification(error.message || 'Error al eliminar nota.', 'danger');
+				} finally {
+					deleteSubmitBtn.disabled = false;
+				}
+			};
+		}
 	};
 
 	const renderTickets = (tickets) => {
@@ -2058,6 +2363,8 @@ document.addEventListener('DOMContentLoaded', () => {
 				correo_personal: String(document.getElementById('prospectEditCorreo')?.value || '').trim(),
 				celular: String(document.getElementById('prospectEditCelular')?.value || '').trim(),
 				propietario: String(document.getElementById('prospectEditPropietario')?.value || '').trim(),
+				creado_por: String(document.getElementById('prospectEditCreadoPor')?.value || '').trim(),
+				estado_id: String(document.getElementById('prospectEditEstadoId')?.value || '').trim(),
 				carrera: String(document.getElementById('prospectEditCarreraSelect')?.value || '').trim(),
 				modalidad: String(document.getElementById('prospectEditModalidad')?.value || '').trim(),
 				provincia: String(document.getElementById('prospectEditProvincia')?.value || '').trim(),
@@ -2096,20 +2403,30 @@ document.addEventListener('DOMContentLoaded', () => {
 					}
 
 					const cells = row.querySelectorAll('td');
-					if (cells.length >= 7) {
+					if (cells.length >= 8) {
 						const selectedCareerOption = document.getElementById('prospectEditCarreraSelect')?.selectedOptions?.[0];
 						const selectedCareerText = String(selectedCareerOption?.textContent || document.getElementById('prospectEditCarreraSelect')?.value || '-').trim();
-						cells[1].textContent = selectedCareerText || '-';
-						const stageText = String(cells[2]?.textContent || 'Sin etapa').trim();
+						cells[2].textContent = selectedCareerText || '-';
+						const stageOption = document.getElementById('prospectEditEstadoId')?.selectedOptions?.[0];
+						const stageText = String(stageOption?.textContent || 'Sin etapa').trim();
+						cells[3].innerHTML = `<span class="badge text-bg-light border">${escapeHtml(stageText)}</span>`;
 						if (digitsPhone !== '') {
-							cells[3].innerHTML = `<a href="https://wa.me/${escapeHtml(digitsPhone)}" target="_blank" rel="noopener noreferrer">${escapeHtml(newPhoneRaw || digitsPhone)}</a>`;
+							cells[4].innerHTML = `<a href="https://wa.me/${escapeHtml(digitsPhone)}" target="_blank" rel="noopener noreferrer">${escapeHtml(newPhoneRaw || digitsPhone)}</a>`;
 						} else {
-							cells[3].textContent = newPhoneRaw || '-';
+							cells[4].textContent = newPhoneRaw || '-';
 						}
-						cells[4].textContent = String(document.getElementById('prospectEditPropietario')?.value || '-') || '-';
+						cells[5].textContent = String(document.getElementById('prospectEditPropietario')?.value || '-') || '-';
+						cells[6].textContent = String(document.getElementById('prospectEditCreadoPor')?.value || '-') || '-';
 						row.setAttribute('data-prospect-origin', normalizeText(document.getElementById('prospectEditPropietario')?.value || ''));
 						row.setAttribute('data-prospect-stage', normalizeText(stageText));
 						row.setAttribute('data-prospect-career', normalizeText(selectedCareerText));
+						const createdByRaw = String(document.getElementById('prospectEditCreadoPor')?.value || '');
+						const createdByNormalized = createdByRaw
+							.split(',')
+							.map((value) => normalizeText(value))
+							.filter((value) => value !== '')
+							.join('|');
+						row.setAttribute('data-prospect-created-by', createdByNormalized);
 					}
 				}
 
