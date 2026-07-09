@@ -303,14 +303,25 @@
 			</div>
 			<div class="card-body pb-0">
 				<div class="row g-2 align-items-end mb-3">
+					<div class="col-md-3">
+						<label for="crmProspectSearch" class="form-label mb-1"><i class="bi bi-search"></i> Buscar</label>
+						<input type="text" id="crmProspectSearch" class="form-control" placeholder="Nombre, apellido o celular">
+					</div>
 					<div class="col-md-2">
-						<label for="crmProspectFilterOrigin" class="form-label mb-1"><i class="bi bi-diagram-3"></i> Asesores</label>
-						<select id="crmProspectFilterOrigin" class="form-select">
-							<option value="">Todos los asesores</option>
-							<?php foreach ($prospectOrigins as $originOption): ?>
-								<option value="<?= e(strtolower((string) $originOption)) ?>"><?= e((string) $originOption) ?></option>
-							<?php endforeach; ?>
-						</select>
+						<label class="form-label mb-1"><i class="bi bi-diagram-3"></i> Asesores</label>
+						<div class="dropdown" id="crmProspectOriginDropdown">
+							<button class="btn btn-outline-secondary dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" id="crmProspectOriginBtn">
+								Todos los asesores
+							</button>
+							<div class="dropdown-menu p-2 w-100" style="max-height: 240px; overflow-y: auto;">
+								<?php foreach ($prospectOrigins as $index => $originOption): ?>
+									<div class="form-check">
+										<input class="form-check-input crm-prospect-filter-checkbox" type="checkbox" value="<?= e(strtolower((string) $originOption)) ?>" id="crmProspectOriginOpt<?= (int) $index ?>" data-filter-group="prospect-origin">
+										<label class="form-check-label" for="crmProspectOriginOpt<?= (int) $index ?>"><?= e((string) $originOption) ?></label>
+									</div>
+								<?php endforeach; ?>
+							</div>
+						</div>
 					</div>
 					<div class="col-md-2">
 						<label class="form-label mb-1"><i class="bi bi-funnel"></i> Etapa</label>
@@ -400,7 +411,7 @@
 								<th>Carrera</th>
 								<th>Etapa</th>
 								<th>Celular</th>
-								<th>Propietario</th>
+								<th>Asesor</th>
 								<th>Creado por</th>
 								<th class="text-end">Acciones</th>
 							</tr>
@@ -408,6 +419,9 @@
 						<tbody>
 							<?php foreach ($prospectosLocales as $index => $prospecto): ?>
 								<?php
+								$fullName = trim((string) (($prospecto['nombre'] ?? '') . ' ' . ($prospecto['apellido'] ?? '')));
+								$rawPhone = (string) ($prospecto['celular'] ?? '');
+								$phoneDigits = preg_replace('/[^0-9]/', '', $rawPhone) ?: '';
 								$rawCreatedAt = trim((string) ($prospecto['created_at'] ?? ''));
 								$createdByRaw = trim((string) ($prospecto['creado_por'] ?? ''));
 								$createdByTokens = [];
@@ -428,6 +442,8 @@
 								?>
 								<tr
 									data-prospect-index="<?= (int) ($index + 1) ?>"
+									data-prospect-name="<?= e(strtolower($fullName)) ?>"
+									data-prospect-phone="<?= e($phoneDigits) ?>"
 									data-prospect-origin="<?= e(strtolower((string) ($prospecto['origen'] ?? ''))) ?>"
 									data-prospect-stage="<?= e(strtolower((string) ($prospecto['etapa'] ?? ''))) ?>"
 									data-prospect-career="<?= e(strtolower((string) ($prospecto['carrera'] ?? ''))) ?>"
@@ -445,15 +461,14 @@
 											data-bs-toggle="modal"
 											data-bs-target="#prospectEditModal"
 										>
-											<?= e(trim((string) (($prospecto['nombre'] ?? '') . ' ' . ($prospecto['apellido'] ?? '')))) ?>
+											<?= e($fullName) ?>
 										</button>
 									</td>
 									<td><?= e($prospecto['carrera'] ?? '-') ?></td>
 									<td><span class="badge text-bg-light border"><?= e($prospecto['etapa'] ?? 'Sin etapa') ?></span></td>
 									<td>
 										<?php
-										$rawPhone = (string) ($prospecto['celular'] ?? '');
-										$digitsPhone = preg_replace('/[^0-9]/', '', $rawPhone) ?: '';
+										$digitsPhone = $phoneDigits;
 										if ($digitsPhone !== '' && strlen($digitsPhone) === 10 && strpos($digitsPhone, '0') === 0) {
 											$digitsPhone = '593' . substr($digitsPhone, 1);
 										}

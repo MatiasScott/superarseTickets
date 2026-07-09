@@ -341,7 +341,8 @@ document.addEventListener('DOMContentLoaded', () => {
 	const filterClearBtn = document.getElementById('crmFilterClear');
 	const studentsCounter = document.getElementById('crmStudentsCounter');
 	const prospectsTable = document.getElementById('crmProspectsTable');
-	const prospectOriginSelect = document.getElementById('crmProspectFilterOrigin');
+	const prospectSearchInput = document.getElementById('crmProspectSearch');
+	const prospectOriginBtn = document.getElementById('crmProspectOriginBtn');
 	const prospectStageBtn = document.getElementById('crmProspectStageBtn');
 	const prospectCareerBtn = document.getElementById('crmProspectCareerBtn');
 	const prospectCreatedByBtn = document.getElementById('crmProspectCreatedByBtn');
@@ -385,6 +386,7 @@ document.addEventListener('DOMContentLoaded', () => {
 	};
 
 	const refreshProspectMultiFilterLabels = () => {
+		updateMultiFilterButtonLabel(prospectOriginBtn, getCheckedProspectFilterValues('prospect-origin'), 'Todos los asesores', 'asesor', 'asesores');
 		updateMultiFilterButtonLabel(prospectStageBtn, getCheckedProspectFilterValues('prospect-stage'), 'Todas las etapas', 'etapa', 'etapas');
 		updateMultiFilterButtonLabel(prospectCareerBtn, getCheckedProspectFilterValues('prospect-career'), 'Todas las carreras', 'carrera', 'carreras');
 		updateMultiFilterButtonLabel(prospectCreatedByBtn, getCheckedProspectFilterValues('prospect-created-by'), 'Todos', 'persona', 'personas');
@@ -610,7 +612,9 @@ document.addEventListener('DOMContentLoaded', () => {
 			return;
 		}
 
-		const selectedOrigin = normalizeText(prospectOriginSelect?.value || '');
+		const searchValue = normalizeText(String(prospectSearchInput?.value || '').trim());
+		const searchDigits = String(prospectSearchInput?.value || '').replace(/\D+/g, '');
+		const selectedOrigins = getCheckedProspectFilterValues('prospect-origin');
 		const selectedStages = getCheckedProspectFilterValues('prospect-stage');
 		const selectedCareers = getCheckedProspectFilterValues('prospect-career');
 		const selectedCreatedBy = getCheckedProspectFilterValues('prospect-created-by');
@@ -657,6 +661,8 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 
 		rows.forEach((row) => {
+			const rowName = normalizeText(row.getAttribute('data-prospect-name') || '');
+			const rowPhone = String(row.getAttribute('data-prospect-phone') || '').replace(/\D+/g, '');
 			const rowOrigin = normalizeText(row.getAttribute('data-prospect-origin') || '');
 			const rowStage = normalizeText(row.getAttribute('data-prospect-stage') || '');
 			const rowCareer = normalizeText(row.getAttribute('data-prospect-career') || '');
@@ -667,7 +673,10 @@ document.addEventListener('DOMContentLoaded', () => {
 			const rowDatetimeRaw = String(row.getAttribute('data-prospect-datetime') || '').trim();
 			const rowDatetime = rowDatetimeRaw !== '' ? new Date(rowDatetimeRaw.replace(' ', 'T')) : null;
 
-			const matchOrigin = selectedOrigin === '' || rowOrigin === selectedOrigin;
+			const matchSearch = searchValue === ''
+				? true
+				: rowName.includes(searchValue) || (searchDigits !== '' && rowPhone.includes(searchDigits));
+			const matchOrigin = selectedOrigins.length === 0 || selectedOrigins.includes(rowOrigin);
 			const matchStage = selectedStages.length === 0 || selectedStages.includes(rowStage);
 			const matchCareer = selectedCareers.length === 0 || selectedCareers.includes(rowCareer);
 			const matchCreatedBy = selectedCreatedBy.length === 0 || selectedCreatedBy.some((item) => rowCreatedBy.includes(item));
@@ -691,7 +700,7 @@ document.addEventListener('DOMContentLoaded', () => {
 				}
 			}
 
-			row.style.display = (matchOrigin && matchStage && matchCareer && matchCreatedBy && matchCreated) ? '' : 'none';
+			row.style.display = (matchSearch && matchOrigin && matchStage && matchCareer && matchCreatedBy && matchCreated) ? '' : 'none';
 		});
 		reindexVisibleProspectsRows();
 		updateProspectsCounter();
@@ -710,7 +719,7 @@ document.addEventListener('DOMContentLoaded', () => {
 			applyProspectFilters();
 		});
 	});
-	prospectOriginSelect?.addEventListener('change', applyProspectFilters);
+	prospectSearchInput?.addEventListener('input', applyProspectFilters);
 	prospectCreatedPreset?.addEventListener('change', applyProspectFilters);
 	prospectDateFromInput?.addEventListener('change', applyProspectFilters);
 	prospectDateToInput?.addEventListener('change', applyProspectFilters);
@@ -727,8 +736,8 @@ document.addEventListener('DOMContentLoaded', () => {
 	});
 
 	prospectClearBtn?.addEventListener('click', () => {
-		if (prospectOriginSelect) {
-			prospectOriginSelect.value = '';
+		if (prospectSearchInput) {
+			prospectSearchInput.value = '';
 		}
 		if (prospectCreatedPreset) {
 			prospectCreatedPreset.value = '';
@@ -2417,6 +2426,8 @@ document.addEventListener('DOMContentLoaded', () => {
 						}
 						cells[5].textContent = String(document.getElementById('prospectEditPropietario')?.value || '-') || '-';
 						cells[6].textContent = String(document.getElementById('prospectEditCreadoPor')?.value || '-') || '-';
+						row.setAttribute('data-prospect-name', normalizeText(newName));
+						row.setAttribute('data-prospect-phone', newPhoneRaw.replace(/[^0-9]/g, ''));
 						row.setAttribute('data-prospect-origin', normalizeText(document.getElementById('prospectEditPropietario')?.value || ''));
 						row.setAttribute('data-prospect-stage', normalizeText(stageText));
 						row.setAttribute('data-prospect-career', normalizeText(selectedCareerText));
