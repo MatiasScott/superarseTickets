@@ -386,6 +386,7 @@ class CRMController extends Controller
 			// Evitar romper la vista por reconciliacion.
 		}
 		$periodoFiltro = $this->sanitizePeriodoKey((string) ($_GET['periodo'] ?? ''));
+		$prospectSort = $this->normalizeProspectSort((string) ($_GET['prospect_sort'] ?? 'desc'));
 
 		$studentsPerPage = 15;
 		$studentPage = max(1, (int) ($_GET['student_page'] ?? 1));
@@ -409,18 +410,18 @@ class CRMController extends Controller
 		$prospectPerPage = max(25, min(50000, $totalProspects > 0 ? $totalProspects : 25));
 		$prospectPage = 1;
 		$prospectPages = 1;
-		$prospectosLocales = $this->fetchLocalProspects($prospectPerPage, 0);
+		$prospectosLocales = $this->fetchLocalProspects($prospectPerPage, 0, $prospectSort);
 
 		if (empty($prospectosLocales) && $totalProspects > 0) {
 			$prospectPerPage = 25;
 			$prospectPage = max(1, (int) ($_GET['prospect_page'] ?? 1));
 			$prospectPages = max(1, (int) ceil($totalProspects / $prospectPerPage));
 			$prospectPage = min($prospectPage, $prospectPages);
-			$prospectosLocales = $this->fetchLocalProspects($prospectPerPage, ($prospectPage - 1) * $prospectPerPage);
+			$prospectosLocales = $this->fetchLocalProspects($prospectPerPage, ($prospectPage - 1) * $prospectPerPage, $prospectSort);
 		}
 
+		$db = Database::getInstance()->connection();
 		try {
-			$db = Database::getInstance()->connection();
 			$pipelineEstados = $db->query("SELECT id, nombre FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC")->fetchAll() ?: [];
 		} catch (Throwable $e) {
 			$pipelineEstados = [];
@@ -443,6 +444,7 @@ class CRMController extends Controller
 			'prospectPage'   => $prospectPage,
 			'prospectPages'  => $prospectPages,
 			'totalProspects' => $totalProspects,
+			'prospectSort' => $prospectSort,
 		], [
 			'title' => 'CRM - Ver todo CRM',
 		]);
@@ -460,7 +462,8 @@ class CRMController extends Controller
 		$nombres = trim((string) ($_POST['nombres'] ?? ''));
 		$apellidos = trim((string) ($_POST['apellidos'] ?? ''));
 		$identificacion = $this->normalizeIdentityValue((string) ($_POST['identificacion'] ?? ''));
-		$celular = $this->normalizePhoneValue((string) ($_POST['celular'] ?? ''));
+		$celularRaw = trim((string) ($_POST['celular'] ?? ''));
+		$celular = $this->normalizeProspectPhoneValue($celularRaw);
 		$correoPersonal = $this->normalizeEmailValue((string) ($_POST['correo_personal'] ?? ''));
 		$origen = trim((string) ($_POST['origen'] ?? 'crm_manual'));
 		$carrera = trim((string) ($_POST['carrera'] ?? ''));
@@ -471,6 +474,11 @@ class CRMController extends Controller
 
 		if ($nombres === '' || $apellidos === '') {
 			set_flash('error', 'Nombres y apellidos son obligatorios.');
+			redirect('crm/interesados');
+		}
+
+		if ($celularRaw !== '' && $celular === '') {
+			set_flash('error', 'El celular debe tener el formato +593987654321.');
 			redirect('crm/interesados');
 		}
 
@@ -1505,12 +1513,16 @@ class CRMController extends Controller
 		}
 	}
 
-	private function fetchLocalProspects(int $perPage = 25, int $offset = 0): array
+	private function fetchLocalProspects(int $perPage = 25, int $offset = 0, string $sortDirection = 'desc'): array
 	{
 		$perPage = max(10, min(50000, $perPage));
 		$offset  = max(0, $offset);
+		$sortDirection = $this->normalizeProspectSort($sortDirection);
 		try {
 			$db = Database::getInstance()->connection();
+			$orderBy = $sortDirection === 'asc'
+				? 'ORDER BY c.nombre ASC, c.apellido ASC, i.id ASC'
+				: 'ORDER BY c.nombre DESC, c.apellido DESC, i.id DESC';
 			$sql = "SELECT
 				i.id,
 				i.contacto_id,
@@ -1544,7 +1556,7 @@ class CRMController extends Controller
 				) tx ON tx.first_id = t1.id
 			) tc ON tc.contacto_id = i.contacto_id
 			WHERE i.estado = 'activo' AND COALESCE(i.convertido, 0) = 0
-			ORDER BY i.id DESC
+			{$orderBy}
 			LIMIT :perPage OFFSET :offset";
 
 			$stmt = $db->prepare($sql);
@@ -2214,7 +2226,8 @@ class CRMController extends Controller
 		$apellidos = trim((string) ($_POST['apellidos'] ?? ''));
 		$identificacion = $this->normalizeIdentityValue((string) ($_POST['identificacion'] ?? ''));
 		$correoPersonal = $this->normalizeEmailValue((string) ($_POST['correo_personal'] ?? ''));
-		$celular = $this->normalizePhoneValue((string) ($_POST['celular'] ?? ''));
+		$celularRaw = trim((string) ($_POST['celular'] ?? ''));
+		$celular = $this->normalizeProspectPhoneValue($celularRaw);
 		$propietario = trim((string) ($_POST['propietario'] ?? ''));
 		$creadoPor = trim((string) ($_POST['creado_por'] ?? ''));
 		$carrera = trim((string) ($_POST['carrera'] ?? ''));
@@ -2225,6 +2238,12 @@ class CRMController extends Controller
 		if ($contactoId <= 0 || $nombres === '' || $apellidos === '') {
 			http_response_code(400);
 			echo json_encode(['success' => false, 'error' => 'Datos incompletos']);
+			exit;
+		}
+
+		if ($celularRaw !== '' && $celular === '') {
+			http_response_code(400);
+			echo json_encode(['success' => false, 'error' => 'El celular debe tener el formato +593987654321.']);
 			exit;
 		}
 
@@ -3770,10 +3789,18 @@ class CRMController extends Controller
 			return;
 		}
 
+		$careerSelect = "'' AS career_name";
+		foreach (['carrera', 'programa'] as $candidateCareer) {
+			if (isset($availableCols[$candidateCareer])) {
+				$careerSelect = "$candidateCareer AS career_name";
+				break;
+			}
+		}
+
 		$identities = array_keys($identityToContact);
 		foreach (array_chunk($identities, 200) as $chunk) {
 			$placeholders = implode(',', array_fill(0, count($chunk), '?'));
-			$sql = "SELECT id, REPLACE(REPLACE(REPLACE(UPPER(TRIM(COALESCE($identityColumn, ''))), '.', ''), '-', ''), ' ', '') AS identity_key
+			$sql = "SELECT id, $careerSelect, REPLACE(REPLACE(REPLACE(UPPER(TRIM(COALESCE($identityColumn, ''))), '.', ''), '-', ''), ' ', '') AS identity_key
 				FROM users
 				WHERE REPLACE(REPLACE(REPLACE(UPPER(TRIM(COALESCE($identityColumn, ''))), '.', ''), '-', ''), ' ', '') IN ($placeholders)";
 			$stmt = $remote->prepare($sql);
@@ -3785,6 +3812,11 @@ class CRMController extends Controller
 				$identity = $this->normalizeIdentityValue((string) ($user['identity_key'] ?? ''));
 				$contactId = (int) ($identityToContact[$identity] ?? 0);
 				if ($userId <= 0 || $contactId <= 0) {
+					continue;
+				}
+
+				$careerName = trim((string) ($user['career_name'] ?? ''));
+				if (!$this->hasActiveMatriculaForContact($db, $contactId, $careerName)) {
 					continue;
 				}
 
@@ -4111,6 +4143,68 @@ class CRMController extends Controller
 		}
 
 		return $value;
+	}
+
+	private function normalizeProspectSort(string $value): string
+	{
+		$value = strtolower(trim($value));
+		return in_array($value, ['asc', 'desc'], true) ? $value : 'desc';
+	}
+
+	private function normalizeProspectPhoneValue(string $value): string
+	{
+		$value = trim($value);
+		if ($value === '') {
+			return '';
+		}
+
+		$digits = preg_replace('/\D+/', '', $value) ?: '';
+		if ($digits === '') {
+			return '';
+		}
+
+		if (preg_match('/^5939\d{8}$/', $digits) === 1) {
+			return '+' . $digits;
+		}
+
+		if (preg_match('/^09\d{8}$/', $digits) === 1) {
+			return '+593' . substr($digits, 1);
+		}
+
+		if (preg_match('/^9\d{8}$/', $digits) === 1) {
+			return '+593' . $digits;
+		}
+
+		return '';
+	}
+
+	private function hasActiveMatriculaForContact(PDO $db, int $contactId, string $careerName = ''): bool
+	{
+		if ($contactId <= 0 || trim($careerName) === '') {
+			return false;
+		}
+
+		$sql = 'SELECT m.id
+			FROM estudiantes e
+			INNER JOIN matriculas m ON m.estudiante_id = e.id
+			LEFT JOIN carreras c ON c.id = m.carrera_id
+			WHERE e.contacto_id = :contacto_id
+			  AND e.estado = "activo"
+			  AND m.estado = "activo"
+			  AND COALESCE(m.estado_matricula, "") = "activo"';
+		$params = ['contacto_id' => $contactId];
+
+		$careerName = trim($careerName);
+		if ($careerName !== '') {
+			$sql .= ' AND LOWER(TRIM(COALESCE(c.nombre, ""))) = :career_name';
+			$params['career_name'] = mb_strtolower($careerName);
+		}
+
+		$sql .= ' LIMIT 1';
+		$stmt = $db->prepare($sql);
+		$stmt->execute($params);
+
+		return (bool) $stmt->fetchColumn();
 	}
 
 	private function normalizeCreatedByValue(string $value): string

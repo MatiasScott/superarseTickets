@@ -258,6 +258,31 @@ document.addEventListener('DOMContentLoaded', () => {
 	};
 
 	const normalizeText = (value) => String(value || '').toLowerCase().trim();
+	const normalizeEcuadorPhoneValue = (value) => {
+		const raw = String(value || '').trim();
+		if (raw === '') {
+			return '';
+		}
+
+		const digits = raw.replace(/\D+/g, '');
+		if (digits === '') {
+			return '';
+		}
+
+		if (/^5939\d{8}$/.test(digits)) {
+			return `+${digits}`;
+		}
+
+		if (/^09\d{8}$/.test(digits)) {
+			return `+593${digits.slice(1)}`;
+		}
+
+		if (/^9\d{8}$/.test(digits)) {
+			return `+593${digits}`;
+		}
+
+		return '';
+	};
 
 	const parseCommaValues = (raw) => String(raw || '')
 		.split(',')
@@ -342,6 +367,7 @@ document.addEventListener('DOMContentLoaded', () => {
 	const studentsCounter = document.getElementById('crmStudentsCounter');
 	const prospectsTable = document.getElementById('crmProspectsTable');
 	const prospectSearchInput = document.getElementById('crmProspectSearch');
+	const prospectSortButton = document.getElementById('crmProspectSortBtn');
 	const prospectOriginBtn = document.getElementById('crmProspectOriginBtn');
 	const prospectStageBtn = document.getElementById('crmProspectStageBtn');
 	const prospectCareerBtn = document.getElementById('crmProspectCareerBtn');
@@ -352,6 +378,87 @@ document.addEventListener('DOMContentLoaded', () => {
 	const prospectDateToInput = document.getElementById('crmProspectDateTo');
 	const prospectClearBtn = document.getElementById('crmProspectFilterClear');
 	const prospectsCounter = document.getElementById('crmProspectsCounter');
+	const prospectCreatePhoneInput = document.getElementById('prospectCelular');
+	const prospectCreateForm = document.querySelector('#createProspectModal form');
+	const updateProspectSortButtonState = () => {
+		if (!prospectSortButton) {
+			return;
+		}
+
+		const direction = String(prospectSortButton.getAttribute('data-sort-direction') || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
+		prospectSortButton.setAttribute('data-sort-direction', direction);
+		prospectSortButton.innerHTML = direction === 'asc'
+			? '<i class="bi bi-sort-alpha-down"></i>'
+			: '<i class="bi bi-sort-alpha-up"></i>';
+		prospectSortButton.title = direction === 'asc' ? 'Orden actual: A → Z' : 'Orden actual: Z → A';
+		prospectSortButton.setAttribute('aria-label', prospectSortButton.title);
+	};
+
+	const sortProspectRows = () => {
+		if (!prospectsTable) {
+			return;
+		}
+
+		const tbody = prospectsTable.querySelector('tbody');
+		if (!tbody) {
+			return;
+		}
+
+		const direction = String(prospectSortButton?.getAttribute('data-sort-direction') || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
+		const rows = Array.from(tbody.querySelectorAll('tr[data-prospect-name]'));
+		rows.sort((leftRow, rightRow) => {
+			const leftName = normalizeText(leftRow.getAttribute('data-prospect-name') || '');
+			const rightName = normalizeText(rightRow.getAttribute('data-prospect-name') || '');
+			const nameCompare = leftName.localeCompare(rightName, 'es', { sensitivity: 'base', numeric: true });
+			if (nameCompare !== 0) {
+				return direction === 'asc' ? nameCompare : -nameCompare;
+			}
+
+			const leftIndex = Number(leftRow.getAttribute('data-prospect-index') || 0);
+			const rightIndex = Number(rightRow.getAttribute('data-prospect-index') || 0);
+			return direction === 'asc' ? leftIndex - rightIndex : rightIndex - leftIndex;
+		});
+
+		rows.forEach((row) => tbody.appendChild(row));
+	};
+
+	const bindProspectPhoneInput = (input) => {
+		if (!input || input.dataset.phoneNormalized === '1') {
+			return;
+		}
+
+		input.dataset.phoneNormalized = '1';
+		const normalizeField = () => {
+			const normalized = normalizeEcuadorPhoneValue(input.value);
+			if (normalized !== '') {
+				input.value = normalized;
+			}
+		};
+
+		input.addEventListener('blur', normalizeField);
+		input.addEventListener('change', normalizeField);
+	};
+
+	bindProspectPhoneInput(prospectCreatePhoneInput);
+	if (prospectCreateForm) {
+		prospectCreateForm.addEventListener('submit', () => {
+			if (prospectCreatePhoneInput) {
+				const normalized = normalizeEcuadorPhoneValue(prospectCreatePhoneInput.value);
+				if (normalized !== '') {
+					prospectCreatePhoneInput.value = normalized;
+				}
+			}
+		});
+	}
+
+		updateProspectSortButtonState();
+		prospectSortButton?.addEventListener('click', () => {
+			const currentDirection = String(prospectSortButton.getAttribute('data-sort-direction') || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
+			prospectSortButton.setAttribute('data-sort-direction', currentDirection === 'asc' ? 'desc' : 'asc');
+			updateProspectSortButtonState();
+			sortProspectRows();
+			applyProspectFilters();
+		});
 
 	const getCheckedFilterValues = (group) => {
 		return Array.from(document.querySelectorAll(`.crm-filter-checkbox[data-filter-group="${group}"]:checked`))
@@ -611,6 +718,8 @@ document.addEventListener('DOMContentLoaded', () => {
 			updateProspectsCounter();
 			return;
 		}
+
+		sortProspectRows();
 
 		const searchValue = normalizeText(String(prospectSearchInput?.value || '').trim());
 		const searchDigits = String(prospectSearchInput?.value || '').replace(/\D+/g, '');
@@ -952,6 +1061,8 @@ document.addEventListener('DOMContentLoaded', () => {
 				</div>
 			</div>
 		`;
+
+		bindProspectPhoneInput(document.getElementById('prospectEditCelular'));
 	};
 
 	const renderContactModal = (student, studentId) => {
@@ -2370,7 +2481,7 @@ document.addEventListener('DOMContentLoaded', () => {
 				apellidos: String(document.getElementById('prospectEditApellidos')?.value || '').trim(),
 				identificacion: String(document.getElementById('prospectEditIdentificacion')?.value || '').trim(),
 				correo_personal: String(document.getElementById('prospectEditCorreo')?.value || '').trim(),
-				celular: String(document.getElementById('prospectEditCelular')?.value || '').trim(),
+				celular: normalizeEcuadorPhoneValue(document.getElementById('prospectEditCelular')?.value || ''),
 				propietario: String(document.getElementById('prospectEditPropietario')?.value || '').trim(),
 				creado_por: String(document.getElementById('prospectEditCreadoPor')?.value || '').trim(),
 				estado_id: String(document.getElementById('prospectEditEstadoId')?.value || '').trim(),
@@ -2402,9 +2513,10 @@ document.addEventListener('DOMContentLoaded', () => {
 				if (row) {
 					const newName = `${String(document.getElementById('prospectEditNombres')?.value || '').trim()} ${String(document.getElementById('prospectEditApellidos')?.value || '').trim()}`.replace(/\s+/g, ' ').trim();
 					const newPhoneRaw = String(document.getElementById('prospectEditCelular')?.value || '').trim();
-					let digitsPhone = newPhoneRaw.replace(/[^0-9]/g, '');
-					if (digitsPhone.length === 10 && digitsPhone.startsWith('0')) {
-						digitsPhone = `593${digitsPhone.slice(1)}`;
+					const normalizedPhone = normalizeEcuadorPhoneValue(newPhoneRaw);
+					let digitsPhone = normalizedPhone.replace(/\D+/g, '');
+					if (digitsPhone === '' && newPhoneRaw !== '') {
+						digitsPhone = newPhoneRaw.replace(/\D+/g, '');
 					}
 					const contactLink = row.querySelector('.prospect-edit-link');
 					if (contactLink) {
@@ -2420,14 +2532,14 @@ document.addEventListener('DOMContentLoaded', () => {
 						const stageText = String(stageOption?.textContent || 'Sin etapa').trim();
 						cells[3].innerHTML = `<span class="badge text-bg-light border">${escapeHtml(stageText)}</span>`;
 						if (digitsPhone !== '') {
-							cells[4].innerHTML = `<a href="https://wa.me/${escapeHtml(digitsPhone)}" target="_blank" rel="noopener noreferrer">${escapeHtml(newPhoneRaw || digitsPhone)}</a>`;
+							cells[4].innerHTML = `<a href="https://wa.me/${escapeHtml(digitsPhone)}" target="_blank" rel="noopener noreferrer">${escapeHtml(normalizedPhone || newPhoneRaw || digitsPhone)}</a>`;
 						} else {
-							cells[4].textContent = newPhoneRaw || '-';
+							cells[4].textContent = normalizedPhone || newPhoneRaw || '-';
 						}
 						cells[5].textContent = String(document.getElementById('prospectEditPropietario')?.value || '-') || '-';
 						cells[6].textContent = String(document.getElementById('prospectEditCreadoPor')?.value || '-') || '-';
 						row.setAttribute('data-prospect-name', normalizeText(newName));
-						row.setAttribute('data-prospect-phone', newPhoneRaw.replace(/[^0-9]/g, ''));
+						row.setAttribute('data-prospect-phone', digitsPhone);
 						row.setAttribute('data-prospect-origin', normalizeText(document.getElementById('prospectEditPropietario')?.value || ''));
 						row.setAttribute('data-prospect-stage', normalizeText(stageText));
 						row.setAttribute('data-prospect-career', normalizeText(selectedCareerText));

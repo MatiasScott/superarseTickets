@@ -14,6 +14,7 @@
 	<?php $prospectPage = (int) ($prospectPage ?? 1); ?>
 	<?php $prospectPages = (int) ($prospectPages ?? 1); ?>
 	<?php $totalProspects = (int) ($totalProspects ?? 0); ?>
+	<?php $prospectSort = (string) ($prospectSort ?? 'desc'); ?>
 	<?php
 	$prospectOrigins = [];
 	$prospectStages = [];
@@ -70,13 +71,16 @@
 	$studentLevels = array_values($studentLevels);
 	?>
 	<?php
-	$buildCrmUrl = function (array $params = []) use ($periodoSeleccionado, $studentPage, $prospectPage): string {
+	$buildCrmUrl = function (array $params = []) use ($periodoSeleccionado, $studentPage, $prospectPage, $prospectSort): string {
 		$query = [];
 		if ($periodoSeleccionado !== '') {
 			$query['periodo'] = $periodoSeleccionado;
 		}
 		$query['student_page'] = max(1, (int) ($params['student_page'] ?? $studentPage));
 		$query['prospect_page'] = max(1, (int) ($params['prospect_page'] ?? $prospectPage));
+		if ($prospectSort !== '') {
+			$query['prospect_sort'] = $prospectSort;
+		}
 		return base_url('crm/interesados?' . http_build_query($query));
 	};
 	?>
@@ -299,7 +303,9 @@
 
 		<div class="card border-0 shadow-sm mt-4">
 			<div class="card-header bg-white">
-				<h2 class="h5 mb-0"><i class="bi bi-person-badge"></i> Clientes potenciales creados en CRM</h2>
+					<div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+						<h2 class="h5 mb-0"><i class="bi bi-person-badge"></i> Clientes potenciales creados en CRM</h2>
+					</div>
 			</div>
 			<div class="card-body pb-0">
 				<div class="row g-2 align-items-end mb-3">
@@ -407,7 +413,14 @@
 						<thead>
 							<tr>
 								<th>#</th>
-								<th>Contacto</th>
+								<th>
+									<div class="d-inline-flex align-items-center gap-2">
+										<span>Contacto</span>
+										<button type="button" id="crmProspectSortBtn" class="btn btn-link p-0 text-decoration-none text-muted" data-sort-direction="desc" title="Ordenar contactos" aria-label="Ordenar contactos">
+											<i class="bi bi-sort-alpha-down"></i>
+										</button>
+									</div>
+								</th>
 								<th>Carrera</th>
 								<th>Etapa</th>
 								<th>Celular</th>
@@ -567,7 +580,8 @@
 						</div>
 						<div class="col-md-4">
 							<label for="prospectCelular" class="form-label">Celular</label>
-							<input type="text" id="prospectCelular" name="celular" class="form-control" maxlength="30" placeholder="Ej: 0999999999">
+							<input type="text" id="prospectCelular" name="celular" class="form-control" maxlength="30" placeholder="Ej: +593987654321" inputmode="tel" pattern="^\+5939[0-9]{8}$" title="Usa el formato +593987654321">
+							<div class="form-text">Se completa automáticamente el prefijo +593 cuando es posible.</div>
 						</div>
 						<div class="col-md-4">
 							<label for="prospectCorreoPersonal" class="form-label">Correo personal</label>
