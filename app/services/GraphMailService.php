@@ -333,6 +333,13 @@ class GraphMailService
 	public function replyToMessage(array $account, string $messageToken, string $bodyText, ?string $htmlBody = null, array $attachments = [], array $cc = []): array
 	{
 		$userPrincipalName = trim((string) ($account['email'] ?? ''));
+		$this->appendTicketMailDebug('graph.reply.start', [
+			'account_alias' => (string) ($account['alias'] ?? ''),
+			'account_email' => $userPrincipalName,
+			'has_cc' => !empty($cc),
+			'cc_count' => count($cc),
+			'attachments_count' => count($attachments),
+		]);
 		if ($userPrincipalName === '') {
 			return ['ok' => false, 'error' => 'La cuenta no tiene email configurado para Graph.'];
 		}
@@ -346,11 +353,16 @@ class GraphMailService
 			'GET',
 			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId),
 			null,
-			['$select' => 'id,conversationId,internetMessageId']
+			['$select' => 'id,conversationId,internetMessageId,subject,from,replyTo']
 		);
 
 		if (!$originalMessage['ok']) {
 			return ['ok' => false, 'error' => $originalMessage['error']];
+		}
+
+		$bodyContent = trim((string) ($htmlBody ?? ''));
+		if ($bodyContent === '') {
+			$bodyContent = nl2br(htmlspecialchars(trim($bodyText), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
 		}
 
 		$createDraft = $this->request(
@@ -358,11 +370,15 @@ class GraphMailService
 			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId) . '/createReply',
 			[]
 		);
+		$this->appendTicketMailDebug('graph.reply.create_draft.response', [
+			'ok' => (bool) ($createDraft['ok'] ?? false),
+			'error' => (string) ($createDraft['error'] ?? ''),
+		]);
 
 		if (!$createDraft['ok']) {
 			$createErr = (string) ($createDraft['error'] ?? '');
 			if ($this->isAccessDeniedError($createErr)) {
-				return $this->sendReplyCommentFallback($userPrincipalName, $messageId, $bodyText, $originalMessage);
+				return $this->sendReplyCommentFallback($userPrincipalName, $messageId, $bodyText, $bodyContent, $attachments, $cc, $originalMessage);
 			}
 			return ['ok' => false, 'error' => $createErr];
 		}
@@ -371,11 +387,6 @@ class GraphMailService
 		$draftId = trim((string) ($draft['id'] ?? ''));
 		if ($draftId === '') {
 			return ['ok' => false, 'error' => 'Graph no devolvio el borrador de respuesta.'];
-		}
-
-		$bodyContent = trim((string) ($htmlBody ?? ''));
-		if ($bodyContent === '') {
-			$bodyContent = nl2br(htmlspecialchars(trim($bodyText), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
 		}
 
 		$updatePayload = [
@@ -388,16 +399,25 @@ class GraphMailService
 		if (!empty($ccRecipients)) {
 			$updatePayload['ccRecipients'] = $ccRecipients;
 		}
+		$this->appendTicketMailDebug('graph.reply.update_draft.request', [
+			'has_cc' => !empty($ccRecipients),
+			'cc' => array_map(static fn($item) => (string) (($item['emailAddress']['address'] ?? '')), $ccRecipients),
+			'attachments_count' => count($attachments),
+		]);
 
 		$updateDraft = $this->request(
 			'PATCH',
 			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($draftId),
 			$updatePayload
 		);
+		$this->appendTicketMailDebug('graph.reply.update_draft.response', [
+			'ok' => (bool) ($updateDraft['ok'] ?? false),
+			'error' => (string) ($updateDraft['error'] ?? ''),
+		]);
 		if (!$updateDraft['ok']) {
 			$updateErr = (string) ($updateDraft['error'] ?? '');
 			if ($this->isAccessDeniedError($updateErr)) {
-				return $this->sendReplyCommentFallback($userPrincipalName, $messageId, $bodyText, $originalMessage);
+				return $this->sendReplyCommentFallback($userPrincipalName, $messageId, $bodyText, $bodyContent, $attachments, $cc, $originalMessage);
 			}
 			return ['ok' => false, 'error' => $updateErr];
 		}
@@ -416,7 +436,7 @@ class GraphMailService
 			if (!$attachResult['ok']) {
 				$attachErr = (string) ($attachResult['error'] ?? '');
 				if ($this->isAccessDeniedError($attachErr)) {
-					return $this->sendReplyCommentFallback($userPrincipalName, $messageId, $bodyText, $originalMessage);
+					return $this->sendReplyCommentFallback($userPrincipalName, $messageId, $bodyText, $bodyContent, $attachments, $cc, $originalMessage);
 				}
 				return ['ok' => false, 'error' => $attachErr];
 			}
@@ -427,10 +447,14 @@ class GraphMailService
 			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($draftId) . '/send',
 			[]
 		);
+		$this->appendTicketMailDebug('graph.reply.send_draft.response', [
+			'ok' => (bool) ($sendDraft['ok'] ?? false),
+			'error' => (string) ($sendDraft['error'] ?? ''),
+		]);
 		if (!$sendDraft['ok']) {
 			$sendErr = (string) ($sendDraft['error'] ?? '');
 			if ($this->isAccessDeniedError($sendErr)) {
-				return $this->sendReplyCommentFallback($userPrincipalName, $messageId, $bodyText, $originalMessage);
+				return $this->sendReplyCommentFallback($userPrincipalName, $messageId, $bodyText, $bodyContent, $attachments, $cc, $originalMessage);
 			}
 			return ['ok' => false, 'error' => $sendErr];
 		}
@@ -439,6 +463,7 @@ class GraphMailService
 		return [
 			'ok' => true,
 			'error' => null,
+			'delivery_mode' => 'graph_reply_draft',
 			'thread' => [
 				'graph_message_id' => $draftId,
 				'conversation_id' => (string) ($source['conversationId'] ?? ''),
@@ -447,8 +472,97 @@ class GraphMailService
 		];
 	}
 
-	private function sendReplyCommentFallback(string $userPrincipalName, string $messageId, string $bodyText, array $originalMessage): array
+	private function sendReplyCommentFallback(string $userPrincipalName, string $messageId, string $bodyText, string $bodyHtml, array $attachments, array $cc, array $originalMessage): array
 	{
+		$source = is_array($originalMessage['body'] ?? null) ? $originalMessage['body'] : [];
+		$replyToRecipients = is_array($source['replyTo'] ?? null) ? $source['replyTo'] : [];
+		$primaryRecipient = '';
+		if (!empty($replyToRecipients) && is_array($replyToRecipients[0]['emailAddress'] ?? null)) {
+			$primaryRecipient = trim((string) ($replyToRecipients[0]['emailAddress']['address'] ?? ''));
+		}
+		if ($primaryRecipient === '' && is_array($source['from']['emailAddress'] ?? null)) {
+			$primaryRecipient = trim((string) ($source['from']['emailAddress']['address'] ?? ''));
+		}
+
+		$replySubject = trim((string) ($source['subject'] ?? ''));
+		if ($replySubject === '') {
+			$replySubject = '(Sin asunto)';
+		}
+		if (!preg_match('/^re\s*:/i', $replySubject)) {
+			$replySubject = 'Re: ' . $replySubject;
+		}
+
+		if ($primaryRecipient !== '' && MailService::isValidEmail($primaryRecipient)) {
+			$payload = [
+				'message' => [
+					'subject' => $replySubject,
+					'body' => [
+						'contentType' => 'HTML',
+						'content' => $bodyHtml,
+					],
+					'toRecipients' => [
+						[
+							'emailAddress' => [
+								'address' => $primaryRecipient,
+							],
+						],
+					],
+				],
+				'saveToSentItems' => true,
+			];
+
+			$ccRecipients = $this->toRecipients($cc);
+			if (!empty($ccRecipients)) {
+				$payload['message']['ccRecipients'] = $ccRecipients;
+			}
+
+			$graphAttachments = [];
+			foreach ($attachments as $attachment) {
+				$graphAttachment = $this->buildGraphAttachmentFromPath($attachment);
+				if ($graphAttachment === null) {
+					continue;
+				}
+				$graphAttachments[] = $graphAttachment;
+			}
+			if (!empty($graphAttachments)) {
+				$payload['message']['attachments'] = $graphAttachments;
+			}
+
+			$this->appendTicketMailDebug('graph.reply.manual_sendmail.request', [
+				'to' => $primaryRecipient,
+				'cc' => array_map(static fn($item) => (string) (($item['emailAddress']['address'] ?? '')), $ccRecipients),
+				'attachments_count' => count($graphAttachments),
+			]);
+			$sendMail = $this->request(
+				'POST',
+				'/users/' . rawurlencode($userPrincipalName) . '/sendMail',
+				$payload
+			);
+			$this->appendTicketMailDebug('graph.reply.manual_sendmail.response', [
+				'ok' => (bool) ($sendMail['ok'] ?? false),
+				'error' => (string) ($sendMail['error'] ?? ''),
+			]);
+
+			if ($sendMail['ok']) {
+				return [
+					'ok' => true,
+					'error' => null,
+					'delivery_mode' => 'graph_sendmail_new_thread',
+					'thread' => [
+						'graph_message_id' => $messageId,
+						'conversation_id' => (string) ($source['conversationId'] ?? ''),
+						'internet_message_id' => (string) ($source['internetMessageId'] ?? ''),
+					],
+				];
+			}
+
+			// Si hay CC solicitado, no degradar silenciosamente a /reply(comment),
+			// porque ese endpoint no permite CC y aparenta exito parcial.
+			if (!empty($cc)) {
+				return ['ok' => false, 'error' => (string) ($sendMail['error'] ?? 'No se pudo enviar respuesta con CC por Graph.')];
+			}
+		}
+
 		$comment = trim((string) $bodyText);
 		if ($comment === '') {
 			$comment = 'Respuesta enviada desde Atlas Ticket.';
@@ -459,14 +573,18 @@ class GraphMailService
 			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId) . '/reply',
 			['comment' => $comment]
 		);
+		$this->appendTicketMailDebug('graph.reply.comment_fallback.response', [
+			'ok' => (bool) ($reply['ok'] ?? false),
+			'error' => (string) ($reply['error'] ?? ''),
+		]);
 		if (!$reply['ok']) {
 			return ['ok' => false, 'error' => (string) ($reply['error'] ?? 'No se pudo responder en el hilo.')];
 		}
 
-		$source = is_array($originalMessage['body'] ?? null) ? $originalMessage['body'] : [];
 		return [
 			'ok' => true,
 			'error' => null,
+			'delivery_mode' => 'graph_comment_reply',
 			'thread' => [
 				'graph_message_id' => $messageId,
 				'conversation_id' => (string) ($source['conversationId'] ?? ''),
@@ -933,6 +1051,22 @@ class GraphMailService
 		}
 
 		return $recipients;
+	}
+
+	private function appendTicketMailDebug(string $event, array $context = []): void
+	{
+		$path = STORAGE_PATH . '/logs/ticket-mail-debug.log';
+		$dir = dirname($path);
+		if (!is_dir($dir)) {
+			@mkdir($dir, 0755, true);
+		}
+
+		$line = [
+			'ts' => date('Y-m-d H:i:s'),
+			'event' => $event,
+			'context' => $context,
+		];
+		@file_put_contents($path, json_encode($line, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL, FILE_APPEND | LOCK_EX);
 	}
 
 	private function buildGraphAttachmentFromPath(array $attachment): ?array

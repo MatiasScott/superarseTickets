@@ -572,6 +572,15 @@ class TicketController extends Controller
 		$ccParsed = $this->parseEmailList($cc);
 		$ccArr = $ccParsed['valid'];
 		$ccInvalid = $ccParsed['invalid'];
+		$this->appendTicketMailDebug('ticket.reply.input', [
+			'ticket_id' => $ticketId,
+			'para' => $para,
+			'cc_raw' => $cc,
+			'cc_valid' => $ccArr,
+			'cc_invalid' => $ccInvalid,
+			'asunto' => $asunto,
+			'alias_post' => $alias,
+		]);
 		if (!empty($ccInvalid)) {
 			set_flash('error', 'Hay correos en copia invalidos: ' . implode(', ', $ccInvalid));
 			redirect($this->buildTicketShowRedirect($ticketId, $return));
@@ -649,6 +658,7 @@ class TicketController extends Controller
 			$threadMeta = [];
 			$sent = false;
 			$replyError = '';
+			$deliveryMode = '';
 			$mailbox = new MailboxService();
 
 			if ($replyToken !== '' && $alias !== '') {
@@ -656,6 +666,15 @@ class TicketController extends Controller
 				$sent = (bool) ($replyResult['ok'] ?? false);
 				$threadMeta = is_array($replyResult['thread'] ?? null) ? $replyResult['thread'] : [];
 				$replyError = trim((string) ($replyResult['error'] ?? ''));
+				$deliveryMode = trim((string) ($replyResult['delivery_mode'] ?? ''));
+				$this->appendTicketMailDebug('ticket.reply.graph.primary', [
+					'ticket_id' => $ticketId,
+					'alias' => $alias,
+					'ok' => $sent,
+					'error' => $replyError,
+					'delivery_mode' => $deliveryMode,
+					'cc_valid' => $ccArr,
+				]);
 			}
 
 			if (!$sent && $hasThreadOrigin && $alias !== '') {
@@ -666,6 +685,15 @@ class TicketController extends Controller
 					$sent = (bool) ($retryResult['ok'] ?? false);
 					$threadMeta = is_array($retryResult['thread'] ?? null) ? $retryResult['thread'] : $threadMeta;
 					$replyError = trim((string) ($retryResult['error'] ?? ''));
+					$deliveryMode = trim((string) ($retryResult['delivery_mode'] ?? $deliveryMode));
+					$this->appendTicketMailDebug('ticket.reply.graph.retry', [
+						'ticket_id' => $ticketId,
+						'alias' => $alias,
+						'ok' => $sent,
+						'error' => $replyError,
+						'delivery_mode' => $deliveryMode,
+						'cc_valid' => $ccArr,
+					]);
 				} elseif (trim((string) ($resolved['error'] ?? '')) !== '') {
 					$replyError = trim((string) ($resolved['error'] ?? ''));
 				}
@@ -677,12 +705,24 @@ class TicketController extends Controller
 				$mailService = new MailService();
 				$sent = $mailService->send($para, $asunto, $cuerpoHtml, $ccArr, [], $alias ?: null, [], $allMailAttachments);
 				$usedDirectFallback = $sent;
+				$this->appendTicketMailDebug('ticket.reply.smtp.direct', [
+					'ticket_id' => $ticketId,
+					'alias' => $alias,
+					'ok' => $sent,
+					'cc_valid' => $ccArr,
+				]);
 
 				if (!$sent) {
 					$defaultAlias = trim((string) $mailService->getDefaultAlias());
 					if ($defaultAlias !== '' && $defaultAlias !== trim((string) $alias)) {
 						$sent = $mailService->send($para, $asunto, $cuerpoHtml, $ccArr, [], $defaultAlias, [], $allMailAttachments);
 						$usedDefaultAliasFallback = $sent;
+						$this->appendTicketMailDebug('ticket.reply.smtp.default_alias', [
+							'ticket_id' => $ticketId,
+							'alias' => $defaultAlias,
+							'ok' => $sent,
+							'cc_valid' => $ccArr,
+						]);
 					}
 				}
 			}
@@ -698,6 +738,15 @@ class TicketController extends Controller
 			}
 
 			if ($sent) {
+				$this->appendTicketMailDebug('ticket.reply.final', [
+					'ticket_id' => $ticketId,
+					'ok' => true,
+					'used_direct_fallback' => $usedDirectFallback,
+					'used_default_alias_fallback' => $usedDefaultAliasFallback,
+					'delivery_mode' => $deliveryMode,
+					'reply_error' => $replyError,
+					'cc_valid' => $ccArr,
+				]);
 				if (!empty($allErrors)) {
 					$msg = 'Respuesta enviada. Algunos archivos no se adjuntaron: ' . implode(' | ', $allErrors);
 					if ($usedDefaultAliasFallback) {
@@ -706,12 +755,24 @@ class TicketController extends Controller
 					set_flash('success', $msg);
 				} else {
 					$msg = 'Respuesta enviada correctamente.';
+					if ($deliveryMode === 'graph_sendmail_new_thread') {
+						$msg .= ' Nota: Graph no permitió responder en el hilo (ErrorAccessDenied), por lo que se envió como correo nuevo para conservar las copias.';
+					}
 					if ($usedDirectFallback || $usedDefaultAliasFallback) {
 						$msg .= ' Se aplicó envío directo de respaldo para asegurar la salida del correo.';
 					}
 					set_flash('success', $msg);
 				}
 			} else {
+				$this->appendTicketMailDebug('ticket.reply.final', [
+					'ticket_id' => $ticketId,
+					'ok' => false,
+					'used_direct_fallback' => $usedDirectFallback,
+					'used_default_alias_fallback' => $usedDefaultAliasFallback,
+					'delivery_mode' => $deliveryMode,
+					'reply_error' => $replyError,
+					'cc_valid' => $ccArr,
+				]);
 				if ($hasThreadOrigin) {
 					$msg = 'Respuesta guardada, pero no se pudo responder en el hilo original.';
 					if ($replyError !== '') {
@@ -727,6 +788,22 @@ class TicketController extends Controller
 		}
 
 		redirect($this->buildTicketShowRedirect($ticketId, $return));
+	}
+
+	private function appendTicketMailDebug(string $event, array $context = []): void
+	{
+		$path = STORAGE_PATH . '/logs/ticket-mail-debug.log';
+		$dir = dirname($path);
+		if (!is_dir($dir)) {
+			@mkdir($dir, 0755, true);
+		}
+
+		$line = [
+			'ts' => date('Y-m-d H:i:s'),
+			'event' => $event,
+			'context' => $context,
+		];
+		@file_put_contents($path, json_encode($line, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL, FILE_APPEND | LOCK_EX);
 	}
 
 	private function encodeGraphMessageToken(string $messageId): string
