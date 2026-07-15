@@ -156,11 +156,23 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 			</div>
 			<div class="row g-2 align-items-end">
 
-				<div class="col-12 col-sm-6 col-md-4 col-lg-2">
+				<div class="col-12 col-sm-6 col-md-4 col-lg-3">
 					<label class="form-label fw-semibold mb-1 small"><i class="bi bi-search"></i> Buscar</label>
 					<input type="text" name="buscar" class="form-control form-control-sm"
-						placeholder="Asunto, código o contacto…"
+						placeholder="Asunto, codigo, contacto o nota interna..."
 						value="<?= e($filters['buscar'] ?? '') ?>">
+				</div>
+
+				<div class="col-12 col-sm-6 col-md-4 col-lg-2">
+					<label class="form-label fw-semibold mb-1 small"><i class="bi bi-calendar-event"></i> Desde fecha</label>
+					<input type="date" name="fecha_desde" class="form-control form-control-sm"
+						value="<?= e($filters['fecha_desde'] ?? '') ?>">
+				</div>
+
+				<div class="col-12 col-sm-6 col-md-4 col-lg-2">
+					<label class="form-label fw-semibold mb-1 small"><i class="bi bi-calendar2-check"></i> Hasta fecha</label>
+					<input type="date" name="fecha_hasta" class="form-control form-control-sm"
+						value="<?= e($filters['fecha_hasta'] ?? '') ?>">
 				</div>
 
 				<div class="col-12 col-sm-6 col-md-4 col-lg-2">

@@ -204,11 +204,60 @@ class Ticket extends Model
 			}
 		}
 		if (!empty($filters['buscar'])) {
-			$where[] = '(t.asunto LIKE :buscar OR t.codigo LIKE :buscar2 OR CONCAT(c.nombre, \' \', c.apellido) LIKE :buscar3)';
-			$like = '%' . $filters['buscar'] . '%';
-			$params['buscar'] = $like;
-			$params['buscar2'] = $like;
-			$params['buscar3'] = $like;
+			$searchText = trim((string) $filters['buscar']);
+			$searchLike = '%' . $searchText . '%';
+			$searchClauses = [
+				't.asunto LIKE :buscar_asunto',
+				't.codigo LIKE :buscar_codigo',
+				"CONCAT(COALESCE(c.nombre, ''), ' ', COALESCE(c.apellido, '')) LIKE :buscar_contacto_nombre_apellido",
+				"CONCAT(COALESCE(c.apellido, ''), ' ', COALESCE(c.nombre, '')) LIKE :buscar_contacto_apellido_nombre",
+				"EXISTS (
+					SELECT 1
+					FROM ticket_mensajes tm
+					WHERE tm.ticket_id = t.id
+						AND tm.tipo = 'nota'
+						AND tm.mensaje LIKE :buscar_nota
+				)",
+			];
+
+			$params['buscar_asunto'] = $searchLike;
+			$params['buscar_codigo'] = $searchLike;
+			$params['buscar_contacto_nombre_apellido'] = $searchLike;
+			$params['buscar_contacto_apellido_nombre'] = $searchLike;
+			$params['buscar_nota'] = $searchLike;
+
+			$tokens = preg_split('/\s+/u', $searchText) ?: [];
+			$tokens = array_values(array_filter($tokens, static function ($token): bool {
+				return trim((string) $token) !== '';
+			}));
+
+			if (!empty($tokens)) {
+				$tokenConditions = [];
+				foreach ($tokens as $idx => $token) {
+					$paramName = 'buscar_contacto_token_' . $idx;
+					$tokenConditions[] = "(COALESCE(c.nombre, '') LIKE :{$paramName} OR COALESCE(c.apellido, '') LIKE :{$paramName})";
+					$params[$paramName] = '%' . $token . '%';
+				}
+				$searchClauses[] = '(' . implode(' AND ', $tokenConditions) . ')';
+			}
+
+			$where[] = '(' . implode(' OR ', $searchClauses) . ')';
+		}
+
+		if (!empty($filters['fecha_desde'])) {
+			$fechaDesde = trim((string) $filters['fecha_desde']);
+			if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $fechaDesde) === 1) {
+				$where[] = 't.created_at >= :fecha_desde';
+				$params['fecha_desde'] = $fechaDesde . ' 00:00:00';
+			}
+		}
+
+		if (!empty($filters['fecha_hasta'])) {
+			$fechaHasta = trim((string) $filters['fecha_hasta']);
+			if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $fechaHasta) === 1) {
+				$where[] = 't.created_at <= :fecha_hasta';
+				$params['fecha_hasta'] = $fechaHasta . ' 23:59:59';
+			}
 		}
 
 		$whereSql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';

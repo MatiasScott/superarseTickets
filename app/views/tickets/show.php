@@ -14,6 +14,7 @@ $adjuntos = $adjuntos ?? [];
 $mailAccounts = $mailAccounts ?? [];
 $responseAccountAlias = (string) ($responseAccountAlias ?? '');
 $responseAccountLocked = !empty($responseAccountLocked);
+$navigationData = isset($navigation) && is_array($navigation) ? $navigation : ['prev' => null, 'next' => null];
 
 $ticketId = (int) ($ticket['id'] ?? 0);
 $ticketCodigo = (string) ($ticket['codigo'] ?? ('#' . $ticketId));
@@ -86,7 +87,15 @@ $phones = array_values(array_unique($phones));
                     <a href="<?= e($ticketUrl) ?>">Todos los tickets</a>
                     &rsaquo; <?= e($ticketCodigo) ?>
                 </span>
-                <a class="ticket-btn" href="<?= e($ticketUrl) ?>"><i class="bi bi-arrow-left"></i> Volver</a>
+                <div class="d-flex align-items-center gap-2">
+                    <?php if (!empty($navigationData['prev']['url'])): ?>
+                        <a class="ticket-btn" href="<?= e((string) $navigationData['prev']['url']) ?>"><i class="bi bi-chevron-left"></i> Ticket anterior</a>
+                    <?php endif; ?>
+                    <?php if (!empty($navigationData['next']['url'])): ?>
+                        <a class="ticket-btn" href="<?= e((string) $navigationData['next']['url']) ?>">Ticket siguiente <i class="bi bi-chevron-right"></i></a>
+                    <?php endif; ?>
+                    <a class="ticket-btn" href="<?= e($ticketUrl) ?>"><i class="bi bi-arrow-left"></i> Volver</a>
+                </div>
             </div>
 
             <?php if ($ok = get_flash('success')): ?>

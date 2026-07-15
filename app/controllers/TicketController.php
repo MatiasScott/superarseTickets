@@ -101,6 +101,8 @@ class TicketController extends Controller
 			'grupo_id'     => $normalizeMultiSelect($_GET['grupo_id'] ?? []),
 			'asignado_id'  => $normalizeMultiSelect($_GET['asignado_id'] ?? []),
 			'buscar'       => trim((string) ($_GET['buscar']       ?? '')),
+			'fecha_desde'  => trim((string) ($_GET['fecha_desde']  ?? '')),
+			'fecha_hasta'  => trim((string) ($_GET['fecha_hasta']  ?? '')),
 			'sort'         => trim((string) ($_GET['sort']         ?? 'id')),
 			'direction'    => trim((string) ($_GET['direction']    ?? 'desc')),
 		];
@@ -363,6 +365,10 @@ class TicketController extends Controller
 		$mailAccounts = [];
 		$responseAccountAlias = '';
 		$responseAccountLocked = false;
+		$navigation = [
+			'prev' => null,
+			'next' => null,
+		];
 
 		try {
 			$ticket = (new Ticket())->findDetailed($ticketId);
@@ -375,6 +381,8 @@ class TicketController extends Controller
 			set_flash('error', 'El ticket solicitado no existe.');
 			redirect('tickets');
 		}
+
+		$navigation = $this->resolveTicketNavigation($ticketId, (string) ($_GET['return'] ?? ''));
 
 		try {
 			$db = Database::getInstance()->connection();
@@ -533,10 +541,149 @@ class TicketController extends Controller
 		$this->view('tickets/show', compact(
 			'ticket', 'mensajes', 'estados', 'prioridades', 'tipos',
 			'grupos', 'usuarios', 'contacto', 'historial', 'historialCorreos', 'correoOrigen', 'adjuntos', 'mailAccounts',
-			'responseAccountAlias', 'responseAccountLocked'
+			'responseAccountAlias', 'responseAccountLocked', 'navigation'
 		), [
 			'title' => 'Ticket ' . ($ticket['codigo'] ?? '#' . $ticketId),
 		]);
+	}
+
+	private function resolveTicketNavigation(int $ticketId, string $returnUrl): array
+	{
+		$result = [
+			'prev' => null,
+			'next' => null,
+		];
+
+		$returnPath = $this->normalizeTicketReturnPath($returnUrl);
+		if ($returnPath === '') {
+			return $result;
+		}
+
+		$parsedUrl = parse_url('/' . ltrim($returnPath, '/'));
+		$queryParams = [];
+		if (!empty($parsedUrl['query'])) {
+			parse_str((string) $parsedUrl['query'], $queryParams);
+		}
+
+		$normalizeMultiSelect = static function ($raw): array {
+			if (!is_array($raw)) {
+				if ($raw === null) {
+					return [];
+				}
+				$raw = [$raw];
+			}
+
+			$values = [];
+			foreach ($raw as $value) {
+				$value = trim((string) $value);
+				if ($value === '') {
+					continue;
+				}
+				$values[$value] = $value;
+			}
+
+			return array_values($values);
+		};
+
+		$filters = [
+			'estado_id' => $normalizeMultiSelect($queryParams['estado_id'] ?? []),
+			'prioridad_id' => $normalizeMultiSelect($queryParams['prioridad_id'] ?? []),
+			'tipo_id' => $normalizeMultiSelect($queryParams['tipo_id'] ?? []),
+			'grupo_id' => $normalizeMultiSelect($queryParams['grupo_id'] ?? []),
+			'asignado_id' => $normalizeMultiSelect($queryParams['asignado_id'] ?? []),
+			'buscar' => trim((string) ($queryParams['buscar'] ?? '')),
+			'fecha_desde' => trim((string) ($queryParams['fecha_desde'] ?? '')),
+			'fecha_hasta' => trim((string) ($queryParams['fecha_hasta'] ?? '')),
+			'sort' => trim((string) ($queryParams['sort'] ?? 'id')),
+			'direction' => trim((string) ($queryParams['direction'] ?? 'desc')),
+		];
+
+		$activeFilters = array_filter($filters, static function ($value): bool {
+			if (is_array($value)) {
+				return !empty($value);
+			}
+
+			return $value !== '';
+		});
+
+		$perPage = 30;
+		$page = max(1, (int) ($queryParams['page'] ?? 1));
+
+		try {
+			$ticketModel = new Ticket();
+			$total = $ticketModel->countFiltered($activeFilters);
+			$pages = max(1, (int) ceil($total / $perPage));
+			$page = min($page, $pages);
+
+			$offset = ($page - 1) * $perPage;
+			$rows = $ticketModel->getFiltered($activeFilters, $perPage, $offset);
+			$ids = array_map(static function (array $row): int {
+				return (int) ($row['id'] ?? 0);
+			}, $rows);
+
+			$currentIndex = array_search($ticketId, $ids, true);
+			if ($currentIndex === false) {
+				return $result;
+			}
+
+			$prevId = null;
+			$prevPage = $page;
+			if ($currentIndex > 0) {
+				$prevId = (int) $ids[$currentIndex - 1];
+			} elseif ($page > 1) {
+				$prevRows = $ticketModel->getFiltered($activeFilters, $perPage, ($page - 2) * $perPage);
+				if (!empty($prevRows)) {
+					$lastPrev = end($prevRows);
+					$prevId = (int) ($lastPrev['id'] ?? 0);
+					$prevPage = $page - 1;
+				}
+			}
+
+			$nextId = null;
+			$nextPage = $page;
+			if ($currentIndex < count($ids) - 1) {
+				$nextId = (int) $ids[$currentIndex + 1];
+			} elseif ($page < $pages) {
+				$nextRows = $ticketModel->getFiltered($activeFilters, $perPage, $page * $perPage);
+				if (!empty($nextRows)) {
+					$firstNext = $nextRows[0] ?? null;
+					$nextId = (int) (($firstNext['id'] ?? 0));
+					$nextPage = $page + 1;
+				}
+			}
+
+			if ($prevId > 0) {
+				$result['prev'] = [
+					'id' => $prevId,
+					'url' => $this->buildTicketShowUrlWithReturn($prevId, $queryParams, $prevPage),
+				];
+			}
+
+			if ($nextId > 0) {
+				$result['next'] = [
+					'id' => $nextId,
+					'url' => $this->buildTicketShowUrlWithReturn($nextId, $queryParams, $nextPage),
+				];
+			}
+		} catch (Throwable $e) {
+			return $result;
+		}
+
+		return $result;
+	}
+
+	private function buildTicketShowUrlWithReturn(int $ticketId, array $queryParams, int $page): string
+	{
+		if ($page > 1) {
+			$queryParams['page'] = $page;
+		} else {
+			unset($queryParams['page']);
+		}
+
+		$returnQuery = http_build_query($queryParams);
+		$returnPath = 'tickets' . ($returnQuery !== '' ? ('?' . $returnQuery) : '');
+
+		return base_url('tickets/' . $ticketId . '?return=' . urlencode('/' . $returnPath));
 	}
 
 	public function replyTicket(string $id): void
