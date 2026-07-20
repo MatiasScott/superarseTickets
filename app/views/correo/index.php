@@ -5,7 +5,7 @@
 			<h2 class="mb-1"><i class="bi bi-chat-dots"></i> Bandeja de Entrada del Equipo</h2>
 			<p class="text-muted mb-0">Conversaciones del canal WhatsApp.</p>
 		</div>
-		<a class="btn btn-outline-secondary" href="<?= e(base_url('chat/dashboard')) ?>"><i class="bi bi-speedometer2"></i> Ir al panel</a>
+		<a class="btn btn-outline-secondary" href="<?= e(base_url('cci/dashboard')) ?>"><i class="bi bi-speedometer2"></i> Ir al panel</a>
 	</div>
 
 	<?php if ($msg = get_flash('success')): ?>
@@ -91,7 +91,7 @@
 							</div>
 						</div>
 						<div class="d-flex gap-2">
-							<a class="btn btn-sm btn-outline-secondary" href="<?= e(base_url('chat/dashboard')) ?>"><i class="bi bi-speedometer2"></i> Panel</a>
+							<a class="btn btn-sm btn-outline-secondary" href="<?= e(base_url('cci/dashboard')) ?>"><i class="bi bi-speedometer2"></i> Panel</a>
 							<a class="btn btn-sm btn-primary" href="<?= e(base_url('configuracion')) ?>"><i class="bi bi-sliders"></i> Configurar canal</a>
 						</div>
 					</div>

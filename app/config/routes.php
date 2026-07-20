@@ -93,6 +93,43 @@ return static function (Router $router): void {
 	$router->get('/correo/{uid}', 'CorreoController@show');
 	$router->post('/correo/{uid}/reply', 'CorreoController@reply');
 
+	// Centro de Comunicaciones Inteligente (CCI)
+	$router->get('/cci', 'CCIController@dashboard');
+	$router->get('/cci/dashboard', 'CCIController@dashboard');
+	$router->get('/cci/conversaciones', 'CCIController@conversaciones');
+	$router->post('/cci/conversaciones/{id}/reply', 'CCIController@sendConversationReply');
+	$router->post('/cci/conversaciones/{id}/notas', 'CCIController@storeConversationNote');
+	$router->post('/cci/sync/whatsapp', 'CCIController@syncWhatsApp');
+	$router->get('/api/cci/whatsapp/webhook', 'CCIController@whatsAppWebhook');
+	$router->post('/api/cci/whatsapp/webhook', 'CCIController@whatsAppWebhook');
+	$router->post('/cci/sync/whatchimp', 'CCIController@syncWhatchimp');
+	$router->get('/api/cci/whatchimp/webhook', 'CCIController@whatchimpWebhook');
+	$router->post('/api/cci/whatchimp/webhook', 'CCIController@whatchimpWebhook');
+	$router->get('/cci/contactos', 'CCIController@contactos');
+	$router->get('/cci/clientes-potenciales', 'CCIController@potenciales');
+	$router->post('/cci/clientes-potenciales/{id}', 'CCIController@updatePotencial');
+	$router->get('/cci/campanas', 'CCIController@campanas');
+	$router->post('/cci/campanas', 'CCIController@storeCampana');
+	$router->post('/cci/campanas/{id}/destinatarios', 'CCIController@addCampanaDestinatarios');
+	$router->post('/cci/campanas/{id}/send', 'CCIController@sendCampana');
+	$router->post('/cci/campanas/process-scheduled', 'CCIController@processScheduledCampanas');
+	$router->get('/cci/reportes', 'CCIController@reportes');
+	$router->get('/cci/plantillas', 'CCIController@plantillas');
+	$router->post('/cci/plantillas', 'CCIController@storePlantilla');
+	$router->post('/cci/plantillas/{id}', 'CCIController@updatePlantilla');
+	$router->post('/cci/plantillas/{id}/delete', 'CCIController@deletePlantilla');
+	$router->get('/cci/respuestas-rapidas', 'CCIController@respuestasRapidas');
+	$router->post('/cci/respuestas-rapidas', 'CCIController@storeRespuestaRapida');
+	$router->post('/cci/respuestas-rapidas/{id}', 'CCIController@updateRespuestaRapida');
+	$router->post('/cci/respuestas-rapidas/{id}/delete', 'CCIController@deleteRespuestaRapida');
+	$router->get('/cci/asignaciones', 'CCIController@asignaciones');
+	$router->get('/cci/sla', 'CCIController@sla');
+	$router->get('/cci/automatizaciones', 'CCIController@automatizaciones');
+	$router->post('/cci/automatizaciones/test', 'CCIController@testAutomatizacion');
+	$router->get('/cci/configuracion', 'CCIController@configuracion');
+	$router->post('/cci/configuracion', 'CCIController@saveConfiguracion');
+	$router->get('/cci/auditoria', 'CCIController@auditoria');
+
 	$router->get('/catalogos', 'CatalogoController@index');
 	$router->get('/catalogos/{module}/create', 'CatalogoController@create');
 	$router->get('/catalogos/{module}/{id}/edit', 'CatalogoController@edit');

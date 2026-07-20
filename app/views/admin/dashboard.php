@@ -78,6 +78,29 @@ ADMINISTRACIÓN GENERAL
 			</div>
 		</div>
 
+		<div class="col-12 col-xl-4">
+			<div class="card admin-card h-100">
+				<div class="card-body">
+
+					<div class="section-title mb-3">
+						<h5 class="mb-1"><i class="bi bi-broadcast-pin me-2 text-teal"></i>Auditoría CCI</h5>
+
+						<small class="text-muted">
+							Bitácora del Centro de Comunicaciones
+						</small>
+					</div>
+
+					<div class="d-grid">
+						<a href="<?= base_url('cci/auditoria') ?>"
+							class="btn btn-outline-dark btn-sm">
+							Ver auditoría CCI
+						</a>
+					</div>
+
+				</div>
+			</div>
+		</div>
+
 	</div>
 </div>
 

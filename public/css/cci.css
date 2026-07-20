@@ -1,0 +1,688 @@
+/* ========================================
+   ATLAS - CCI CONVERSACIONES STYLE
+   Estilo tipo WhatsApp con Grid Layout
+   ======================================== */
+
+:root {
+    --wa-out-bg: #dcf8c6;
+    --wa-in-bg: #e1f5fe;
+    --wa-accent: #2f80ed;
+    --wa-border: #dbe6f2;
+    --wa-text: #333;
+    --wa-meta: #999;
+}
+
+/* ====================
+   AJUSTES GLOBALES PARA CCI
+   ==================== */
+
+.cci-page {
+    --override-main-flex: 1;
+}
+
+.app-layout:has(.cci-page) {
+    height: 100% !important;
+    max-height: calc(100vh - var(--topbar-h, 80px)) !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    grid-template-rows: 1fr !important;
+}
+
+.main-content:has(.cci-page) {
+    display: flex !important;
+    flex-direction: column !important;
+    flex: 1 !important;
+    padding: 0 !important;
+    min-height: 0 !important;
+    height: 100% !important;
+    overflow: hidden !important;
+}
+
+/* ====================
+   PÁGINA PRINCIPAL
+   ==================== */
+
+.cci-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+    padding: 0;
+    background: #fff;
+    position: relative;
+}
+
+/* Encabezado dentro de .cci-page */
+.cci-page > .container-fluid {
+    flex-shrink: 0;
+    padding: 12px 16px !important;
+}
+
+/* ====================
+   LAYOUT PRINCIPAL
+   ==================== */
+
+.cci-chat-shell {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    flex: 1;
+    overflow: hidden;
+    gap: 0;
+    border-top: 1px solid var(--wa-border);
+}
+
+/* ====================
+   LISTA DE CONVERSACIONES (Izquierda)
+   ==================== */
+
+.cci-chat-list {
+    display: flex;
+    flex-direction: column;
+    border-right: 2px solid var(--wa-border);
+    background: #fbfdff;
+    height: 100%;
+    overflow: hidden;
+}
+
+.cci-chat-list-head {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--wa-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.9rem;
+    font-weight: 600;
+    flex-shrink: 0;
+    background: #f9fbfc;
+}
+
+.cci-chat-list-body {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    min-height: 0;
+}
+
+.cci-chat-list-body::-webkit-scrollbar {
+    width: 6px;
+}
+
+.cci-chat-list-body::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.cci-chat-list-body::-webkit-scrollbar-thumb {
+    background: #ccc;
+    border-radius: 3px;
+}
+
+.cci-thread-item {
+    display: grid;
+    grid-template-columns: 40px 1fr;
+    gap: 10px;
+    padding: 10px 12px;
+    text-decoration: none;
+    color: inherit;
+    border-bottom: 1px solid #edf3f9;
+    transition: background 0.2s;
+    cursor: pointer;
+}
+
+.cci-thread-item:hover {
+    background: #f4f8ff;
+}
+
+.cci-thread-item.active {
+    background: #e9f2ff;
+    border-left: 4px solid var(--wa-accent);
+    padding-left: 8px;
+}
+
+.cci-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    font-weight: 700;
+    font-size: 0.85rem;
+    color: #1c4f84;
+    background: #d9ebff;
+    flex-shrink: 0;
+}
+
+.cci-thread-main {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.cci-thread-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: baseline;
+}
+
+.cci-thread-name {
+    font-weight: 700;
+    color: #222;
+    font-size: 0.9rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cci-thread-meta {
+    font-size: 0.8rem;
+    color: #999;
+}
+
+.cci-thread-snippet {
+    font-size: 0.8rem;
+    color: #888;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ====================
+   CONVERSACIÓN (Centro/Derecha)
+   ==================== */
+
+.cci-chat-thread {
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+    height: 100%;
+    overflow: hidden;
+}
+
+.cci-thread-head {
+    border-bottom: 1px solid var(--wa-border);
+    padding: 12px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+    background: #fafbfc;
+}
+
+.cci-thread-title {
+    color: #222;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.cci-status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #4caf50;
+}
+
+.cci-thread-subtitle {
+    color: #888;
+    font-size: 0.8rem;
+    margin-top: 2px;
+}
+
+/* ====================
+   ÁREA DE MENSAJES
+   ==================== */
+
+.cci-thread-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.cci-messages-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.cci-messages-scroll {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-height: 0;
+    background: #fff;
+}
+
+.cci-messages-scroll::-webkit-scrollbar {
+    width: 6px;
+}
+
+.cci-messages-scroll::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.cci-messages-scroll::-webkit-scrollbar-thumb {
+    background: #ccc;
+    border-radius: 3px;
+}
+
+/* ====================
+   BURBUJAS DE MENSAJES
+   ==================== */
+
+.cci-bubble {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+    max-width: 60%;
+}
+
+.cci-bubble.in {
+    align-self: flex-start;
+}
+
+.cci-bubble.out {
+    align-self: flex-end;
+}
+
+.cci-bubble-text {
+    padding: 8px 12px;
+    border-radius: 14px;
+    line-height: 1.4;
+    font-size: 0.9rem;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+}
+
+.cci-bubble.in .cci-bubble-text {
+    background: var(--wa-in-bg);
+    color: var(--wa-text);
+    border-bottom-left-radius: 4px;
+}
+
+.cci-bubble.out .cci-bubble-text {
+    background: var(--wa-out-bg);
+    color: var(--wa-text);
+    border-bottom-right-radius: 4px;
+}
+
+.cci-bubble-time {
+    font-size: 0.75rem;
+    color: var(--wa-meta);
+    padding: 0 12px;
+}
+
+.cci-bubble.in .cci-bubble-time {
+    text-align: left;
+}
+
+.cci-bubble.out .cci-bubble-time {
+    text-align: right;
+}
+
+/* ====================
+   ARCHIVOS EN CHAT
+   ==================== */
+
+.cci-file-bubble {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(0,0,0,0.05);
+    color: inherit;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.cci-file-bubble:hover {
+    background: rgba(0,0,0,0.1);
+    color: inherit;
+}
+
+.cci-bubble.in .cci-file-bubble {
+    background: rgba(0,0,0,0.08);
+}
+
+.cci-bubble.out .cci-file-bubble {
+    background: rgba(0,0,0,0.08);
+}
+
+.cci-file-bubble i {
+    font-size: 1.5rem;
+    flex-shrink: 0;
+}
+
+/* PDF card */
+.cci-pdf-bubble {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(0,0,0,0.05);
+    color: inherit;
+    cursor: pointer;
+    transition: background 0.15s;
+    min-width: 200px;
+    max-width: 280px;
+}
+
+.cci-pdf-bubble:hover {
+    background: rgba(0,0,0,0.1);
+    color: inherit;
+}
+
+.cci-pdf-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    background: #e53935;
+    border-radius: 10px;
+    flex-shrink: 0;
+}
+
+.cci-pdf-icon i {
+    font-size: 1.4rem;
+    color: #fff;
+}
+
+
+.cci-file-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.cci-file-name {
+    font-weight: 500;
+    font-size: 0.9rem;
+    color: #333;
+    word-break: break-word;
+}
+
+.cci-file-size {
+    font-size: 0.8rem;
+    color: #888;
+}
+
+/* ====================
+   IMÁGENES EN CHAT
+   ==================== */
+
+.cci-image-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.cci-image-preview {
+    max-width: 250px;
+    max-height: 350px;
+    border-radius: 12px;
+    object-fit: cover;
+    cursor: pointer;
+    transition: transform 0.2s;
+}
+
+.cci-image-preview:hover {
+    transform: scale(1.02);
+}
+
+.cci-bubble.in .cci-image-preview {
+    border: 2px solid var(--wa-in-bg);
+}
+
+.cci-bubble.out .cci-image-preview {
+    border: 2px solid var(--wa-out-bg);
+}
+
+/* ====================
+   VIDEO EN CHAT
+   ==================== */
+
+.cci-video-container {
+    display: flex;
+    justify-content: center;
+}
+
+.cci-video-player {
+    border-radius: 12px;
+    background: #000;
+}
+
+/* ====================
+   AUDIO EN CHAT
+   ==================== */
+
+.cci-audio-container {
+    display: flex;
+    width: 100%;
+    padding: 8px 0;
+}
+
+.cci-audio-container audio {
+    border-radius: 8px;
+    background: rgba(0,0,0,0.05);
+    padding: 8px;
+}
+
+/* Fallback para archivos no disponibles */
+.cci-file-fallback {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(0,0,0,0.05);
+}
+
+.cci-empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    flex: 1;
+    flex-direction: column;
+    gap: 12px;
+    color: #999;
+}
+
+/* ====================
+   PANEL DE RESPUESTA
+   ==================== */
+
+.cci-reply-box {
+    flex-shrink: 0;
+    border-top: 3px solid var(--wa-accent);
+    padding: 12px 14px;
+    background: #fff;
+    box-shadow: 0 -2px 8px rgba(0,0,0,0.08);
+    max-height: 380px;
+    overflow-y: auto;
+}
+
+.cci-reply-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.cci-reply-textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    min-height: 40px;
+    max-height: 100px;
+    resize: none;
+    background: #f9f9f9;
+    color: var(--wa-text);
+}
+
+.cci-reply-textarea:focus {
+    outline: none;
+    border-color: var(--wa-accent);
+    background: #fff;
+    box-shadow: 0 0 0 3px rgba(47, 128, 237, 0.1);
+}
+
+.cci-reply-textarea::placeholder {
+    color: #aaa;
+}
+
+.cci-file-input {
+    display: none;
+}
+
+/* ====================
+   PESTAÑAS DE RESPUESTA
+   ==================== */
+
+.cci-reply-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 2px solid #e8e8e8;
+    margin: -12px -14px 8px -14px;
+    padding: 0 14px;
+}
+
+.cci-reply-tab {
+    padding: 10px 14px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    color: #666;
+    font-size: 0.9rem;
+    border-bottom: 3px solid transparent;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.cci-reply-tab:hover {
+    color: #333;
+}
+
+.cci-reply-tab.active {
+    color: var(--wa-accent);
+    border-bottom-color: var(--wa-accent);
+    font-weight: 600;
+}
+
+.cci-reply-content {
+    display: none;
+}
+
+.cci-reply-content.active {
+    display: block;
+}
+
+/* ====================
+   NOTAS PRIVADAS
+   ==================== */
+
+.cci-notes-section {
+    max-height: 150px;
+    overflow-y: auto;
+    padding: 8px 0;
+}
+
+.cci-notes-section::-webkit-scrollbar {
+    width: 4px;
+}
+
+.cci-notes-section::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.cci-notes-section::-webkit-scrollbar-thumb {
+    background: #ddd;
+    border-radius: 2px;
+}
+
+.cci-note-item {
+    padding: 8px 10px;
+    background: #f9f9f9;
+    border-radius: 6px;
+    margin-bottom: 6px;
+    font-size: 0.85rem;
+    border-left: 3px solid var(--wa-accent);
+}
+
+.cci-note-item:last-child {
+    margin-bottom: 0;
+}
+
+/* ====================
+   BOTONES
+   ==================== */
+
+.btn-outline-secondary,
+.btn-primary {
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 0.9rem;
+}
+
+/* ====================
+   UTILIDADES
+   ==================== */
+
+.cci-badge-unread {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    background: #ff5252;
+    color: white;
+    border-radius: 50%;
+    font-size: 0.7rem;
+    font-weight: bold;
+    box-shadow: 0 2px 6px rgba(255, 82, 82, 0.4);
+    animation: pulse-badge 2s infinite;
+}
+
+@keyframes pulse-badge {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+}
+
+/* ====================
+   RESPONSIVE
+   ==================== */
+
+@media (max-width: 768px) {
+    .cci-chat-shell {
+        grid-template-columns: 1fr;
+    }
+    
+    .cci-chat-list {
+        display: none;
+    }
+    
+    .cci-bubble {
+        max-width: 85%;
+    }
+}

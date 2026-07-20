@@ -29,10 +29,26 @@
 
 	<div class="row g-4">
 		<div class="col-12">
+			<div class="card border-primary-subtle">
+				<div class="card-header bg-primary-subtle d-flex justify-content-between align-items-center">
+					<h5 class="mb-0">Centro de Comunicaciones Inteligente</h5>
+					<a class="btn btn-sm btn-outline-primary" href="<?= e(base_url('cci/dashboard')) ?>">Ir al Dashboard CCI</a>
+				</div>
+				<div class="card-body">
+					<p class="text-muted mb-3">Los ajustes avanzados y la operación de automatizaciones del CCI se administran desde estos accesos.</p>
+					<div class="d-flex flex-wrap gap-2">
+						<a class="btn btn-outline-primary" href="<?= e(base_url('cci/configuracion')) ?>"><i class="bi bi-sliders"></i> Configuración CCI</a>
+						<a class="btn btn-outline-secondary" href="<?= e(base_url('cci/automatizaciones')) ?>"><i class="bi bi-cpu"></i> Automatizaciones CCI</a>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<div class="col-12">
 			<div class="card border-info">
 				<div class="card-header bg-info-subtle d-flex justify-content-between align-items-center">
 					<h5 class="mb-0">Monitoreo de Automatización</h5>
-					<a class="btn btn-sm btn-outline-primary" href="<?= e(base_url('chat/dashboard')) ?>">Ir a Dashboard de Chat</a>
+					<a class="btn btn-sm btn-outline-primary" href="<?= e(base_url('cci/dashboard')) ?>">Ir a Dashboard CCI</a>
 				</div>
 				<div class="card-body">
 					<?php $automation = $automation ?? []; ?>

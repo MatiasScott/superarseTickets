@@ -1,6 +1,6 @@
 <?php
 $canTickets = Auth::canAccessModule('tickets');
-$canChat = Auth::canAccessModule('chat');
+$canCci = Auth::canAccessModule('cci');
 $canCrm = Auth::canAccessModule('crm');
 $canAdmin = Auth::canAccessModule('admin');
 $canContactos = Auth::canAccessModule('contactos');
@@ -28,7 +28,7 @@ function sidebarActive(string $prefix, string $relPath): string {
 		<?php if ($canTickets): ?>
 		<div class="sidebar-group" data-sidebar-group="tickets">
 			<button type="button" class="sidebar-toggle" aria-expanded="false" aria-controls="submenu-tickets">
-				<span class="sidebar-title" style="color:rgba(255,255,255,.75);font-size:.78rem;">
+				<span class="sidebar-title sidebar-group-title">
 					<i class="bi bi-ticket-perforated me-1" style="color:#008B9E"></i> Tickets
 				</span>
 				<i class="toggle-caret bi bi-chevron-down"></i>
@@ -44,20 +44,38 @@ function sidebarActive(string $prefix, string $relPath): string {
 		</div>
 		<?php endif; ?>
 
-		<?php if ($canChat): ?>
-		<div class="sidebar-group" data-sidebar-group="chat">
-			<button type="button" class="sidebar-toggle" aria-expanded="false" aria-controls="submenu-chat">
-				<span class="sidebar-title" style="color:rgba(255,255,255,.75);font-size:.78rem;">
-					<i class="bi bi-chat-dots me-1" style="color:#309E8F"></i> Chat
+		<?php if ($canCci): ?>
+		<div class="sidebar-group" data-sidebar-group="cci">
+			<button type="button" class="sidebar-toggle" aria-expanded="false" aria-controls="submenu-cci">
+				<span class="sidebar-title sidebar-group-title">
+					<i class="bi bi-broadcast-pin me-1" style="color:#4AB4A8"></i> Centro de Comunicaciones
 				</span>
 				<i class="toggle-caret bi bi-chevron-down"></i>
 			</button>
-			<div class="sidebar-submenu" id="submenu-chat">
-				<a href="<?= e(base_url('chat/dashboard')) ?>" class="sidebar-link<?= sidebarActive('chat/dashboard', $relPath) ?>">
+			<div class="sidebar-submenu" id="submenu-cci">
+				<a href="<?= e(base_url('cci/dashboard')) ?>" class="sidebar-link<?= sidebarActive('cci/dashboard', $relPath) ?>">
 					<span class="icon"><i class="bi bi-speedometer2"></i></span> Dashboard
 				</a>
-				<a href="<?= e(base_url('correo')) ?>" class="sidebar-link<?= sidebarActive('correo', $relPath) ?>">
-					<span class="icon"><i class="bi bi-envelope"></i></span> Ver todos
+				<a href="<?= e(base_url('cci/conversaciones')) ?>" class="sidebar-link<?= sidebarActive('cci/conversaciones', $relPath) ?>">
+					<span class="icon"><i class="bi bi-chat-square-text"></i></span> Conversaciones
+				</a>
+				<a href="<?= e(base_url('cci/campanas')) ?>" class="sidebar-link<?= sidebarActive('cci/campanas', $relPath) ?>">
+					<span class="icon"><i class="bi bi-megaphone"></i></span> Campañas
+				</a>
+				<a href="<?= e(base_url('cci/reportes')) ?>" class="sidebar-link<?= sidebarActive('cci/reportes', $relPath) ?>">
+					<span class="icon"><i class="bi bi-graph-up-arrow"></i></span> Reportes
+				</a>
+				<a href="<?= e(base_url('cci/plantillas')) ?>" class="sidebar-link<?= sidebarActive('cci/plantillas', $relPath) ?>">
+					<span class="icon"><i class="bi bi-card-text"></i></span> Plantillas
+				</a>
+				<a href="<?= e(base_url('cci/respuestas-rapidas')) ?>" class="sidebar-link<?= sidebarActive('cci/respuestas-rapidas', $relPath) ?>">
+					<span class="icon"><i class="bi bi-lightning-charge"></i></span> Respuestas rápidas
+				</a>
+				<a href="<?= e(base_url('cci/clientes-potenciales')) ?>" class="sidebar-link<?= sidebarActive('cci/clientes-potenciales', $relPath) ?>">
+					<span class="icon"><i class="bi bi-person-badge"></i></span> Clientes Potenciales
+				</a>
+				<a href="<?= e(base_url('cci/asignaciones')) ?>" class="sidebar-link<?= sidebarActive('cci/asignaciones', $relPath) ?>">
+					<span class="icon"><i class="bi bi-diagram-3"></i></span> Asignaciones
 				</a>
 			</div>
 		</div>
@@ -66,7 +84,7 @@ function sidebarActive(string $prefix, string $relPath): string {
 		<?php if ($canCrm): ?>
 		<div class="sidebar-group" data-sidebar-group="crm">
 			<button type="button" class="sidebar-toggle" aria-expanded="false" aria-controls="submenu-crm">
-				<span class="sidebar-title" style="color:rgba(255,255,255,.75);font-size:.78rem;">
+				<span class="sidebar-title sidebar-group-title">
 					<i class="bi bi-graph-up-arrow me-1" style="color:#F27024"></i> CRM
 				</span>
 				<i class="toggle-caret bi bi-chevron-down"></i>
@@ -85,7 +103,7 @@ function sidebarActive(string $prefix, string $relPath): string {
 		<?php if ($canConvenios): ?>
 		<div class="sidebar-group" data-sidebar-group="convenios">
 			<button type="button" class="sidebar-toggle" aria-expanded="false" aria-controls="submenu-convenios">
-				<span class="sidebar-title" style="color:rgba(255,255,255,.75);font-size:.78rem;">
+				<span class="sidebar-title sidebar-group-title">
 					<i class="bi bi-file-earmark-text me-1" style="color:#D88A2E"></i> Convenios
 				</span>
 				<i class="toggle-caret bi bi-chevron-down"></i>

@@ -46,6 +46,12 @@ class Auth
 				'default_path' => 'chat/dashboard',
 				'actions' => ['ver', 'listar', 'responder']
 			],
+			'cci' => [
+				'label' => 'Centro de Comunicaciones',
+				'description' => 'Gestión omnicanal de conversaciones, asignaciones y automatizaciones',
+				'default_path' => 'cci/dashboard',
+				'actions' => ['ver', 'listar', 'crear', 'editar', 'eliminar', 'exportar', 'configurar']
+			],
 			'crm' => [
 				'label' => 'CRM',
 				'description' => 'Gestión de relaciones con clientes y pipeline de ventas',
@@ -113,7 +119,7 @@ class Auth
 	{
 		return [
 			'tickets',
-			'chat',
+			'cci',
 			'crm',
 			'convenios',
 			'admin',
@@ -212,7 +218,7 @@ class Auth
 		}
 
 		$catalog = self::moduleCatalog();
-		$order = ['tickets', 'chat', 'crm', 'contactos', 'academico', 'campanas', 'convenios', 'bot', 'relaciones', 'auditoria', 'admin', 'configuracion'];
+		$order = ['tickets', 'cci', 'chat', 'crm', 'contactos', 'academico', 'campanas', 'convenios', 'bot', 'relaciones', 'auditoria', 'admin', 'configuracion'];
 
 		foreach ($order as $moduleKey) {
 			if (!isset($catalog[$moduleKey])) {
@@ -456,8 +462,9 @@ class Auth
 		$map = [
 			'/dashboard' => 'tickets',
 			'/tickets' => 'tickets',
-			'/chat' => 'chat',
-			'/correo' => 'chat',
+			'/chat' => 'cci',
+			'/correo' => 'cci',
+			'/cci' => 'cci',
 			'/crm' => 'crm',
 			'/contactos' => 'contactos',
 			'/academico' => 'academico',

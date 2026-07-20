@@ -453,6 +453,24 @@ body.no-topbar .main-content {
     padding: 0;
 }
 
+.sidebar-group-title {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 6px;
+    width: calc(100% - 16px);
+    text-align: left;
+    color: rgba(255,255,255,.75);
+    font-size: .78rem;
+    letter-spacing: .9px;
+    line-height: 1.25;
+    white-space: normal;
+}
+
+.sidebar-group-title i {
+    flex: 0 0 auto;
+    margin-top: 1px;
+}
+
 .toggle-caret {
     color: rgba(255,255,255,.4);
     font-size: .8rem;

@@ -106,6 +106,19 @@ class AutoSyncScheduler
 				'exception' => $e->getMessage(),
 			]);
 		}
+
+		// Sincronización automática de WhatsApp (CCI)
+		try {
+			$cciController = new CCIController();
+			$waResult  = $cciController->runWhatchimpSyncBackground(50);
+			$waSummary = 'WhatsApp-sync: ' . ($waResult['ok']
+				? 'ok created=' . $waResult['created'] . ' skipped=' . $waResult['skipped']
+				: 'error=' . ($waResult['error'] ?? '?'));
+			error_log($waSummary);
+			self::appendRunLog($waSummary, $waResult);
+		} catch (Throwable $e) {
+			error_log('AutoSyncScheduler WhatsApp error: ' . $e->getMessage());
+		}
 	}
 
 	/**
