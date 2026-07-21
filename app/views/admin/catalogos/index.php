@@ -55,6 +55,17 @@
 										<span class="status-badge <?= $item[$column] ? 'status-activo' : 'status-inactivo' ?>">
 											<i class="bi bi-<?= $item[$column] ? 'check-circle' : 'x-circle' ?>"></i> <?= $item[$column] ? 'Sí' : 'No' ?>
 										</span>
+									<?php elseif ($type === 'pipeline-estados' && $column === 'categoria'): ?>
+										<?php
+										$logicLabels = [
+											'sin_crm' => 'No pertenece a ningún CRM',
+											'admisiones' => 'Admisiones',
+											'matriculas' => 'Matriculas',
+											'docencia' => 'Docencia',
+										];
+										$value = (string) ($item[$column] ?? '');
+										?>
+										<?= e($logicLabels[$value] ?? ($value !== '' ? $value : '-')) ?>
 									<?php else: ?>
 										<?= e($item[$column] ?? '-') ?>
 									<?php endif; ?>

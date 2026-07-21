@@ -24,6 +24,7 @@
 		<div class="admin-form">
 			<?php
 			$pipelineLogicOptions = [
+				'sin_crm' => 'No pertenece a ningún CRM',
 				'admisiones' => 'Admisiones',
 				'matriculas' => 'Matriculas',
 				'docencia' => 'Docencia',

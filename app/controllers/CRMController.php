@@ -245,6 +245,13 @@ class CRMController extends Controller
 		$normalizedCategory = $this->dashboardNormalizeLabel((string) ($state['categoria'] ?? ''));
 		$normalizedName = $this->dashboardNormalizeLabel((string) ($state['nombre'] ?? ''));
 
+		$excludedCategories = ['sin crm', 'sin_crm', 'ninguno', 'ninguna', 'no crm', 'no pertenece a ningun crm'];
+		foreach ($excludedCategories as $excludedCategory) {
+			if ($normalizedCategory === $excludedCategory) {
+				return null;
+			}
+		}
+
 		$areaAliases = [
 			'admisiones' => ['admisiones', 'admision', 'adm'],
 			'matriculas' => ['matriculas', 'matricula', 'mat'],

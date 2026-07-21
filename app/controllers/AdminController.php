@@ -613,6 +613,12 @@ class AdminController extends Controller
 		]);
 
 		$aliases = [
+			'sin crm' => 'sin_crm',
+			'sin_crm' => 'sin_crm',
+			'ninguno' => 'sin_crm',
+			'ninguna' => 'sin_crm',
+			'no crm' => 'sin_crm',
+			'no pertenece a ningun crm' => 'sin_crm',
 			'admisiones' => 'admisiones',
 			'admision' => 'admisiones',
 			'adm' => 'admisiones',
@@ -680,7 +686,7 @@ class AdminController extends Controller
 				$data['orden'] = (int)($_POST['orden'] ?? 1);
 				$categoria = $this->normalizePipelineCrmLogic((string) ($_POST['categoria'] ?? ''));
 				if ($categoria === null) {
-					set_flash('error', 'Debes seleccionar la logica CRM: Admisiones, Matriculas o Docencia.');
+					set_flash('error', 'Debes seleccionar la lógica CRM o la opción Sin CRM.');
 					redirect('admin/catalogo/' . $type . '/create');
 				}
 				$data['categoria'] = $categoria;
@@ -754,7 +760,7 @@ class AdminController extends Controller
 				$data['orden'] = (int)($_POST['orden'] ?? 1);
 				$categoria = $this->normalizePipelineCrmLogic((string) ($_POST['categoria'] ?? ''));
 				if ($categoria === null) {
-					set_flash('error', 'Debes seleccionar la logica CRM: Admisiones, Matriculas o Docencia.');
+					set_flash('error', 'Debes seleccionar la lógica CRM o la opción Sin CRM.');
 					redirect('admin/catalogo/' . $type . '/' . $id . '/edit');
 				}
 				$data['categoria'] = $categoria;
