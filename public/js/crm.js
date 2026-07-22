@@ -289,6 +289,47 @@ document.addEventListener('DOMContentLoaded', () => {
 		.map((item) => item.trim())
 		.filter((item) => item !== '');
 
+	const activateProspectsTab = () => {
+		const prospectsTabBtn = document.getElementById('crm-tab-prospects');
+		if (!prospectsTabBtn) {
+			return;
+		}
+
+		if (window.bootstrap?.Tab) {
+			window.bootstrap.Tab.getOrCreateInstance(prospectsTabBtn).show();
+			return;
+		}
+
+		prospectsTabBtn.click();
+	};
+
+	const activateStudentsTab = () => {
+		const studentsTabBtn = document.getElementById('crm-tab-students');
+		if (!studentsTabBtn) {
+			return;
+		}
+
+		if (window.bootstrap?.Tab) {
+			window.bootstrap.Tab.getOrCreateInstance(studentsTabBtn).show();
+			return;
+		}
+
+		studentsTabBtn.click();
+	};
+
+	const initialQueryParams = new URLSearchParams(window.location.search);
+	const initialTab = normalizeText(initialQueryParams.get('tab') || '');
+	const initialOpenContactId = Number(initialQueryParams.get('open_contact_id') || 0);
+
+	const closeModalById = (modalId) => {
+		const modalEl = document.getElementById(modalId);
+		if (!modalEl || !window.bootstrap?.Modal) {
+			return;
+		}
+
+		window.bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+	};
+
 	const renderDynamicFields = (containerId, values, placeholder) => {
 		const container = document.getElementById(containerId);
 		if (!container) {
@@ -380,6 +421,92 @@ document.addEventListener('DOMContentLoaded', () => {
 	const prospectsCounter = document.getElementById('crmProspectsCounter');
 	const prospectCreatePhoneInput = document.getElementById('prospectCelular');
 	const prospectCreateForm = document.querySelector('#createProspectModal form');
+	const prospectCreateStatus = document.getElementById('prospectCreateStatus');
+	let prospectCreatePhoneCheckRequest = null;
+
+	const setProspectCreateStatus = (type, message) => {
+		if (!prospectCreateStatus) {
+			return;
+		}
+
+		const text = String(message || '').trim();
+		if (text === '') {
+			prospectCreateStatus.className = 'd-none';
+			prospectCreateStatus.textContent = '';
+			return;
+		}
+
+		const map = {
+			success: 'alert alert-success py-2 mb-3',
+			warning: 'alert alert-warning py-2 mb-3',
+			danger: 'alert alert-danger py-2 mb-3',
+			info: 'alert alert-info py-2 mb-3',
+		};
+		prospectCreateStatus.className = map[type] || map.info;
+		prospectCreateStatus.textContent = text;
+	};
+
+	const verifyCreateProspectPhoneUnique = async (options = {}) => {
+		const silent = options.silent === true;
+		const rawValue = String(prospectCreatePhoneInput?.value || '').trim();
+
+		if (rawValue === '') {
+			if (!silent) {
+				setProspectCreateStatus('', '');
+			}
+			return true;
+		}
+
+		const normalized = normalizeEcuadorPhoneValue(rawValue);
+		if (normalized === '') {
+			if (!silent) {
+				setProspectCreateStatus('warning', 'El celular debe tener el formato +593987654321.');
+			}
+			return false;
+		}
+
+		if (prospectCreatePhoneInput) {
+			prospectCreatePhoneInput.value = normalized;
+		}
+
+		if (prospectCreatePhoneCheckRequest && typeof prospectCreatePhoneCheckRequest.abort === 'function') {
+			prospectCreatePhoneCheckRequest.abort();
+		}
+		const controller = new AbortController();
+		prospectCreatePhoneCheckRequest = controller;
+
+		try {
+			const response = await fetch(`${BASE_URL}crm/checkProspectPhone?celular=${encodeURIComponent(normalized)}`, {
+				signal: controller.signal,
+				cache: 'no-store',
+			});
+			const data = await response.json();
+
+			if (!response.ok || !data.success) {
+				throw new Error(data.error || 'No se pudo validar el celular.');
+			}
+
+			if (data.exists) {
+				if (!silent) {
+					setProspectCreateStatus('danger', 'El número de celular ya está registrado.');
+				}
+				return false;
+			}
+
+			if (!silent) {
+				setProspectCreateStatus('', '');
+			}
+			return true;
+		} catch (error) {
+			if (error && error.name === 'AbortError') {
+				return false;
+			}
+			if (!silent) {
+				setProspectCreateStatus('warning', error.message || 'No se pudo validar el celular.');
+			}
+			return false;
+		}
+	};
 	const updateProspectSortButtonState = () => {
 		if (!prospectSortButton) {
 			return;
@@ -441,13 +568,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
 	bindProspectPhoneInput(prospectCreatePhoneInput);
 	if (prospectCreateForm) {
-		prospectCreateForm.addEventListener('submit', () => {
+		prospectCreatePhoneInput?.addEventListener('blur', () => {
+			verifyCreateProspectPhoneUnique({ silent: false });
+		});
+
+		prospectCreateForm.addEventListener('submit', async (event) => {
+			event.preventDefault();
+			if (prospectCreateForm.dataset.submitting === '1') {
+				return;
+			}
+
 			if (prospectCreatePhoneInput) {
 				const normalized = normalizeEcuadorPhoneValue(prospectCreatePhoneInput.value);
 				if (normalized !== '') {
 					prospectCreatePhoneInput.value = normalized;
 				}
 			}
+
+			const canSubmit = await verifyCreateProspectPhoneUnique({ silent: false });
+			if (!canSubmit) {
+				window.showGlobalNotification?.('No se puede crear: el celular ya está registrado.', 'warning');
+				return;
+			}
+
+			prospectCreateForm.dataset.submitting = '1';
+			prospectCreateForm.submit();
 		});
 	}
 
@@ -751,6 +896,11 @@ document.addEventListener('DOMContentLoaded', () => {
 			const range = getWeekRange(now, false);
 			presetStart = range.start;
 			presetEnd = range.end;
+		} else if (createdPreset === 'today') {
+			presetStart = new Date(now);
+			presetStart.setHours(0, 0, 0, 0);
+			presetEnd = new Date(presetStart);
+			presetEnd.setDate(presetEnd.getDate() + 1);
 		} else if (createdPreset === 'previous_week') {
 			const range = getWeekRange(now, true);
 			presetStart = range.start;
@@ -963,13 +1113,13 @@ document.addEventListener('DOMContentLoaded', () => {
 				throw new Error(data.error || 'No se pudo cargar el cliente potencial');
 			}
 
-			renderProspectModal(data.prospect || {}, data.estados || []);
+			renderProspectModal(data.prospect || {}, data.estados || [], data.asesores || [], data.creadores || []);
 		} catch (error) {
 			body.innerHTML = `<div class="alert alert-danger">${escapeHtml(error.message || 'Error al cargar el cliente potencial')}</div>`;
 		}
 	};
 
-	const renderProspectModal = (prospect, estados) => {
+	const renderProspectModal = (prospect, estados, asesores, creadores) => {
 		const body = document.getElementById('prospectEditBody');
 		const saveBtn = document.getElementById('saveProspectBtn');
 		if (!body || !saveBtn) {
@@ -995,13 +1145,32 @@ document.addEventListener('DOMContentLoaded', () => {
 			careerOptions.push(`<option value="${escapeHtml(fallbackValue)}" selected>${escapeHtml(fallbackValue)}</option>`);
 		}
 
-		const currentEstadoId = Number(prospect.estado_id || 0);
-		const estadoOptions = ['<option value="">Sin etapa</option>'];
-		(Array.isArray(estados) ? estados : []).forEach((estado) => {
-			const estadoId = Number(estado.id || 0);
-			const selected = estadoId > 0 && estadoId === currentEstadoId ? ' selected' : '';
-			estadoOptions.push(`<option value="${escapeHtml(estadoId)}"${selected}>${escapeHtml(estado.nombre || '')}</option>`);
-		});
+		const buildSimpleOptions = (items, currentValue, placeholderLabel) => {
+			const current = String(currentValue || '').trim();
+			const normalizedCurrent = normalizeText(current);
+			const unique = new Set();
+			const options = [`<option value="">${escapeHtml(placeholderLabel)}</option>`];
+
+			(Array.isArray(items) ? items : []).forEach((item) => {
+				const value = String(item || '').trim();
+				const normalized = normalizeText(value);
+				if (value === '' || unique.has(normalized)) {
+					return;
+				}
+				unique.add(normalized);
+				const selected = normalizedCurrent !== '' && normalized === normalizedCurrent ? ' selected' : '';
+				options.push(`<option value="${escapeHtml(value)}"${selected}>${escapeHtml(value)}</option>`);
+			});
+
+			if (current !== '' && !unique.has(normalizedCurrent)) {
+				options.push(`<option value="${escapeHtml(current)}" selected>${escapeHtml(current)}</option>`);
+			}
+
+			return options;
+		};
+
+		const advisorOptions = buildSimpleOptions(asesores, prospect.propietario || '', 'Seleccione asesor');
+		const createdByValue = String(prospect.creado_por || '').trim();
 
 		body.innerHTML = `
 			<div id="prospectSaveStatus" class="d-none"></div>
@@ -1027,8 +1196,10 @@ document.addEventListener('DOMContentLoaded', () => {
 					<input type="text" class="form-control" id="prospectEditCelular" value="${escapeHtml(prospect.celular || '')}">
 				</div>
 				<div class="col-md-6">
-					<label class="form-label">Propietario</label>
-					<input type="text" class="form-control" id="prospectEditPropietario" value="${escapeHtml(prospect.propietario || '')}">
+					<label class="form-label">Asesor</label>
+					<select class="form-select" id="prospectEditPropietario">
+						${advisorOptions.join('')}
+					</select>
 				</div>
 				<div class="col-md-6">
 					<label class="form-label">Carrera</label>
@@ -1051,18 +1222,14 @@ document.addEventListener('DOMContentLoaded', () => {
 				</div>
 				<div class="col-md-6">
 					<label class="form-label">Creado por</label>
-					<input type="text" class="form-control" id="prospectEditCreadoPor" value="${escapeHtml(prospect.creado_por || '')}">
-				</div>
-				<div class="col-md-6">
-					<label class="form-label">Etapa</label>
-					<select class="form-select" id="prospectEditEstadoId">
-						${estadoOptions.join('')}
-					</select>
+					<input type="text" class="form-control" id="prospectEditCreadoPorReadonly" value="${escapeHtml(createdByValue)}" readonly>
+					<input type="hidden" id="prospectEditCreadoPor" value="${escapeHtml(createdByValue)}">
 				</div>
 			</div>
 		`;
 
 		bindProspectPhoneInput(document.getElementById('prospectEditCelular'));
+		bindProspectAutosaveFields();
 	};
 
 	const renderContactModal = (student, studentId) => {
@@ -1160,6 +1327,10 @@ document.addEventListener('DOMContentLoaded', () => {
 		const fallbackStateId = Number(student.pipeline_estado_id || 0);
 		if (currentStateIds.length === 0 && fallbackStateId > 0) {
 			currentStateIds.push(fallbackStateId);
+		}
+		const isContactEntity = String(entityType).toLowerCase() === 'contact';
+		if (isContactEntity && currentStateIds.length > 1) {
+			currentStateIds.splice(1);
 		}
 		const selectedStateSet = new Set(currentStateIds);
 		const isStudent = Number(student.is_student || 0) === 1;
@@ -1351,10 +1522,13 @@ document.addEventListener('DOMContentLoaded', () => {
 		const pipelineStateIds = document.getElementById('pipelineStateIds');
 		const chips = body.querySelectorAll('.pipeline-stage-chip');
 		const syncPipelineSelection = () => {
-			const selectedIds = Array.from(chips)
+			let selectedIds = Array.from(chips)
 				.filter((item) => item.classList.contains('is-active'))
 				.map((item) => Number(item.getAttribute('data-stage-id') || 0))
 				.filter((item) => item > 0);
+			if (isContactEntity && selectedIds.length > 1) {
+				selectedIds = [selectedIds[0]];
+			}
 			if (pipelineStateIds) {
 				pipelineStateIds.value = selectedIds.join(',');
 			}
@@ -1368,7 +1542,12 @@ document.addEventListener('DOMContentLoaded', () => {
 		};
 		chips.forEach((chip) => {
 			chip.addEventListener('click', () => {
-				chip.classList.toggle('is-active');
+				if (isContactEntity) {
+					chips.forEach((item) => item.classList.remove('is-active'));
+					chip.classList.add('is-active');
+				} else {
+					chip.classList.toggle('is-active');
+				}
 				syncPipelineSelection();
 			});
 		});
@@ -2436,20 +2615,35 @@ document.addEventListener('DOMContentLoaded', () => {
 					throw new Error(data.error || 'No se pudo actualizar pipeline');
 				}
 
-				const row = document.querySelector(`tr[data-student-id="${entityId}"]`);
-				if (row) {
-					const pipelineCell = row.querySelector('.pipeline-col');
-					if (pipelineCell) {
-						pipelineCell.innerHTML = `<span class="badge text-bg-light border">${escapeHtml(data.pipeline_nombre || 'Actualizado')}</span>`;
-					}
-				}
+					const pipelineLabel = String(data.pipeline_nombre || 'Actualizado').trim() || 'Actualizado';
 
-				await loadStudentPipeline(entityId, entityType);
-				const refreshedStatusBox = document.getElementById('pipelineSaveStatus');
-				if (refreshedStatusBox) {
-					refreshedStatusBox.className = 'alert alert-success py-2 mb-3';
-					refreshedStatusBox.textContent = 'Etapas actualizadas correctamente.';
-				}
+					if (entityType === 'contact') {
+						const prospectRow = document.querySelector(`tr[data-prospect-contact-id="${entityId}"]`);
+						if (prospectRow) {
+							const cells = prospectRow.querySelectorAll('td');
+							if (cells.length >= 4) {
+								cells[3].innerHTML = `<span class="badge text-bg-light border">${escapeHtml(pipelineLabel)}</span>`;
+							}
+							prospectRow.setAttribute('data-prospect-stage', normalizeText(pipelineLabel));
+						}
+						applyProspectFilters();
+					} else {
+						const row = document.querySelector(`tr[data-student-id="${entityId}"]`);
+						if (row) {
+							const pipelineCell = row.querySelector('.pipeline-col');
+							if (pipelineCell) {
+								pipelineCell.innerHTML = `<span class="badge text-bg-light border">${escapeHtml(pipelineLabel)}</span>`;
+							}
+						}
+					}
+
+					window.showGlobalNotification?.('Datos actualizados correctamente.', 'success');
+					closeModalById('studentPipelineModal');
+					if (entityType === 'contact') {
+						activateProspectsTab();
+					} else {
+						activateStudentsTab();
+					}
 			} catch (error) {
 				console.error(error);
 				if (statusBox) {
@@ -2462,111 +2656,213 @@ document.addEventListener('DOMContentLoaded', () => {
 		});
 	}
 
-	const saveProspectBtn = document.getElementById('saveProspectBtn');
-	if (saveProspectBtn) {
-		saveProspectBtn.addEventListener('click', async () => {
-			const contactId = Number(saveProspectBtn.getAttribute('data-contact-id') || 0);
-			const statusBox = document.getElementById('prospectSaveStatus');
-			if (contactId <= 0) {
-				if (statusBox) {
-					statusBox.className = 'alert alert-warning py-2 mb-3';
-					statusBox.textContent = 'No se pudo identificar el cliente potencial.';
-				}
+	let prospectAutoSaveTimer = null;
+	let prospectAutoSaveSuspended = false;
+	let prospectSaveInProgress = false;
+
+	const buildProspectUpdatePayload = (contactId) => {
+		const phoneInput = document.getElementById('prospectEditCelular');
+		const normalizedCell = normalizeEcuadorPhoneValue(phoneInput?.value || '');
+		if (phoneInput && normalizedCell !== '') {
+			phoneInput.value = normalizedCell;
+		}
+
+		return new URLSearchParams({
+			contacto_id: String(contactId),
+			nombres: String(document.getElementById('prospectEditNombres')?.value || '').trim(),
+			apellidos: String(document.getElementById('prospectEditApellidos')?.value || '').trim(),
+			identificacion: String(document.getElementById('prospectEditIdentificacion')?.value || '').trim(),
+			correo_personal: String(document.getElementById('prospectEditCorreo')?.value || '').trim(),
+			celular: normalizedCell,
+			propietario: String(document.getElementById('prospectEditPropietario')?.value || '').trim(),
+			creado_por: String(document.getElementById('prospectEditCreadoPor')?.value || '').trim(),
+			carrera: String(document.getElementById('prospectEditCarreraSelect')?.value || '').trim(),
+			modalidad: String(document.getElementById('prospectEditModalidad')?.value || '').trim(),
+			provincia: String(document.getElementById('prospectEditProvincia')?.value || '').trim(),
+			ciudad: String(document.getElementById('prospectEditCiudad')?.value || '').trim(),
+		});
+	};
+
+	const syncProspectRowFromForm = (contactId) => {
+		const row = document.querySelector(`tr[data-prospect-contact-id="${contactId}"]`);
+		if (!row) {
+			return;
+		}
+
+		const nombres = String(document.getElementById('prospectEditNombres')?.value || '').trim();
+		const apellidos = String(document.getElementById('prospectEditApellidos')?.value || '').trim();
+		const newName = `${nombres} ${apellidos}`.replace(/\s+/g, ' ').trim();
+		const newPhoneRaw = String(document.getElementById('prospectEditCelular')?.value || '').trim();
+		const normalizedPhone = normalizeEcuadorPhoneValue(newPhoneRaw);
+		let digitsPhone = normalizedPhone.replace(/\D+/g, '');
+		if (digitsPhone === '' && newPhoneRaw !== '') {
+			digitsPhone = newPhoneRaw.replace(/\D+/g, '');
+		}
+
+		const contactLink = row.querySelector('.prospect-edit-link');
+		if (contactLink) {
+			contactLink.textContent = newName || '-';
+		}
+
+		const cells = row.querySelectorAll('td');
+		if (cells.length >= 8) {
+			const selectedCareerOption = document.getElementById('prospectEditCarreraSelect')?.selectedOptions?.[0];
+			const selectedCareerText = String(selectedCareerOption?.textContent || document.getElementById('prospectEditCarreraSelect')?.value || '-').trim();
+			cells[2].textContent = selectedCareerText || '-';
+			if (digitsPhone !== '') {
+				cells[4].innerHTML = `<a href="https://wa.me/${escapeHtml(digitsPhone)}" target="_blank" rel="noopener noreferrer">${escapeHtml(normalizedPhone || newPhoneRaw || digitsPhone)}</a>`;
+			} else {
+				cells[4].textContent = normalizedPhone || newPhoneRaw || '-';
+			}
+			cells[5].textContent = String(document.getElementById('prospectEditPropietario')?.value || '-') || '-';
+			cells[6].textContent = String(document.getElementById('prospectEditCreadoPor')?.value || '-') || '-';
+			row.setAttribute('data-prospect-name', normalizeText(newName));
+			row.setAttribute('data-prospect-phone', digitsPhone);
+			row.setAttribute('data-prospect-origin', normalizeText(document.getElementById('prospectEditPropietario')?.value || ''));
+			row.setAttribute('data-prospect-career', normalizeText(selectedCareerText));
+			const createdByRaw = String(document.getElementById('prospectEditCreadoPor')?.value || '');
+			const createdByNormalized = createdByRaw
+				.split(',')
+				.map((value) => normalizeText(value))
+				.filter((value) => value !== '')
+				.join('|');
+			row.setAttribute('data-prospect-created-by', createdByNormalized);
+		}
+	};
+
+	const submitProspectUpdate = async (options = {}) => {
+		const saveProspectBtn = document.getElementById('saveProspectBtn');
+		const statusBox = document.getElementById('prospectSaveStatus');
+		const closeModal = options.closeModal === true;
+		const notifyMessage = String(options.notifyMessage || '').trim();
+
+		if (!saveProspectBtn || prospectSaveInProgress) {
+			return false;
+		}
+
+		const contactId = Number(saveProspectBtn.getAttribute('data-contact-id') || 0);
+		if (contactId <= 0) {
+			if (statusBox) {
+				statusBox.className = 'alert alert-warning py-2 mb-3';
+				statusBox.textContent = 'No se pudo identificar el cliente potencial.';
+			}
+			return false;
+		}
+
+		const payload = buildProspectUpdatePayload(contactId);
+		const nombres = String(payload.get('nombres') || '').trim();
+		if (nombres === '') {
+			if (statusBox) {
+				statusBox.className = 'alert alert-warning py-2 mb-3';
+				statusBox.textContent = 'El nombre es obligatorio.';
+			}
+			return false;
+		}
+
+		try {
+			prospectSaveInProgress = true;
+			saveProspectBtn.disabled = true;
+			if (statusBox) {
+				statusBox.className = 'alert alert-info py-2 mb-3';
+				statusBox.textContent = 'Guardando cambios...';
+			}
+
+			const response = await fetch(`${BASE_URL}crm/updateProspect`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				body: payload,
+			});
+
+			const data = await response.json();
+			if (!response.ok || !data.success) {
+				throw new Error(data.error || 'No se pudo actualizar el cliente potencial');
+			}
+
+			syncProspectRowFromForm(contactId);
+			if (statusBox) {
+				statusBox.className = 'alert alert-success py-2 mb-3';
+				statusBox.textContent = 'Cliente potencial actualizado correctamente.';
+			}
+			applyProspectFilters();
+
+			if (notifyMessage !== '') {
+				window.showGlobalNotification?.(notifyMessage, 'success');
+			}
+
+			if (closeModal) {
+				closeModalById('prospectEditModal');
+				activateProspectsTab();
+			}
+
+			return true;
+		} catch (error) {
+			if (statusBox) {
+				statusBox.className = 'alert alert-danger py-2 mb-3';
+				statusBox.textContent = error.message || 'Error al guardar cambios';
+			}
+			return false;
+		} finally {
+			prospectSaveInProgress = false;
+			saveProspectBtn.disabled = false;
+		}
+	};
+
+	const bindProspectAutosaveFields = () => {
+		const fieldIds = [
+			'prospectEditNombres',
+			'prospectEditApellidos',
+			'prospectEditIdentificacion',
+			'prospectEditCorreo',
+			'prospectEditCelular',
+			'prospectEditPropietario',
+			'prospectEditCarreraSelect',
+			'prospectEditModalidad',
+			'prospectEditProvincia',
+			'prospectEditCiudad',
+		];
+
+		fieldIds.forEach((fieldId) => {
+			const field = document.getElementById(fieldId);
+			if (!field || field.dataset.prospectAutosaveBound === '1') {
 				return;
 			}
 
-			const payload = new URLSearchParams({
-				contacto_id: String(contactId),
-				nombres: String(document.getElementById('prospectEditNombres')?.value || '').trim(),
-				apellidos: String(document.getElementById('prospectEditApellidos')?.value || '').trim(),
-				identificacion: String(document.getElementById('prospectEditIdentificacion')?.value || '').trim(),
-				correo_personal: String(document.getElementById('prospectEditCorreo')?.value || '').trim(),
-				celular: normalizeEcuadorPhoneValue(document.getElementById('prospectEditCelular')?.value || ''),
-				propietario: String(document.getElementById('prospectEditPropietario')?.value || '').trim(),
-				creado_por: String(document.getElementById('prospectEditCreadoPor')?.value || '').trim(),
-				estado_id: String(document.getElementById('prospectEditEstadoId')?.value || '').trim(),
-				carrera: String(document.getElementById('prospectEditCarreraSelect')?.value || '').trim(),
-				modalidad: String(document.getElementById('prospectEditModalidad')?.value || '').trim(),
-				provincia: String(document.getElementById('prospectEditProvincia')?.value || '').trim(),
-				ciudad: String(document.getElementById('prospectEditCiudad')?.value || '').trim(),
+			field.dataset.prospectAutosaveBound = '1';
+			const eventName = field.tagName === 'SELECT' ? 'change' : 'input';
+			field.addEventListener(eventName, () => {
+				if (prospectAutoSaveSuspended) {
+					return;
+				}
+				if (prospectAutoSaveTimer) {
+					window.clearTimeout(prospectAutoSaveTimer);
+				}
+				prospectAutoSaveTimer = window.setTimeout(() => {
+					submitProspectUpdate({ closeModal: false, notifyMessage: 'Dato actualizado.' });
+				}, 700);
 			});
+		});
+	};
 
-			try {
-				saveProspectBtn.disabled = true;
-				if (statusBox) {
-					statusBox.className = 'alert alert-info py-2 mb-3';
-					statusBox.textContent = 'Guardando cambios...';
-				}
+	if (initialTab === 'prospects') {
+		activateProspectsTab();
+	}
 
-				const response = await fetch(`${BASE_URL}crm/updateProspect`, {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-					body: payload,
-				});
+	if (initialOpenContactId > 0) {
+		activateProspectsTab();
+		loadStudentPipeline(initialOpenContactId, 'contact');
+		const pipelineModalEl = document.getElementById('studentPipelineModal');
+		if (pipelineModalEl && window.bootstrap?.Modal) {
+			window.bootstrap.Modal.getOrCreateInstance(pipelineModalEl).show();
+		}
+	}
 
-				const data = await response.json();
-				if (!response.ok || !data.success) {
-					throw new Error(data.error || 'No se pudo actualizar el cliente potencial');
-				}
-
-				const row = document.querySelector(`tr[data-prospect-contact-id="${contactId}"]`);
-				if (row) {
-					const newName = `${String(document.getElementById('prospectEditNombres')?.value || '').trim()} ${String(document.getElementById('prospectEditApellidos')?.value || '').trim()}`.replace(/\s+/g, ' ').trim();
-					const newPhoneRaw = String(document.getElementById('prospectEditCelular')?.value || '').trim();
-					const normalizedPhone = normalizeEcuadorPhoneValue(newPhoneRaw);
-					let digitsPhone = normalizedPhone.replace(/\D+/g, '');
-					if (digitsPhone === '' && newPhoneRaw !== '') {
-						digitsPhone = newPhoneRaw.replace(/\D+/g, '');
-					}
-					const contactLink = row.querySelector('.prospect-edit-link');
-					if (contactLink) {
-						contactLink.textContent = newName || '-';
-					}
-
-					const cells = row.querySelectorAll('td');
-					if (cells.length >= 8) {
-						const selectedCareerOption = document.getElementById('prospectEditCarreraSelect')?.selectedOptions?.[0];
-						const selectedCareerText = String(selectedCareerOption?.textContent || document.getElementById('prospectEditCarreraSelect')?.value || '-').trim();
-						cells[2].textContent = selectedCareerText || '-';
-						const stageOption = document.getElementById('prospectEditEstadoId')?.selectedOptions?.[0];
-						const stageText = String(stageOption?.textContent || 'Sin etapa').trim();
-						cells[3].innerHTML = `<span class="badge text-bg-light border">${escapeHtml(stageText)}</span>`;
-						if (digitsPhone !== '') {
-							cells[4].innerHTML = `<a href="https://wa.me/${escapeHtml(digitsPhone)}" target="_blank" rel="noopener noreferrer">${escapeHtml(normalizedPhone || newPhoneRaw || digitsPhone)}</a>`;
-						} else {
-							cells[4].textContent = normalizedPhone || newPhoneRaw || '-';
-						}
-						cells[5].textContent = String(document.getElementById('prospectEditPropietario')?.value || '-') || '-';
-						cells[6].textContent = String(document.getElementById('prospectEditCreadoPor')?.value || '-') || '-';
-						row.setAttribute('data-prospect-name', normalizeText(newName));
-						row.setAttribute('data-prospect-phone', digitsPhone);
-						row.setAttribute('data-prospect-origin', normalizeText(document.getElementById('prospectEditPropietario')?.value || ''));
-						row.setAttribute('data-prospect-stage', normalizeText(stageText));
-						row.setAttribute('data-prospect-career', normalizeText(selectedCareerText));
-						const createdByRaw = String(document.getElementById('prospectEditCreadoPor')?.value || '');
-						const createdByNormalized = createdByRaw
-							.split(',')
-							.map((value) => normalizeText(value))
-							.filter((value) => value !== '')
-							.join('|');
-						row.setAttribute('data-prospect-created-by', createdByNormalized);
-					}
-				}
-
-				if (statusBox) {
-					statusBox.className = 'alert alert-success py-2 mb-3';
-					statusBox.textContent = 'Cliente potencial actualizado correctamente.';
-				}
-
-				applyProspectFilters();
-			} catch (error) {
-				if (statusBox) {
-					statusBox.className = 'alert alert-danger py-2 mb-3';
-					statusBox.textContent = error.message || 'Error al guardar cambios';
-				}
-			} finally {
-				saveProspectBtn.disabled = false;
-			}
+	const saveProspectBtn = document.getElementById('saveProspectBtn');
+	if (saveProspectBtn) {
+		saveProspectBtn.addEventListener('click', async () => {
+			await submitProspectUpdate({
+				closeModal: true,
+				notifyMessage: 'Datos actualizados correctamente.',
+			});
 		});
 	}
 });

@@ -15,6 +15,8 @@
 	<?php $prospectPages = (int) ($prospectPages ?? 1); ?>
 	<?php $totalProspects = (int) ($totalProspects ?? 0); ?>
 	<?php $prospectSort = (string) ($prospectSort ?? 'desc'); ?>
+	<?php $prospectAdvisorOptions = $prospectAdvisorOptions ?? []; ?>
+	<?php $prospectCreatorOptions = $prospectCreatorOptions ?? []; ?>
 	<?php
 	$prospectOrigins = [];
 	$prospectStages = [];
@@ -381,6 +383,7 @@
 						<label for="crmProspectCreatedPreset" class="form-label mb-1"><i class="bi bi-calendar-event"></i> Creado</label>
 						<select id="crmProspectCreatedPreset" class="form-select">
 							<option value="">Todos</option>
+							<option value="today">Hoy</option>
 							<option value="previous_week">Semana anterior</option>
 							<option value="current_week">Semana actual</option>
 							<option value="last_30_days">Hace 30 dias</option>
@@ -565,6 +568,7 @@
 				</div>
 				<div class="modal-body">
 					<input type="hidden" name="_token" value="<?= e(csrf_token()) ?>">
+					<div id="prospectCreateStatus" class="d-none"></div>
 					<div class="row g-3">
 						<div class="col-md-6">
 							<label for="prospectNombres" class="form-label">Nombres</label>
@@ -572,7 +576,7 @@
 						</div>
 						<div class="col-md-6">
 							<label for="prospectApellidos" class="form-label">Apellidos</label>
-							<input type="text" id="prospectApellidos" name="apellidos" class="form-control" maxlength="150" required>
+							<input type="text" id="prospectApellidos" name="apellidos" class="form-control" maxlength="150">
 						</div>
 						<div class="col-md-4">
 							<label for="prospectIdentificacion" class="form-label">Identificacion / Cedula / Pasaporte</label>
@@ -589,12 +593,25 @@
 						</div>
 						<div class="col-md-6">
 							<label for="prospectOrigen" class="form-label">Asesor</label>
-							<input type="text" id="prospectOrigen" name="origen" class="form-control" maxlength="100" placeholder="Asesor que crea el prospecto">
+							<select id="prospectOrigen" name="origen" class="form-select" required>
+								<option value="">Seleccione asesor</option>
+								<?php foreach ($prospectAdvisorOptions as $advisorOption): ?>
+									<?php $advisorOption = trim((string) $advisorOption); ?>
+									<?php if ($advisorOption === '') continue; ?>
+									<option value="<?= e($advisorOption) ?>"><?= e($advisorOption) ?></option>
+								<?php endforeach; ?>
+							</select>
 						</div>
 						<div class="col-md-6">
 							<label for="prospectCreadoPor" class="form-label">Creado por</label>
-							<input type="text" id="prospectCreadoPor" name="creado_por" class="form-control" maxlength="255" placeholder="Ej: Ana Perez, Carlos Ruiz">
-							<small class="text-muted">Puedes ingresar varios nombres separados por coma.</small>
+							<select id="prospectCreadoPor" name="creado_por" class="form-select" required>
+								<option value="">Seleccione creador</option>
+								<?php foreach ($prospectCreatorOptions as $creatorOption): ?>
+									<?php $creatorOption = trim((string) $creatorOption); ?>
+									<?php if ($creatorOption === '') continue; ?>
+									<option value="<?= e($creatorOption) ?>"><?= e($creatorOption) ?></option>
+								<?php endforeach; ?>
+							</select>
 						</div>
 						<div class="col-md-6">
 							<label for="prospectCarrera" class="form-label">Carrera</label>

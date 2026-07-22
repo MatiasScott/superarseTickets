@@ -22,6 +22,11 @@ class CRMController extends Controller
 			'levels' => $this->dashboardEmptyLevelBucket(),
 			'total' => 0,
 		];
+		$countedEntitiesByArea = [
+			'admisiones' => [],
+			'matriculas' => [],
+			'docencia' => [],
+		];
 
 		try {
 			$this->ensureCrmSupportTables();
@@ -29,6 +34,7 @@ class CRMController extends Controller
 			$allowedStudentIds = null;
 			$stageMetaByEstadoId = [];
 			$stageKeyByEstadoId = [];
+			$excludedEstadoIds = [];
 			$activeEstados = $db->query("SELECT id, nombre, categoria, orden FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC")->fetchAll() ?: [];
 			foreach ($activeEstados as $estado) {
 				$estadoId = (int) ($estado['id'] ?? 0);
@@ -38,6 +44,7 @@ class CRMController extends Controller
 
 				$area = $this->dashboardResolveCrmAreaFromState($estado);
 				if ($area === null) {
+					$excludedEstadoIds[$estadoId] = true;
 					continue;
 				}
 
@@ -64,7 +71,8 @@ class CRMController extends Controller
 
 			$pipelineRows = $db->query("SELECT pm.student_id, pm.estado_id, COALESCE(pe.nombre, '') AS estado_nombre, 'student' AS source_type
 				FROM crm_student_pipeline_multi pm
-				LEFT JOIN pipeline_estados pe ON pe.id = pm.estado_id")->fetchAll() ?: [];
+				LEFT JOIN pipeline_estados pe ON pe.id = pm.estado_id
+				ORDER BY pm.student_id ASC, pe.orden ASC, pe.id ASC")->fetchAll() ?: [];
 
 			$legacyPipelineRows = $db->query("SELECT p.student_id, p.estado_id, COALESCE(pe.nombre, '') AS estado_nombre, 'student' AS source_type
 				FROM crm_student_pipeline p
@@ -136,6 +144,10 @@ class CRMController extends Controller
 				$stageMeta = $stageMetaByEstadoId[$estadoId] ?? null;
 
 				if ($stageMeta === null) {
+					if ($estadoId > 0 && isset($excludedEstadoIds[$estadoId])) {
+						continue;
+					}
+
 					$fallbackArea = $this->dashboardResolveCrmAreaFromState([
 						'nombre' => $stageName,
 						'categoria' => '',
@@ -164,6 +176,15 @@ class CRMController extends Controller
 						$stageKeyByEstadoId[$fallbackKey] = $this->dashboardResolveStageKey($fallbackLabel);
 					}
 					$estadoId = $fallbackKey;
+				}
+
+				$areaName = (string) ($stageMeta['area'] ?? '');
+				$entityKey = $sourceType . ':' . $studentId;
+				if ($areaName !== '' && isset($countedEntitiesByArea[$areaName][$entityKey])) {
+					continue;
+				}
+				if ($areaName !== '' && isset($countedEntitiesByArea[$areaName])) {
+					$countedEntitiesByArea[$areaName][$entityKey] = true;
 				}
 
 				if ($stageMeta['area'] === 'admisiones' && isset($admisionesRows[$estadoId])) {
@@ -429,9 +450,13 @@ class CRMController extends Controller
 
 		$db = Database::getInstance()->connection();
 		try {
-			$pipelineEstados = $db->query("SELECT id, nombre FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC")->fetchAll() ?: [];
+			$pipelineEstados = $this->fetchVisiblePipelineStates($db, 'id, nombre');
+			$prospectAdvisorOptions = $this->fetchProspectSelectorOptions($db, 'crm_prospect_asesores');
+			$prospectCreatorOptions = $this->fetchProspectSelectorOptions($db, 'crm_prospect_creadores');
 		} catch (Throwable $e) {
 			$pipelineEstados = [];
+			$prospectAdvisorOptions = [];
+			$prospectCreatorOptions = [];
 		}
 
 		$this->view('crm/interesados', [
@@ -446,6 +471,8 @@ class CRMController extends Controller
 			'periodos' => $periodos,
 			'periodoSeleccionado' => $periodoFiltro,
 			'pipelineEstados' => $pipelineEstados,
+			'prospectAdvisorOptions' => $prospectAdvisorOptions,
+			'prospectCreatorOptions' => $prospectCreatorOptions,
 			'sourceLabel' => (string) ($studentsData['source'] ?? 'No disponible'),
 			'sourceError' => (string) ($studentsData['error'] ?? ''),
 			'prospectPage'   => $prospectPage,
@@ -463,7 +490,7 @@ class CRMController extends Controller
 
 		if (!verify_csrf($_POST['_token'] ?? null)) {
 			set_flash('error', 'Token CSRF invalido.');
-			redirect('crm/interesados');
+			redirect('crm/interesados?tab=prospects');
 		}
 
 		$nombres = trim((string) ($_POST['nombres'] ?? ''));
@@ -479,14 +506,14 @@ class CRMController extends Controller
 		$provincia = trim((string) ($_POST['provincia'] ?? ''));
 		$ciudad = trim((string) ($_POST['ciudad'] ?? ''));
 
-		if ($nombres === '' || $apellidos === '') {
-			set_flash('error', 'Nombres y apellidos son obligatorios.');
-			redirect('crm/interesados');
+		if ($nombres === '') {
+			set_flash('error', 'El nombre es obligatorio.');
+			redirect('crm/interesados?tab=prospects');
 		}
 
 		if ($celularRaw !== '' && $celular === '') {
 			set_flash('error', 'El celular debe tener el formato +593987654321.');
-			redirect('crm/interesados');
+			redirect('crm/interesados?tab=prospects');
 		}
 
 		$identificacionToStore = $identificacion !== '' ? mb_substr($identificacion, 0, 20) : null;
@@ -504,6 +531,13 @@ class CRMController extends Controller
 					if ($byEmail !== null) {
 						$contactId = $byEmail;
 					}
+				}
+			}
+
+			if ($celular !== '') {
+				$phoneOwnerContactId = $this->findActiveContactIdByPhone($db, $celular);
+				if ($phoneOwnerContactId !== null && ($contactId === null || $phoneOwnerContactId !== (int) $contactId)) {
+					throw new RuntimeException('El número de celular ya existe en otro cliente potencial.');
 				}
 			}
 
@@ -587,6 +621,7 @@ class CRMController extends Controller
 			set_flash('success', $isNew
 				? 'Cliente potencial creado correctamente.'
 				: 'Cliente potencial actualizado y vinculado correctamente.');
+			redirect('crm/interesados?tab=prospects&open_contact_id=' . (int) $contactId);
 		} catch (Throwable $e) {
 			if (isset($db) && $db instanceof PDO && $db->inTransaction()) {
 				$db->rollBack();
@@ -594,7 +629,7 @@ class CRMController extends Controller
 			set_flash('error', 'No se pudo crear el cliente potencial: ' . $e->getMessage());
 		}
 
-		redirect('crm/interesados');
+		redirect('crm/interesados?tab=prospects');
 	}
 
 	public function estudiantes(): void
@@ -1515,9 +1550,58 @@ class CRMController extends Controller
 			if (!in_array('ciudad', $interesadosColumns, true)) {
 				$db->exec('ALTER TABLE interesados ADD COLUMN ciudad VARCHAR(120) NULL AFTER provincia');
 			}
+
+			$this->ensureProspectSelectorCatalogTables($db);
 		} catch (Throwable $e) {
 			// Evitar romper el flujo principal por auto-creacion auxiliar.
 		}
+	}
+
+	private function ensureProspectSelectorCatalogTables(PDO $db): void
+	{
+		$db->exec("CREATE TABLE IF NOT EXISTS crm_prospect_asesores (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			nombre VARCHAR(120) NOT NULL,
+			estado ENUM('activo','inactivo') NOT NULL DEFAULT 'activo',
+			created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uniq_crm_prospect_asesor_nombre (nombre)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+		$db->exec("CREATE TABLE IF NOT EXISTS crm_prospect_creadores (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			nombre VARCHAR(120) NOT NULL,
+			estado ENUM('activo','inactivo') NOT NULL DEFAULT 'activo',
+			created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uniq_crm_prospect_creador_nombre (nombre)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+	}
+
+	private function fetchProspectSelectorOptions(PDO $db, string $table): array
+	{
+		$stmt = $db->query("SELECT nombre FROM {$table} WHERE estado = 'activo' ORDER BY nombre ASC, id ASC");
+		$rows = $stmt ? ($stmt->fetchAll() ?: []) : [];
+		$options = [];
+		foreach ($rows as $row) {
+			$value = trim((string) ($row['nombre'] ?? ''));
+			if ($value !== '') {
+				$options[] = $value;
+			}
+		}
+
+		return $options;
+	}
+
+	private function fetchVisiblePipelineStates(PDO $db, string $columns = 'id, nombre'): array
+	{
+		$sql = "SELECT {$columns}
+			FROM pipeline_estados
+			WHERE estado = 'activo'
+			  AND LOWER(REPLACE(TRIM(COALESCE(categoria, '')), ' ', '_')) <> 'sin_crm'
+			ORDER BY orden ASC, id ASC";
+		$stmt = $db->query($sql);
+		return $stmt ? ($stmt->fetchAll() ?: []) : [];
 	}
 
 	private function fetchLocalProspects(int $perPage = 25, int $offset = 0, string $sortDirection = 'desc'): array
@@ -1552,11 +1636,12 @@ class CRMController extends Controller
 			FROM interesados i
 			INNER JOIN contactos c ON c.id = i.contacto_id
 			LEFT JOIN pipeline_estados pe ON pe.id = i.estado_id
+				AND LOWER(REPLACE(TRIM(COALESCE(pe.categoria, '')), ' ', '_')) <> 'sin_crm'
 			LEFT JOIN (
 				SELECT t1.contacto_id, t1.telefono
 				FROM telefonos_contacto t1
 				INNER JOIN (
-					SELECT contacto_id, MIN(id) AS first_id
+					SELECT contacto_id, MAX(id) AS first_id
 					FROM telefonos_contacto
 					WHERE estado = 'activo'
 					GROUP BY contacto_id
@@ -1595,7 +1680,7 @@ class CRMController extends Controller
 			'interesados',
 		];
 
-		$stmt = $db->query("SELECT id, nombre FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC");
+		$stmt = $db->query("SELECT id, nombre FROM pipeline_estados WHERE estado = 'activo' AND LOWER(REPLACE(TRIM(COALESCE(categoria, '')), ' ', '_')) <> 'sin_crm' ORDER BY orden ASC, id ASC");
 		$rows = $stmt ? ($stmt->fetchAll() ?: []) : [];
 		if (empty($rows)) {
 			return null;
@@ -1766,6 +1851,20 @@ class CRMController extends Controller
 			return;
 		}
 
+		if (mb_strtolower(trim($type), 'UTF-8') === 'principal') {
+			$deactivate = $db->prepare('UPDATE telefonos_contacto
+				SET estado = "inactivo",
+					updated_at = NOW()
+				WHERE contacto_id = :contacto_id
+				  AND estado = "activo"
+				  AND tipo = "principal"
+				  AND telefono <> :telefono');
+			$deactivate->execute([
+				'contacto_id' => $contactId,
+				'telefono' => mb_substr($phone, 0, 40),
+			]);
+		}
+
 		$stmt = $db->prepare('INSERT INTO telefonos_contacto (contacto_id, telefono, tipo, estado, created_at, updated_at)
 			VALUES (:contacto_id, :telefono, :tipo, "activo", NOW(), NOW())
 			ON DUPLICATE KEY UPDATE tipo = VALUES(tipo), estado = "activo", updated_at = NOW()');
@@ -1776,6 +1875,23 @@ class CRMController extends Controller
 		]);
 	}
 
+	private function findActiveContactIdByPhone(PDO $db, string $phone): ?int
+	{
+		$phone = trim($phone);
+		if ($phone === '') {
+			return null;
+		}
+
+		$stmt = $db->prepare('SELECT contacto_id
+			FROM telefonos_contacto
+			WHERE telefono = :telefono AND estado = "activo"
+			ORDER BY id ASC
+			LIMIT 1');
+		$stmt->execute([':telefono' => $phone]);
+		$contactId = (int) ($stmt->fetchColumn() ?: 0);
+		return $contactId > 0 ? $contactId : null;
+	}
+
 	private function attachPipelineData(array $rows): array
 	{
 		if (empty($rows)) {
@@ -1784,7 +1900,7 @@ class CRMController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
-			$activeEstados = $db->query("SELECT id, nombre FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC")->fetchAll() ?: [];
+			$activeEstados = $this->fetchVisiblePipelineStates($db, 'id, nombre');
 			$stateIds = [];
 			$stateNames = [];
 			foreach ($activeEstados as $estado) {
@@ -1811,6 +1927,7 @@ class CRMController extends Controller
 			$sql = "SELECT p.student_id, p.estado_id, pe.nombre AS pipeline_nombre
 					FROM crm_student_pipeline p
 					LEFT JOIN pipeline_estados pe ON pe.id = p.estado_id
+						AND LOWER(REPLACE(TRIM(COALESCE(pe.categoria, '')), ' ', '_')) <> 'sin_crm'
 					WHERE p.student_id IN ($placeholders)";
 			$stmt = $db->prepare($sql);
 			$stmt->execute($ids);
@@ -1828,6 +1945,7 @@ class CRMController extends Controller
 			$sqlMulti = "SELECT pm.student_id, pm.estado_id, COALESCE(pe.nombre, '') AS pipeline_nombre
 				FROM crm_student_pipeline_multi pm
 				LEFT JOIN pipeline_estados pe ON pe.id = pm.estado_id
+					AND LOWER(REPLACE(TRIM(COALESCE(pe.categoria, '')), ' ', '_')) <> 'sin_crm'
 				WHERE pm.student_id IN ($placeholders)
 				ORDER BY pm.student_id ASC, pe.orden ASC, pe.id ASC";
 			$stmtMulti = $db->prepare($sqlMulti);
@@ -1954,7 +2072,7 @@ class CRMController extends Controller
 							SELECT t1.contacto_id, t1.telefono
 							FROM telefonos_contacto t1
 							INNER JOIN (
-								SELECT contacto_id, MIN(id) AS first_id
+								SELECT contacto_id, MAX(id) AS first_id
 								FROM telefonos_contacto
 								WHERE estado = 'activo'
 								GROUP BY contacto_id
@@ -1989,7 +2107,7 @@ class CRMController extends Controller
 						SELECT t1.contacto_id, t1.telefono
 						FROM telefonos_contacto t1
 						INNER JOIN (
-							SELECT contacto_id, MIN(id) AS first_id
+							SELECT contacto_id, MAX(id) AS first_id
 							FROM telefonos_contacto
 							WHERE estado = 'activo'
 							GROUP BY contacto_id
@@ -2189,7 +2307,7 @@ class CRMController extends Controller
 				SELECT t1.contacto_id, t1.telefono
 				FROM telefonos_contacto t1
 				INNER JOIN (
-					SELECT contacto_id, MIN(id) AS first_id
+					SELECT contacto_id, MAX(id) AS first_id
 					FROM telefonos_contacto
 					WHERE estado = 'activo'
 					GROUP BY contacto_id
@@ -2205,12 +2323,16 @@ class CRMController extends Controller
 				throw new RuntimeException('Cliente potencial no encontrado');
 			}
 
-			$pipelineEstados = $db->query("SELECT id, nombre FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC")->fetchAll() ?: [];
+			$pipelineEstados = $this->fetchVisiblePipelineStates($db, 'id, nombre');
+			$prospectAdvisorOptions = $this->fetchProspectSelectorOptions($db, 'crm_prospect_asesores');
+			$prospectCreatorOptions = $this->fetchProspectSelectorOptions($db, 'crm_prospect_creadores');
 
 			echo json_encode([
 				'success' => true,
 				'prospect' => $prospect,
 				'estados' => $pipelineEstados,
+				'asesores' => $prospectAdvisorOptions,
+				'creadores' => $prospectCreatorOptions,
 			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 		} catch (Throwable $e) {
 			http_response_code(500);
@@ -2236,13 +2358,13 @@ class CRMController extends Controller
 		$celularRaw = trim((string) ($_POST['celular'] ?? ''));
 		$celular = $this->normalizeProspectPhoneValue($celularRaw);
 		$propietario = trim((string) ($_POST['propietario'] ?? ''));
-		$creadoPor = trim((string) ($_POST['creado_por'] ?? ''));
+		$creadoPor = $this->normalizeCreatedByValue((string) ($_POST['creado_por'] ?? ''));
 		$carrera = trim((string) ($_POST['carrera'] ?? ''));
 		$modalidad = trim((string) ($_POST['modalidad'] ?? ''));
 		$provincia = trim((string) ($_POST['provincia'] ?? ''));
 		$ciudad = trim((string) ($_POST['ciudad'] ?? ''));
 
-		if ($contactoId <= 0 || $nombres === '' || $apellidos === '') {
+		if ($contactoId <= 0 || $nombres === '') {
 			http_response_code(400);
 			echo json_encode(['success' => false, 'error' => 'Datos incompletos']);
 			exit;
@@ -2258,6 +2380,13 @@ class CRMController extends Controller
 			$this->ensureCrmSupportTables();
 			$db = Database::getInstance()->connection();
 			$db->beginTransaction();
+
+			if ($celular !== '') {
+				$phoneOwnerContactId = $this->findActiveContactIdByPhone($db, $celular);
+				if ($phoneOwnerContactId !== null && $phoneOwnerContactId !== $contactoId) {
+					throw new RuntimeException('El número de celular ya existe en otro cliente potencial.');
+				}
+			}
 
 			$contactStmt = $db->prepare('SELECT id FROM contactos WHERE id = :id LIMIT 1');
 			$contactStmt->execute([':id' => $contactoId]);
@@ -2384,6 +2513,52 @@ class CRMController extends Controller
 		exit;
 	}
 
+	public function checkProspectPhone(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		$celularRaw = trim((string) ($_GET['celular'] ?? ''));
+		$celular = $this->normalizeProspectPhoneValue($celularRaw);
+
+		if ($celularRaw !== '' && $celular === '') {
+			http_response_code(400);
+			echo json_encode([
+				'success' => false,
+				'error' => 'El celular debe tener el formato +593987654321.',
+			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+			exit;
+		}
+
+		if ($celular === '') {
+			echo json_encode([
+				'success' => true,
+				'exists' => false,
+			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+			exit;
+		}
+
+		try {
+			$this->ensureCrmSupportTables();
+			$db = Database::getInstance()->connection();
+			$ownerId = $this->findActiveContactIdByPhone($db, $celular);
+
+			echo json_encode([
+				'success' => true,
+				'exists' => $ownerId !== null,
+				'message' => $ownerId !== null ? 'El número de celular ya está registrado.' : '',
+			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		} catch (Throwable $e) {
+			http_response_code(500);
+			echo json_encode([
+				'success' => false,
+				'error' => 'No se pudo validar el celular.',
+			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		}
+
+		exit;
+	}
+
 	public function getStudentDetail(): void
 	{
 		Auth::requireAuth();
@@ -2442,7 +2617,7 @@ class CRMController extends Controller
 					SELECT t1.contacto_id, t1.telefono
 					FROM telefonos_contacto t1
 					INNER JOIN (
-						SELECT contacto_id, MIN(id) AS first_id
+						SELECT contacto_id, MAX(id) AS first_id
 						FROM telefonos_contacto
 						WHERE estado = 'activo'
 						GROUP BY contacto_id
@@ -2552,7 +2727,7 @@ class CRMController extends Controller
 			}
 			$student['pipeline_estado_id'] = $pipelineEstadoId;
 			$student['pipeline_estado_ids'] = array_values(array_unique(array_map('intval', $pipelineEstadoIds)));
-			$pipelineEstados = $db->query("SELECT id, nombre FROM pipeline_estados WHERE estado = 'activo' ORDER BY orden ASC, id ASC")->fetchAll() ?: [];
+			$pipelineEstados = $this->fetchVisiblePipelineStates($db, 'id, nombre');
 
 			$historyStmt = $db->prepare("SELECT
 					csn.id,
@@ -2654,7 +2829,11 @@ class CRMController extends Controller
 
 			$validatedIds = [];
 			$validatedNames = [];
-			$estadoStmt = $db->prepare("SELECT id, nombre FROM pipeline_estados WHERE id = :id AND estado = 'activo' LIMIT 1");
+			$estadoStmt = $db->prepare("SELECT id, nombre FROM pipeline_estados
+				WHERE id = :id
+				  AND estado = 'activo'
+				  AND LOWER(REPLACE(TRIM(COALESCE(categoria, '')), ' ', '_')) <> 'sin_crm'
+				LIMIT 1");
 			foreach ($estadoIds as $estadoId) {
 				$estadoStmt->execute([':id' => (int) $estadoId]);
 				$estado = $estadoStmt->fetch();

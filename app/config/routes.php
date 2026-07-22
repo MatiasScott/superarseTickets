@@ -156,6 +156,7 @@ return static function (Router $router): void {
 	$router->get('/crm/getStudentDetail', 'CRMController@getStudentDetail');
 	$router->get('/crm/getStudentContactDetail', 'CRMController@getStudentContactDetail');
 	$router->get('/crm/getProspectDetail', 'CRMController@getProspectDetail');
+	$router->get('/crm/checkProspectPhone', 'CRMController@checkProspectPhone');
 	$router->post('/crm/updateStudentContact', 'CRMController@updateStudentContact');
 	$router->post('/crm/updateProspect', 'CRMController@updateProspect');
 	$router->post('/crm/updateStudentState', 'CRMController@updateStudentState');

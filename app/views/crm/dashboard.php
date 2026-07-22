@@ -141,14 +141,6 @@
 								<td class="text-center fw-semibold"><?= e((string) ((int) ($row['total'] ?? 0))) ?></td>
 							</tr>
 						<?php endforeach; ?>
-						<tr class="table-primary">
-							<td class="fw-bold">TOTAL GENERAL</td>
-							<td class="text-center fw-bold"><?= e((string) ((int) ($docenciaTotales['1'] ?? 0))) ?></td>
-							<td class="text-center fw-bold"><?= e((string) ((int) ($docenciaTotales['2'] ?? 0))) ?></td>
-							<td class="text-center fw-bold"><?= e((string) ((int) ($docenciaTotales['3'] ?? 0))) ?></td>
-							<td class="text-center fw-bold"><?= e((string) ((int) ($docenciaTotales['4'] ?? 0))) ?></td>
-							<td class="text-center fw-bold"><?= e((string) ((int) ($docenciaTotales['total'] ?? 0))) ?></td>
-						</tr>
 						<?php if (empty($docenciaRows)): ?>
 							<tr>
 								<td colspan="6" class="text-center text-muted py-4">No hay datos para mostrar.</td>

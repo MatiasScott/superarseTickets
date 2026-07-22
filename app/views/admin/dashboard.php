@@ -218,6 +218,31 @@ CRM
 			</div>
 		</div>
 
+		<div class="col-12 col-xl-4">
+			<div class="card admin-card h-100">
+				<div class="card-body">
+					<div class="section-title mb-3">
+						<h5 class="mb-1"><i class="bi bi-people-fill me-2 text-teal"></i>Clientes Potenciales</h5>
+
+						<small class="text-muted">
+							Opciones para los selects de Asesor y Creado por
+						</small>
+					</div>
+
+					<div class="d-grid gap-2">
+						<a href="<?= base_url('admin/catalogo/crm-asesores') ?>"
+							class="btn btn-outline-primary btn-sm">
+							Administrar asesores
+						</a>
+						<a href="<?= base_url('admin/catalogo/crm-creado-por') ?>"
+							class="btn btn-outline-secondary btn-sm">
+							Administrar creado por
+						</a>
+					</div>
+				</div>
+			</div>
+		</div>
+
 	</div>
 </div>
 

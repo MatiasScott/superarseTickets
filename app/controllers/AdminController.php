@@ -587,8 +587,38 @@ class AdminController extends Controller
 			'ticket-prioridades' => ['title' => 'Prioridades de Ticket', 'table' => 'ticket_prioridades', 'columns' => ['id', 'nombre']],
 			'ticket-tipos' => ['title' => 'Tipos de Ticket', 'table' => 'ticket_tipos', 'columns' => ['id', 'nombre', 'descripcion']],
 			'pipeline-estados' => ['title' => 'Estados CRM', 'table' => 'pipeline_estados', 'columns' => ['id', 'nombre', 'orden', 'categoria']],
+			'crm-asesores' => ['title' => 'CRM - Asesores', 'table' => 'crm_prospect_asesores', 'columns' => ['id', 'nombre']],
+			'crm-creado-por' => ['title' => 'CRM - Creado por', 'table' => 'crm_prospect_creadores', 'columns' => ['id', 'nombre']],
 		];
 		return $catalogs[$type] ?? null;
+	}
+
+	private function ensureCrmProspectSelectorCatalogTables(PDO $db): void
+	{
+		$db->exec("CREATE TABLE IF NOT EXISTS crm_prospect_asesores (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			nombre VARCHAR(120) NOT NULL,
+			estado ENUM('activo','inactivo') NOT NULL DEFAULT 'activo',
+			created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uniq_crm_prospect_asesor_nombre (nombre)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+		$db->exec("CREATE TABLE IF NOT EXISTS crm_prospect_creadores (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			nombre VARCHAR(120) NOT NULL,
+			estado ENUM('activo','inactivo') NOT NULL DEFAULT 'activo',
+			created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uniq_crm_prospect_creador_nombre (nombre)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+	}
+
+	private function ensureCatalogInfraByType(PDO $db, string $type): void
+	{
+		if ($type === 'crm-asesores' || $type === 'crm-creado-por') {
+			$this->ensureCrmProspectSelectorCatalogTables($db);
+		}
 	}
 
 	private function pipelineCrmLogicOptions(): array
@@ -643,6 +673,7 @@ class AdminController extends Controller
 		}
 
 		$db = Database::getInstance()->connection();
+		$this->ensureCatalogInfraByType($db, $type);
 		$items = $db->query("SELECT * FROM {$config['table']} WHERE estado = 'activo' ORDER BY id DESC")->fetchAll() ?: [];
 		$this->view('admin/catalogos/index', compact('type', 'config', 'items'), ['title' => $config['title']]);
 	}
@@ -677,6 +708,7 @@ class AdminController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
+			$this->ensureCatalogInfraByType($db, $type);
 			$data = ['nombre' => $nombre, 'estado' => 'activo'];
 
 			if ($type === 'ticket-estados') {
@@ -717,6 +749,7 @@ class AdminController extends Controller
 		}
 
 		$db = Database::getInstance()->connection();
+		$this->ensureCatalogInfraByType($db, $type);
 		$stmt = $db->prepare("SELECT * FROM {$config['table']} WHERE id = :id");
 		$stmt->execute(['id' => $id]);
 		$item = $stmt->fetch();
@@ -746,6 +779,7 @@ class AdminController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
+			$this->ensureCatalogInfraByType($db, $type);
 			$beforeStmt = $db->prepare("SELECT * FROM {$config['table']} WHERE id = :id");
 			$beforeStmt->execute(['id' => $id]);
 			$before = $beforeStmt->fetch();
@@ -799,6 +833,7 @@ class AdminController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
+			$this->ensureCatalogInfraByType($db, $type);
 			$beforeStmt = $db->prepare("SELECT * FROM {$config['table']} WHERE id = :id");
 			$beforeStmt->execute(['id' => $id]);
 			$before = $beforeStmt->fetch();
