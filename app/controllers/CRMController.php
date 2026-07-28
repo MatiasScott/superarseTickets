@@ -1624,6 +1624,22 @@ class CRMController extends Controller
 			updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
+			$db->exec("CREATE TABLE IF NOT EXISTS soft_delete_audit (
+				id INT AUTO_INCREMENT PRIMARY KEY,
+				entity_type VARCHAR(50) NOT NULL,
+				entity_id INT NOT NULL,
+				deleted_by INT NULL,
+				deleted_at DATETIME NOT NULL,
+				restored_by INT NULL,
+				restored_at DATETIME NULL,
+				reason VARCHAR(255) NULL,
+				created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+				INDEX idx_soft_delete_audit_entity (entity_type, entity_id),
+				INDEX idx_soft_delete_audit_deleted_at (deleted_at),
+				INDEX idx_soft_delete_audit_restored_at (restored_at)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
 		$countRazones = (int) $db->query("SELECT COUNT(*) FROM crm_descalificacion_razones")->fetchColumn();
 		if ($countRazones === 0) {
 			$db->exec("INSERT INTO crm_descalificacion_razones (nombre, orden) VALUES
@@ -2481,6 +2497,14 @@ class CRMController extends Controller
 			$contactStmt->execute([':id' => $contactoId]);
 			if (!$contactStmt->fetch()) {
 				throw new RuntimeException('Cliente potencial no encontrado');
+			}
+
+			$conflictContactId = null;
+			if ($correoPersonal !== '' && !$this->canUseEmailAsPrimaryContact($db, $correoPersonal, $contactoId, $conflictContactId)) {
+				$conflictSuffix = $conflictContactId !== null ? (' (ID conflicto: ' . $conflictContactId . ')') : '';
+				$connectionLabel = $this->getDbConnectionLabel($db);
+				$connectionSuffix = $connectionLabel !== '' ? (' [DB: ' . $connectionLabel . ']') : '';
+				throw new RuntimeException('El correo ya está registrado en otro cliente potencial' . $conflictSuffix . $connectionSuffix . '.');
 			}
 
 			$contactUpdate = $db->prepare('UPDATE contactos
@@ -4721,13 +4745,15 @@ class CRMController extends Controller
 		return $row ?: null;
 	}
 
-	private function canUseEmailAsPrimaryContact(PDO $db, string $email, ?int $excludeContactId): bool
+	private function canUseEmailAsPrimaryContact(PDO $db, string $email, ?int $excludeContactId, ?int &$conflictContactId = null): bool
 	{
+		$conflictContactId = null;
+
 		if ($email === '') {
 			return false;
 		}
 
-		$sql = 'SELECT id FROM contactos WHERE LOWER(TRIM(COALESCE(email, ""))) = :email';
+		$sql = 'SELECT id FROM contactos WHERE deleted_at IS NULL AND LOWER(TRIM(COALESCE(email, ""))) = :email';
 		$params = ['email' => strtolower(trim($email))];
 		if ($excludeContactId !== null && $excludeContactId > 0) {
 			$sql .= ' AND id <> :exclude_id';
@@ -4737,8 +4763,43 @@ class CRMController extends Controller
 
 		$stmt = $db->prepare($sql);
 		$stmt->execute($params);
+		$foundId = $stmt->fetchColumn();
+		if ($foundId !== false) {
+			$conflictContactId = (int) $foundId;
+		}
 
-		return !$stmt->fetchColumn();
+		return $foundId === false;
+	}
+
+	private function getDbConnectionLabel(PDO $db): string
+	{
+		try {
+			$stmt = $db->query('SELECT DATABASE() AS db_name, @@hostname AS host_name, @@port AS port_number');
+			$row = $stmt ? $stmt->fetch() : null;
+			if (!$row) {
+				return '';
+			}
+
+			$dbName = trim((string) ($row['db_name'] ?? ''));
+			$hostName = trim((string) ($row['host_name'] ?? ''));
+			$portNumber = trim((string) ($row['port_number'] ?? ''));
+
+			if ($dbName === '' && $hostName === '' && $portNumber === '') {
+				return '';
+			}
+
+			$label = $dbName;
+			if ($hostName !== '') {
+				$label .= ($label !== '' ? '@' : '') . $hostName;
+			}
+			if ($portNumber !== '') {
+				$label .= ':' . $portNumber;
+			}
+
+			return $label;
+		} catch (Throwable $e) {
+			return '';
+		}
 	}
 
 	private function addContactChannel(PDO $db, int $contactId, string $channelType, string $channelValue, string $source): void

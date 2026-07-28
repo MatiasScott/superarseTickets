@@ -18,58 +18,51 @@ if (typeof BASE_URL === 'undefined') {
 	}
 }
 
+const loadProspectModalidades = async () => {
+	try {
+		const response = await fetch(BASE_URL + 'crm/getModalidades');
+		if (!response.ok) throw new Error('Error al cargar modalidades');
+		const data = await response.json();
+		if (data.success && Array.isArray(data.data)) {
+			return data.data;
+		}
+	} catch (error) {
+		console.error('Error cargando modalidades:', error);
+	}
+	return [];
+};
+
+const normalizeModalidadText = (value) => String(value || '').toLowerCase().trim();
+
+const populateModalidadSelects = async (modalidadElement, currentValue = '') => {
+	if (!modalidadElement) return;
+
+	const modalidades = await loadProspectModalidades();
+	const normalizedCurrent = normalizeModalidadText(currentValue || modalidadElement.value || '');
+
+	while (modalidadElement.options.length > 1) {
+		modalidadElement.remove(1);
+	}
+
+	modalidades.forEach((modalidad) => {
+		const option = document.createElement('option');
+		option.value = modalidad.nombre;
+		option.textContent = modalidad.nombre;
+		if (normalizeModalidadText(modalidad.nombre) === normalizedCurrent) {
+			option.selected = true;
+		}
+		modalidadElement.appendChild(option);
+	});
+};
+
 document.addEventListener('DOMContentLoaded', () => {
-	// Cargar modalidades para el select
-	const loadModalidades = async () => {
-		try {
-			const response = await fetch(BASE_URL + 'crm/getModalidades');
-			if (!response.ok) throw new Error('Error al cargar modalidades');
-			const data = await response.json();
-			if (data.success && Array.isArray(data.data)) {
-				return data.data;
-			}
-		} catch (error) {
-			console.error('Error cargando modalidades:', error);
-		}
-		return [];
-	};
-
-	const populateModalidadSelects = async (modalidadElement = null) => {
-		if (!modalidadElement && typeof prospectModalidad !== 'undefined') {
-			modalidadElement = prospectModalidad;
-		}
-		if (!modalidadElement) {
-			modalidadElement = document.getElementById('prospectModalidad');
-		}
-		if (!modalidadElement) return;
-
-		const modalidades = await loadModalidades();
-		const currentValue = modalidadElement.value;
-		
-		// Limpiar opciones (excepto la primera)
-		while (modalidadElement.options.length > 1) {
-			modalidadElement.remove(1);
-		}
-		
-		// Agregar modalidades
-		modalidades.forEach(modalidad => {
-			const option = document.createElement('option');
-			option.value = modalidad.nombre;
-			option.textContent = modalidad.nombre;
-			if (modalidad.nombre === currentValue) {
-				option.selected = true;
-			}
-			modalidadElement.appendChild(option);
-		});
-	};
-
 	// Event listener para el modal de crear
 	const createProspectModal = document.getElementById('createProspectModal');
 	if (createProspectModal) {
 		createProspectModal.addEventListener('show.bs.modal', () => {
 			const prospectModalidadInput = document.getElementById('prospectModalidad');
 			if (prospectModalidadInput) {
-				populateModalidadSelects(prospectModalidadInput);
+				populateModalidadSelects(prospectModalidadInput, prospectModalidadInput.value);
 			}
 		});
 	}
@@ -79,9 +72,9 @@ document.addEventListener('DOMContentLoaded', () => {
 	if (prospectEditModal) {
 		prospectEditModal.addEventListener('show.bs.modal', () => {
 			setTimeout(() => {
-				const prospectModalidadInput = document.getElementById('prospectModalidad');
+				const prospectModalidadInput = document.getElementById('prospectEditModalidad');
 				if (prospectModalidadInput) {
-					populateModalidadSelects(prospectModalidadInput);
+					populateModalidadSelects(prospectModalidadInput, prospectModalidadInput.value);
 				}
 			}, 100);
 		});
@@ -966,9 +959,6 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 	};
 
-	let noteSearchResultIds = [];
-	let noteSearchCache = {};
-
 	const applyProspectFilters = async () => {
 		if (!prospectsTable) {
 			updateProspectsCounter();
@@ -979,26 +969,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
 		const searchValue = normalizeText(String(prospectSearchInput?.value || '').trim());
 		const searchDigits = String(prospectSearchInput?.value || '').replace(/\D+/g, '');
-		const searchKeywordRaw = String(prospectSearchInput?.value || '').trim();
-
-		// Si hay búsqueda de texto que no es numérico, buscar también en notas
-		if (searchValue !== '' && searchDigits === '') {
-			if (!noteSearchCache[searchKeywordRaw]) {
-				try {
-					const response = await fetch(`${BASE_URL}crm/searchProspectsByNote?keyword=${encodeURIComponent(searchKeywordRaw)}`);
-					const data = await response.json();
-					noteSearchResultIds = Array.isArray(data.contact_ids) ? data.contact_ids : [];
-					noteSearchCache[searchKeywordRaw] = noteSearchResultIds;
-				} catch (error) {
-					console.error('Error searching notes:', error);
-					noteSearchResultIds = [];
-				}
-			} else {
-				noteSearchResultIds = noteSearchCache[searchKeywordRaw] || [];
-			}
-		} else {
-			noteSearchResultIds = [];
-		}
 
 		const selectedOrigins = getCheckedProspectFilterValues('prospect-origin');
 		const selectedStages = getCheckedProspectFilterValues('prospect-stage');
@@ -1054,6 +1024,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		rows.forEach((row) => {
 			const rowName = normalizeText(row.getAttribute('data-prospect-name') || '');
 			const rowPhone = String(row.getAttribute('data-prospect-phone') || '').replace(/\D+/g, '');
+			const rowEmail = normalizeText(row.getAttribute('data-prospect-email') || '');
 			const rowContactId = Number(row.getAttribute('data-prospect-contact-id') || 0);
 			const rowOrigin = normalizeText(row.getAttribute('data-prospect-origin') || '');
 			const rowStage = normalizeText(row.getAttribute('data-prospect-stage') || '');
@@ -1065,12 +1036,12 @@ document.addEventListener('DOMContentLoaded', () => {
 			const rowDatetimeRaw = String(row.getAttribute('data-prospect-datetime') || '').trim();
 			const rowDatetime = rowDatetimeRaw !== '' ? new Date(rowDatetimeRaw.replace(' ', 'T')) : null;
 
-			// Búsqueda: nombre/teléfono O notas
+			// Búsqueda: nombre, teléfono o correo directo del prospecto
 			const matchSearch = searchValue === ''
 				? true
 				: rowName.includes(searchValue) 
 				  || (searchDigits !== '' && rowPhone.includes(searchDigits))
-				  || (noteSearchResultIds.length > 0 && noteSearchResultIds.includes(rowContactId));
+				  || (rowEmail !== '' && rowEmail.includes(searchValue));
 			const matchOrigin = selectedOrigins.length === 0 || selectedOrigins.includes(rowOrigin);
 			const matchStage = selectedStages.length === 0 || selectedStages.includes(rowStage);
 			const matchCareer = selectedCareers.length === 0 || selectedCareers.includes(rowCareer);
@@ -1350,7 +1321,9 @@ document.addEventListener('DOMContentLoaded', () => {
 				</div>
 				<div class="col-md-6">
 					<label class="form-label">Modalidad</label>
-					<input type="text" class="form-control" id="prospectEditModalidad" value="${escapeHtml(prospect.modalidad || '')}">
+					<select class="form-select" id="prospectEditModalidad">
+						<option value="">Seleccione modalidad</option>
+					</select>
 				</div>
 				<div class="col-md-6">
 					<label class="form-label">Provincia</label>
@@ -1367,6 +1340,11 @@ document.addEventListener('DOMContentLoaded', () => {
 				</div>
 			</div>
 		`;
+
+		const modalidadSelect = document.getElementById('prospectEditModalidad');
+		if (modalidadSelect) {
+			populateModalidadSelects(modalidadSelect, String(prospect.modalidad || ''));
+		}
 
 		bindProspectPhoneInput(document.getElementById('prospectEditCelular'));
 		bindProspectAutosaveFields();
@@ -2915,19 +2893,21 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 
 		const cells = row.querySelectorAll('td');
-		if (cells.length >= 8) {
+		if (cells.length >= 9) {
 			const selectedCareerOption = document.getElementById('prospectEditCarreraSelect')?.selectedOptions?.[0];
 			const selectedCareerText = String(selectedCareerOption?.textContent || document.getElementById('prospectEditCarreraSelect')?.value || '-').trim();
-			cells[2].textContent = selectedCareerText || '-';
+			cells[2].textContent = newName || '-';
+			cells[3].textContent = selectedCareerText || '-';
 			if (digitsPhone !== '') {
-				cells[4].innerHTML = `<a href="https://wa.me/${escapeHtml(digitsPhone)}" target="_blank" rel="noopener noreferrer">${escapeHtml(normalizedPhone || newPhoneRaw || digitsPhone)}</a>`;
+				cells[5].innerHTML = `<a href="https://wa.me/${escapeHtml(digitsPhone)}" target="_blank" rel="noopener noreferrer">${escapeHtml(normalizedPhone || newPhoneRaw || digitsPhone)}</a>`;
 			} else {
-				cells[4].textContent = normalizedPhone || newPhoneRaw || '-';
+				cells[5].textContent = normalizedPhone || newPhoneRaw || '-';
 			}
-			cells[5].textContent = String(document.getElementById('prospectEditPropietario')?.value || '-') || '-';
-			cells[6].textContent = String(document.getElementById('prospectEditCreadoPor')?.value || '-') || '-';
+			cells[6].textContent = String(document.getElementById('prospectEditPropietario')?.value || '-') || '-';
+			cells[7].textContent = String(document.getElementById('prospectEditCreadoPor')?.value || '-') || '-';
 			row.setAttribute('data-prospect-name', normalizeText(newName));
 			row.setAttribute('data-prospect-phone', digitsPhone);
+			row.setAttribute('data-prospect-email', normalizeText(String(document.getElementById('prospectEditCorreo')?.value || '').trim()));
 			row.setAttribute('data-prospect-origin', normalizeText(document.getElementById('prospectEditPropietario')?.value || ''));
 			row.setAttribute('data-prospect-career', normalizeText(selectedCareerText));
 			const createdByRaw = String(document.getElementById('prospectEditCreadoPor')?.value || '');
@@ -3076,6 +3056,30 @@ document.addEventListener('DOMContentLoaded', () => {
 		});
 	}
 
+	const removeProspectRowFromTable = (contactId) => {
+		const row = document.querySelector(`tr[data-prospect-contact-id="${contactId}"]`);
+		if (!row) {
+			applyProspectFilters();
+			return;
+		}
+
+		const checkbox = row.querySelector('.prospect-bulk-checkbox');
+		if (checkbox) {
+			checkbox.checked = false;
+		}
+		row.remove();
+
+		if (window.bulkActionState?.selectedIds) {
+			window.bulkActionState.selectedIds.delete(String(contactId));
+			window.bulkActionState.updateBulkUI?.();
+		}
+
+		reindexVisibleProspectsRows();
+		updateProspectsCounter();
+		refreshProspectMultiFilterLabels();
+		applyProspectFilters();
+	};
+
 	// Eliminar (soft-delete) cliente potencial
 	const deleteProspectBtn = document.getElementById('deleteProspectBtn');
 	if (deleteProspectBtn) {
@@ -3112,6 +3116,7 @@ document.addEventListener('DOMContentLoaded', () => {
 				}
 
 				window.showGlobalNotification?.('Cliente potencial eliminado correctamente', 'success');
+				removeProspectRowFromTable(contactId);
 				closeModalById('prospectEditModal');
 				activateProspectsTab();
 			} catch (error) {
@@ -3157,6 +3162,7 @@ document.addEventListener('click', async (e) => {
 			}
 
 			window.showGlobalNotification?.('Cliente eliminado correctamente', 'success');
+			removeProspectRowFromTable(contactId);
 			activateProspectsTab();
 		} catch (error) {
 			console.error(error);
@@ -3185,6 +3191,8 @@ document.addEventListener('click', async (e) => {
 			document.getElementById('bulkUpdateCount').textContent = count;
 		}
 	};
+
+	window.bulkActionState = bulkActionState;
 
 	// Evento para checkbox individual
 	document.addEventListener('change', (e) => {

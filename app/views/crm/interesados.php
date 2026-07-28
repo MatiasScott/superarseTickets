@@ -483,6 +483,7 @@
 									data-prospect-index="<?= (int) ($index + 1) ?>"
 									data-prospect-name="<?= e(strtolower($fullName)) ?>"
 									data-prospect-phone="<?= e($phoneDigits) ?>"
+									data-prospect-email="<?= e(strtolower((string) ($prospecto['email'] ?? ''))) ?>"
 									data-prospect-origin="<?= e(strtolower((string) ($prospecto['origen'] ?? ''))) ?>"
 									data-prospect-stage="<?= e(strtolower((string) ($prospecto['etapa'] ?? ''))) ?>"
 									data-prospect-career="<?= e(strtolower((string) ($prospecto['carrera'] ?? ''))) ?>"
