@@ -172,6 +172,16 @@ return static function (Router $router): void {
 	$router->post('/crm/updateStudentNote', 'CRMController@updateStudentNote');
 	$router->post('/crm/deleteStudentNote', 'CRMController@deleteStudentNote');
 	$router->get('/crm/note-attachment/{id}', 'CRMController@noteAttachment');
+	$router->get('/crm/searchProspectsByNote', 'CRMController@searchProspectsByNote');
+	$router->post('/crm/softDeleteProspect', 'CRMController@softDeleteProspect');
+	$router->post('/crm/restoreProspect', 'CRMController@restoreProspect');
+	$router->post('/crm/bulkUpdateProspects', 'CRMController@bulkUpdateProspects');
+	$router->get('/crm/getModalidades', 'CRMController@getModalidades');
+	$router->get('/crm/getPipelineStates', 'CRMController@getPipelineStates');
+	$router->get('/crm/getProspectAsesores', 'CRMController@getProspectAsesores');
+	$router->get('/crm/modalidades', 'CRMController@listModalidades');
+	$router->post('/crm/modalidades', 'CRMController@saveModalidad');
+	$router->post('/crm/modalidades/delete', 'CRMController@deleteModalidad');
 
 	$router->get('/tickets', 'TicketController@index');
 	$router->get('/tickets/create', 'TicketController@create');

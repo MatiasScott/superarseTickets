@@ -245,6 +245,25 @@
     padding-bottom: 2px;
 }
 
+.pipeline-stage-list-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    padding-bottom: 2px;
+}
+
+@media (max-width: 992px) {
+    .pipeline-stage-list-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 576px) {
+    .pipeline-stage-list-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 .pipeline-stage-chip {
     border: 1px solid #cad6e4;
     border-radius: 999px;

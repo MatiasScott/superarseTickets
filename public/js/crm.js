@@ -19,6 +19,75 @@ if (typeof BASE_URL === 'undefined') {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+	// Cargar modalidades para el select
+	const loadModalidades = async () => {
+		try {
+			const response = await fetch(BASE_URL + 'crm/getModalidades');
+			if (!response.ok) throw new Error('Error al cargar modalidades');
+			const data = await response.json();
+			if (data.success && Array.isArray(data.data)) {
+				return data.data;
+			}
+		} catch (error) {
+			console.error('Error cargando modalidades:', error);
+		}
+		return [];
+	};
+
+	const populateModalidadSelects = async (modalidadElement = null) => {
+		if (!modalidadElement && typeof prospectModalidad !== 'undefined') {
+			modalidadElement = prospectModalidad;
+		}
+		if (!modalidadElement) {
+			modalidadElement = document.getElementById('prospectModalidad');
+		}
+		if (!modalidadElement) return;
+
+		const modalidades = await loadModalidades();
+		const currentValue = modalidadElement.value;
+		
+		// Limpiar opciones (excepto la primera)
+		while (modalidadElement.options.length > 1) {
+			modalidadElement.remove(1);
+		}
+		
+		// Agregar modalidades
+		modalidades.forEach(modalidad => {
+			const option = document.createElement('option');
+			option.value = modalidad.nombre;
+			option.textContent = modalidad.nombre;
+			if (modalidad.nombre === currentValue) {
+				option.selected = true;
+			}
+			modalidadElement.appendChild(option);
+		});
+	};
+
+	// Event listener para el modal de crear
+	const createProspectModal = document.getElementById('createProspectModal');
+	if (createProspectModal) {
+		createProspectModal.addEventListener('show.bs.modal', () => {
+			const prospectModalidadInput = document.getElementById('prospectModalidad');
+			if (prospectModalidadInput) {
+				populateModalidadSelects(prospectModalidadInput);
+			}
+		});
+	}
+
+	// Event listener para el modal de editar
+	const prospectEditModal = document.getElementById('prospectEditModal');
+	if (prospectEditModal) {
+		prospectEditModal.addEventListener('show.bs.modal', () => {
+			setTimeout(() => {
+				const prospectModalidadInput = document.getElementById('prospectModalidad');
+				if (prospectModalidadInput) {
+					populateModalidadSelects(prospectModalidadInput);
+				}
+			}, 100);
+		});
+	}
+
+
 	const studentsBaseTable = document.getElementById('crmStudentsBaseTable');
 	if (studentsBaseTable) {
 		const filterName = document.getElementById('crmStudentsFilterName');
@@ -568,6 +637,45 @@ document.addEventListener('DOMContentLoaded', () => {
 
 	bindProspectPhoneInput(prospectCreatePhoneInput);
 	if (prospectCreateForm) {
+		// Función para mapear Asesor -> Creado por automáticamente
+		const mapAsesorToCreador = (asesor) => {
+			asesor = String(asesor || '').trim();
+			if (asesor === '') return '';
+			
+			// Regla A: Lizbeth Ochoa, Jennifer Betancourt, Melany Artieda -> EQUIPO MAÑANA
+			if (['Lizbeth Ochoa', 'Jennifer Betancourt', 'Melany Artieda'].includes(asesor)) {
+				return 'EQUIPO MAÑANA';
+			}
+			
+			// Regla B: Melany Vásquez -> EQUIPO NOCHE
+			if (asesor === 'Melany Vásquez') {
+				return 'EQUIPO NOCHE';
+			}
+			
+			// Regla C: Luis Granja, Mayra Segarra, Noemi Toro -> mismo asesor
+			if (['Luis Granja', 'Mayra Segarra', 'Noemi Toro'].includes(asesor)) {
+				return asesor;
+			}
+			
+			return '';
+		};
+
+		// Event listener para mapear automáticamente creado_por cuando cambia asesor
+		const prospectOrigenSelect = document.getElementById('prospectOrigen');
+		const prospectCreadoPorInput = document.getElementById('prospectCreadoPor');
+		
+		if (prospectOrigenSelect && prospectCreadoPorInput) {
+			const updateCreadoPor = () => {
+				const asesorValue = String(prospectOrigenSelect.value || '').trim();
+				const creadoPorValue = mapAsesorToCreador(asesorValue);
+				prospectCreadoPorInput.value = creadoPorValue;
+			};
+			
+			prospectOrigenSelect.addEventListener('change', updateCreadoPor);
+			// Inicializar el valor de creado_por si ya hay un asesor seleccionado
+			updateCreadoPor();
+		}
+
 		prospectCreatePhoneInput?.addEventListener('blur', () => {
 			verifyCreateProspectPhoneUnique({ silent: false });
 		});
@@ -858,7 +966,10 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 	};
 
-	const applyProspectFilters = () => {
+	let noteSearchResultIds = [];
+	let noteSearchCache = {};
+
+	const applyProspectFilters = async () => {
 		if (!prospectsTable) {
 			updateProspectsCounter();
 			return;
@@ -868,6 +979,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
 		const searchValue = normalizeText(String(prospectSearchInput?.value || '').trim());
 		const searchDigits = String(prospectSearchInput?.value || '').replace(/\D+/g, '');
+		const searchKeywordRaw = String(prospectSearchInput?.value || '').trim();
+
+		// Si hay búsqueda de texto que no es numérico, buscar también en notas
+		if (searchValue !== '' && searchDigits === '') {
+			if (!noteSearchCache[searchKeywordRaw]) {
+				try {
+					const response = await fetch(`${BASE_URL}crm/searchProspectsByNote?keyword=${encodeURIComponent(searchKeywordRaw)}`);
+					const data = await response.json();
+					noteSearchResultIds = Array.isArray(data.contact_ids) ? data.contact_ids : [];
+					noteSearchCache[searchKeywordRaw] = noteSearchResultIds;
+				} catch (error) {
+					console.error('Error searching notes:', error);
+					noteSearchResultIds = [];
+				}
+			} else {
+				noteSearchResultIds = noteSearchCache[searchKeywordRaw] || [];
+			}
+		} else {
+			noteSearchResultIds = [];
+		}
+
 		const selectedOrigins = getCheckedProspectFilterValues('prospect-origin');
 		const selectedStages = getCheckedProspectFilterValues('prospect-stage');
 		const selectedCareers = getCheckedProspectFilterValues('prospect-career');
@@ -922,6 +1054,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		rows.forEach((row) => {
 			const rowName = normalizeText(row.getAttribute('data-prospect-name') || '');
 			const rowPhone = String(row.getAttribute('data-prospect-phone') || '').replace(/\D+/g, '');
+			const rowContactId = Number(row.getAttribute('data-prospect-contact-id') || 0);
 			const rowOrigin = normalizeText(row.getAttribute('data-prospect-origin') || '');
 			const rowStage = normalizeText(row.getAttribute('data-prospect-stage') || '');
 			const rowCareer = normalizeText(row.getAttribute('data-prospect-career') || '');
@@ -932,9 +1065,12 @@ document.addEventListener('DOMContentLoaded', () => {
 			const rowDatetimeRaw = String(row.getAttribute('data-prospect-datetime') || '').trim();
 			const rowDatetime = rowDatetimeRaw !== '' ? new Date(rowDatetimeRaw.replace(' ', 'T')) : null;
 
+			// Búsqueda: nombre/teléfono O notas
 			const matchSearch = searchValue === ''
 				? true
-				: rowName.includes(searchValue) || (searchDigits !== '' && rowPhone.includes(searchDigits));
+				: rowName.includes(searchValue) 
+				  || (searchDigits !== '' && rowPhone.includes(searchDigits))
+				  || (noteSearchResultIds.length > 0 && noteSearchResultIds.includes(rowContactId));
 			const matchOrigin = selectedOrigins.length === 0 || selectedOrigins.includes(rowOrigin);
 			const matchStage = selectedStages.length === 0 || selectedStages.includes(rowStage);
 			const matchCareer = selectedCareers.length === 0 || selectedCareers.includes(rowCareer);
@@ -1127,6 +1263,10 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 
 		saveBtn.setAttribute('data-contact-id', String(prospect.contacto_id || ''));
+		saveBtn.textContent = '✓ Guardado automático';
+		saveBtn.disabled = true;
+		saveBtn.classList.remove('btn-primary');
+		saveBtn.classList.add('btn-success');
 		const baseCareerSelect = document.getElementById('prospectCarrera');
 		const currentCareer = normalizeText(prospect.carrera || '');
 		const careerOptions = [];
@@ -1304,19 +1444,22 @@ document.addEventListener('DOMContentLoaded', () => {
 				throw new Error(data.error || 'Error desconocido');
 			}
 
-			renderPipelineModal(data.student, data.estados, entityId, data.pipeline_history || [], entityType);
+			renderPipelineModal(data.student, data.estados, entityId, data.pipeline_history || [], entityType, data.razones_descalificacion || []);
 		} catch (error) {
 			console.error('Error:', error);
 			document.getElementById('studentPipelineBody').innerHTML = `<div class="alert alert-danger">${escapeHtml(error.message)}</div>`;
 		}
 	};
 
-	const renderPipelineModal = (student, estados, entityId, pipelineHistory, entityType = 'student') => {
+	const renderPipelineModal = (student, estados, entityId, pipelineHistory, entityType = 'student', razonesDescalificacion = []) => {
 		const body = document.getElementById('studentPipelineBody');
 		const saveBtn = document.getElementById('saveStudentPipelineBtn');
 		saveBtn.setAttribute('data-student-id', String(entityId));
 		saveBtn.setAttribute('data-entity-type', String(entityType));
-		saveBtn.textContent = 'Guardar etapa';
+		saveBtn.textContent = '✓ Guardado automático';
+		saveBtn.disabled = true;
+		saveBtn.classList.add('btn-success');
+		saveBtn.classList.remove('btn-primary');
 
 		const currentStateIdsRaw = Array.isArray(student.pipeline_estado_ids)
 			? student.pipeline_estado_ids
@@ -1363,7 +1506,7 @@ document.addEventListener('DOMContentLoaded', () => {
 				<div class="pipeline-stage-wrap">
 					<div class="pipeline-stage-title">Etapa del cliente potencial</div>
 					<input type="hidden" id="pipelineStateIds" value="${escapeHtml(currentStateIds.join(','))}">
-					<div class="pipeline-stage-list">${stageChips.join('')}</div>
+					<div class="pipeline-stage-list-grid">${stageChips.join('')}</div>
 				</div>
 
 				<!-- Tabs Navigation -->
@@ -1440,6 +1583,19 @@ document.addEventListener('DOMContentLoaded', () => {
 							<div class="col-md-3">
 								<div class="pipeline-detail-label">Creado por</div>
 								<div class="pipeline-detail-value">${escapeHtml(student.creado_por || '-')}</div>
+							</div>
+							<div class="col-md-3" id="pipelineDescalificacionContainer" style="display: none;">
+								<label for="pipelineDescalificacionRazon" class="form-label">Razón descalificación</label>
+								<select id="pipelineDescalificacionRazon" class="form-select form-select-sm">
+									<option value="">Seleccionar razón...</option>
+									${Array.isArray(razonesDescalificacion) ? razonesDescalificacion.map((razon) => {
+										const razonId = Number(razon.id || 0);
+										const razonNombre = escapeHtml(razon.nombre || '');
+										const selected = Number(student.razon_descalificacion_id || 0) === razonId ? ' selected' : '';
+										return `<option value="${razonId}"${selected}>${razonNombre}</option>`;
+									}).join('') : ''}
+								</select>
+								<small class="form-text text-muted">Campo opcional</small>
 							</div>
 							<div class="col-md-3">
 								<div class="pipeline-detail-label">Provincia</div>
@@ -1521,6 +1677,43 @@ document.addEventListener('DOMContentLoaded', () => {
 		const pipelineSelect = document.getElementById('pipelineSelect');
 		const pipelineStateIds = document.getElementById('pipelineStateIds');
 		const chips = body.querySelectorAll('.pipeline-stage-chip');
+		const descalificacionContainer = document.getElementById('pipelineDescalificacionContainer');
+		const razonSelect = document.getElementById('pipelineDescalificacionRazon');
+		
+		let pipelineAutoSaveTimer = null;
+		let pipelineAutoSaveSuspended = false;
+		
+		const updateDescalificacionVisibility = () => {
+			if (!descalificacionContainer) return;
+			
+			// Obtener etapa actual
+			let selectedIds = Array.from(chips)
+				.filter((item) => item.classList.contains('is-active'))
+				.map((item) => Number(item.getAttribute('data-stage-id') || 0))
+				.filter((item) => item > 0);
+			
+			if (selectedIds.length === 0) {
+				descalificacionContainer.style.display = 'none';
+				return;
+			}
+			
+			const currentEstadoId = selectedIds[0];
+			const currentEstado = estados.find((e) => Number(e.id || 0) === currentEstadoId);
+			const estadoNombre = String(currentEstado?.nombre || '').toLowerCase().trim();
+			
+			// Mostrar razones si la etapa es "Descalificado"
+			if (estadoNombre.includes('descalific')) {
+				descalificacionContainer.style.display = '';
+				// Si ya tiene una razón establecida, desactivar el select
+				const razonId = Number(student.razon_descalificacion_id || 0);
+				if (razonSelect) {
+					razonSelect.disabled = razonId > 0;
+				}
+			} else {
+				descalificacionContainer.style.display = 'none';
+			}
+		};
+		
 		const syncPipelineSelection = () => {
 			let selectedIds = Array.from(chips)
 				.filter((item) => item.classList.contains('is-active'))
@@ -1539,7 +1732,105 @@ document.addEventListener('DOMContentLoaded', () => {
 					pipelineSelect.value = '';
 				}
 			}
+			updateDescalificacionVisibility();
 		};
+		
+		const autosavePipelineState = async () => {
+			if (pipelineAutoSaveSuspended || entityId <= 0) return;
+			
+			const explicitStatesRaw = String(pipelineStateIds?.value || '');
+			const explicitStates = explicitStatesRaw
+				.split(',')
+				.map((value) => Number((value || '').trim() || 0))
+				.filter((value) => value > 0);
+			const fallbackState = Number(pipelineSelect?.value || 0);
+			if (explicitStates.length === 0 && fallbackState > 0) {
+				explicitStates.push(fallbackState);
+			}
+			const estadoIds = Array.from(new Set(explicitStates));
+			
+			if (estadoIds.length === 0) return;
+			
+			const payload = new URLSearchParams({
+				estado_id: String(estadoIds[0]),
+				estado_ids: estadoIds.join(','),
+			});
+			if (entityType === 'contact') {
+				payload.set('contacto_id', String(entityId));
+			} else {
+				payload.set('student_id', String(entityId));
+			}
+			
+			// Agregar razón de descalificación si aplica
+			if (razonSelect) {
+				const razonId = String(razonSelect.value || '').trim();
+				if (razonId !== '') {
+					payload.set('razon_descalificacion', razonId);
+				}
+			}
+			
+			try {
+				const response = await fetch(`${BASE_URL}crm/updateStudentState`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: payload,
+				});
+				const data = await response.json();
+				if (!response.ok || !data.success) {
+					throw new Error(data.error || 'No se pudo actualizar pipeline');
+				}
+				
+				const pipelineLabel = String(data.pipeline_nombre || 'Actualizado').trim() || 'Actualizado';
+				
+				if (entityType === 'contact') {
+					const prospectRow = document.querySelector(`tr[data-prospect-contact-id="${entityId}"]`);
+					if (prospectRow) {
+						const cells = prospectRow.querySelectorAll('td');
+						if (cells.length >= 4) {
+							cells[3].innerHTML = `<span class="badge text-bg-light border">${escapeHtml(pipelineLabel)}</span>`;
+						}
+						prospectRow.setAttribute('data-prospect-stage', normalizeText(pipelineLabel));
+					}
+					applyProspectFilters();
+				} else {
+					const row = document.querySelector(`tr[data-student-id="${entityId}"]`);
+					if (row) {
+						const pipelineCell = row.querySelector('.pipeline-col');
+						if (pipelineCell) {
+							pipelineCell.innerHTML = `<span class="badge text-bg-light border">${escapeHtml(pipelineLabel)}</span>`;
+						}
+					}
+				}
+				
+				// Mostrar notificación silenciosa (tooltip o badge visual)
+				if (saveBtn) {
+					saveBtn.textContent = '✓ Guardado';
+					saveBtn.classList.add('btn-success');
+					window.setTimeout(() => {
+						saveBtn.textContent = '✓ Guardado automático';
+					}, 2000);
+				}
+			} catch (error) {
+				console.error('Autosave pipeline error:', error);
+			}
+		};
+		
+		const triggerPipelineAutosave = () => {
+			if (pipelineAutoSaveSuspended) return;
+			if (pipelineAutoSaveTimer) {
+				window.clearTimeout(pipelineAutoSaveTimer);
+			}
+			pipelineAutoSaveTimer = window.setTimeout(autosavePipelineState, 1000);
+		};
+		
+		const suspendPipelineAutosave = () => {
+			pipelineAutoSaveSuspended = true;
+		};
+		
+		const resumePipelineAutosave = () => {
+			pipelineAutoSaveSuspended = false;
+		};
+		
 		chips.forEach((chip) => {
 			chip.addEventListener('click', () => {
 				if (isContactEntity) {
@@ -1549,8 +1840,17 @@ document.addEventListener('DOMContentLoaded', () => {
 					chip.classList.toggle('is-active');
 				}
 				syncPipelineSelection();
+				triggerPipelineAutosave();
 			});
 		});
+		
+		// Autosave cuando cambia la razón de descalificación
+		if (razonSelect) {
+			razonSelect.addEventListener('change', () => {
+				triggerPipelineAutosave();
+			});
+		}
+		
 		syncPipelineSelection();
 
 		if (String(entityType).toLowerCase() === 'contact') {
@@ -2564,97 +2864,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		});
 	}
 
-	const savePipelineBtn = document.getElementById('saveStudentPipelineBtn');
-	if (savePipelineBtn) {
-		savePipelineBtn.addEventListener('click', async () => {
-			const entityId = Number(savePipelineBtn.getAttribute('data-student-id') || 0);
-			const entityType = String(savePipelineBtn.getAttribute('data-entity-type') || 'student').toLowerCase() === 'contact' ? 'contact' : 'student';
-			const explicitStatesRaw = String(document.getElementById('pipelineStateIds')?.value || '');
-			const explicitStates = explicitStatesRaw
-				.split(',')
-				.map((value) => Number((value || '').trim() || 0))
-				.filter((value) => value > 0);
-			const fallbackState = Number(document.getElementById('pipelineSelect')?.value || 0);
-			if (explicitStates.length === 0 && fallbackState > 0) {
-				explicitStates.push(fallbackState);
-			}
-			const estadoIds = Array.from(new Set(explicitStates));
-			const statusBox = document.getElementById('pipelineSaveStatus');
-
-			if (statusBox) {
-				statusBox.className = 'd-none';
-				statusBox.textContent = '';
-			}
-			if (entityId <= 0 || estadoIds.length === 0) {
-				if (statusBox) {
-					statusBox.className = 'alert alert-warning py-2 mb-3';
-					statusBox.textContent = 'Selecciona al menos una etapa de pipeline antes de guardar.';
-				}
-				return;
-			}
-
-			const payload = new URLSearchParams({
-				estado_id: String(estadoIds[0]),
-				estado_ids: estadoIds.join(','),
-			});
-			if (entityType === 'contact') {
-				payload.set('contacto_id', String(entityId));
-			} else {
-				payload.set('student_id', String(entityId));
-			}
-
-			try {
-				savePipelineBtn.disabled = true;
-				const response = await fetch(`${BASE_URL}crm/updateStudentState`, {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-					body: payload,
-				});
-				const data = await response.json();
-				if (!response.ok || !data.success) {
-					throw new Error(data.error || 'No se pudo actualizar pipeline');
-				}
-
-					const pipelineLabel = String(data.pipeline_nombre || 'Actualizado').trim() || 'Actualizado';
-
-					if (entityType === 'contact') {
-						const prospectRow = document.querySelector(`tr[data-prospect-contact-id="${entityId}"]`);
-						if (prospectRow) {
-							const cells = prospectRow.querySelectorAll('td');
-							if (cells.length >= 4) {
-								cells[3].innerHTML = `<span class="badge text-bg-light border">${escapeHtml(pipelineLabel)}</span>`;
-							}
-							prospectRow.setAttribute('data-prospect-stage', normalizeText(pipelineLabel));
-						}
-						applyProspectFilters();
-					} else {
-						const row = document.querySelector(`tr[data-student-id="${entityId}"]`);
-						if (row) {
-							const pipelineCell = row.querySelector('.pipeline-col');
-							if (pipelineCell) {
-								pipelineCell.innerHTML = `<span class="badge text-bg-light border">${escapeHtml(pipelineLabel)}</span>`;
-							}
-						}
-					}
-
-					window.showGlobalNotification?.('Datos actualizados correctamente.', 'success');
-					closeModalById('studentPipelineModal');
-					if (entityType === 'contact') {
-						activateProspectsTab();
-					} else {
-						activateStudentsTab();
-					}
-			} catch (error) {
-				console.error(error);
-				if (statusBox) {
-					statusBox.className = 'alert alert-danger py-2 mb-3';
-					statusBox.textContent = error.message || 'Error al actualizar pipeline';
-				}
-			} finally {
-				savePipelineBtn.disabled = false;
-			}
-		});
-	}
+	// El botón "Guardar etapa" ahora está deshabilitado - se usa autosave en su lugar
 
 	let prospectAutoSaveTimer = null;
 	let prospectAutoSaveSuspended = false;
@@ -2865,4 +3075,288 @@ document.addEventListener('DOMContentLoaded', () => {
 			});
 		});
 	}
+
+	// Eliminar (soft-delete) cliente potencial
+	const deleteProspectBtn = document.getElementById('deleteProspectBtn');
+	if (deleteProspectBtn) {
+		deleteProspectBtn.addEventListener('click', async () => {
+			const saveProspectBtn = document.getElementById('saveProspectBtn');
+			const contactId = Number(saveProspectBtn?.getAttribute('data-contact-id') || 0);
+			
+			if (contactId <= 0) {
+				window.showGlobalNotification?.('ID de cliente inválido', 'error');
+				return;
+			}
+
+			const razon = prompt('¿Por qué deseas eliminar este cliente potencial? (opcional)', '');
+			if (razon === null) return; // Usuario canceló
+
+			if (!confirm('¿Estás seguro de que deseas eliminar este cliente potencial? Esta acción no se puede deshacer directamente desde la interfaz.')) {
+				return;
+			}
+
+			try {
+				deleteProspectBtn.disabled = true;
+				const response = await fetch(`${BASE_URL}crm/softDeleteProspect`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: new URLSearchParams({
+						contacto_id: String(contactId),
+						razon: String(razon || '').trim(),
+					}),
+				});
+
+				const data = await response.json();
+				if (!response.ok || !data.success) {
+					throw new Error(data.error || 'No se pudo eliminar el cliente potencial');
+				}
+
+				window.showGlobalNotification?.('Cliente potencial eliminado correctamente', 'success');
+				closeModalById('prospectEditModal');
+				activateProspectsTab();
+			} catch (error) {
+				console.error(error);
+				window.showGlobalNotification?.(error.message || 'Error al eliminar', 'error');
+			} finally {
+				deleteProspectBtn.disabled = false;
+			}
+		});
+	}
+// Event listener para botón de eliminar inline en tabla
+document.addEventListener('click', async (e) => {
+	if (e.target.closest('.prospect-delete-inline')) {
+		const btn = e.target.closest('.prospect-delete-inline');
+		const contactId = Number(btn?.getAttribute('data-contact-id') || 0);
+		
+		if (contactId <= 0) {
+			window.showGlobalNotification?.('ID de cliente inválido', 'error');
+			return;
+		}
+
+		const razon = prompt('¿Por qué deseas eliminar este cliente potencial? (opcional)', '');
+		if (razon === null) return;
+
+		if (!confirm('¿Estás seguro de que deseas eliminar este cliente potencial?')) {
+			return;
+		}
+
+		try {
+			btn.disabled = true;
+			const response = await fetch(`${BASE_URL}crm/softDeleteProspect`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				body: new URLSearchParams({
+					contacto_id: String(contactId),
+					razon: String(razon || '').trim(),
+				}),
+			});
+
+			const data = await response.json();
+			if (!response.ok || !data.success) {
+				throw new Error(data.error || 'No se pudo eliminar');
+			}
+
+			window.showGlobalNotification?.('Cliente eliminado correctamente', 'success');
+			activateProspectsTab();
+		} catch (error) {
+			console.error(error);
+			window.showGlobalNotification?.(error.message || 'Error al eliminar', 'error');
+		} finally {
+			btn.disabled = false;
+		}
+	}
+});
+
+
+// ===================== FASE 3.3: SELECCIÓN MASIVA =====================
+	const bulkActionState = {
+		selectedIds: new Set(),
+		updateBulkUI() {
+			const count = this.selectedIds.size;
+			const toolbar = document.getElementById('bulkActionsToolbar');
+			if (toolbar) {
+				if (count > 0) {
+					toolbar.classList.remove('d-none');
+				} else {
+					toolbar.classList.add('d-none');
+				}
+			}
+			document.getElementById('bulkSelectionCount').textContent = count;
+			document.getElementById('bulkUpdateCount').textContent = count;
+		}
+	};
+
+	// Evento para checkbox individual
+	document.addEventListener('change', (e) => {
+		if (e.target.classList.contains('prospect-bulk-checkbox')) {
+			const contactId = e.target.getAttribute('data-contact-id');
+			if (e.target.checked) {
+				bulkActionState.selectedIds.add(contactId);
+			} else {
+				bulkActionState.selectedIds.delete(contactId);
+			}
+			bulkActionState.updateBulkUI();
+		}
+
+		// Checkbox "Seleccionar todos"
+		if (e.target.id === 'crmSelectAllCheck') {
+			const checkboxes = document.querySelectorAll('.prospect-bulk-checkbox:not([disabled])');
+			if (e.target.checked) {
+				checkboxes.forEach(cb => {
+					cb.checked = true;
+					const contactId = cb.getAttribute('data-contact-id');
+					bulkActionState.selectedIds.add(contactId);
+				});
+			} else {
+				checkboxes.forEach(cb => {
+					cb.checked = false;
+					const contactId = cb.getAttribute('data-contact-id');
+					bulkActionState.selectedIds.delete(contactId);
+				});
+			}
+			bulkActionState.updateBulkUI();
+		}
+	});
+
+	// Botón para limpiar selección
+	const bulkClearBtn = document.getElementById('bulkClearSelectionBtn');
+	if (bulkClearBtn) {
+		bulkClearBtn.addEventListener('click', () => {
+			document.querySelectorAll('.prospect-bulk-checkbox').forEach(cb => cb.checked = false);
+			document.getElementById('crmSelectAllCheck').checked = false;
+			bulkActionState.selectedIds.clear();
+			bulkActionState.updateBulkUI();
+		});
+	}
+
+	// Botón para cambiar etapa masivamente
+	const bulkChangeStageBtn = document.getElementById('bulkChangeStageBtn');
+	if (bulkChangeStageBtn) {
+		bulkChangeStageBtn.addEventListener('click', async () => {
+			// Población de opciones de etapa desde el servidor
+			const selectElement = document.getElementById('bulkNewStageSelect');
+			if (selectElement && selectElement.options.length === 1) {
+				try {
+					const response = await fetch(`${BASE_URL}crm/getPipelineStates`);
+					const data = await response.json();
+					if (data.success && Array.isArray(data.data)) {
+						data.data.forEach(stage => {
+							const opt = document.createElement('option');
+							opt.value = stage.nombre;
+							opt.textContent = stage.nombre;
+							selectElement.appendChild(opt);
+						});
+					}
+				} catch (error) {
+					console.error('Error cargando etapas:', error);
+					// Fallback: opciones comunes
+					const commonStages = ['Pre-contacto', 'Contactado', 'Interesado', 'En conversion', 'Convertido', 'No interesado', 'Descalificado'];
+					commonStages.forEach(stage => {
+						const opt = document.createElement('option');
+						opt.value = stage;
+						opt.textContent = stage;
+						selectElement.appendChild(opt);
+					});
+				}
+			}
+
+			// Populate hidden field with selected IDs
+			const selectedIds = Array.from(bulkActionState.selectedIds);
+			document.getElementById('bulkUpdateContactIds').value = selectedIds.join(',');
+
+			// Obtener asesor del primer cliente y llenar select de asesores
+			if (selectedIds.length > 0) {
+				const firstContactId = selectedIds[0];
+				fetch(`${BASE_URL}crm/getProspectDetail?contact_id=${firstContactId}`)
+					.then(r => r.json())
+					.then(data => {
+						if (data.success && data.prospect) {
+							const asesor = data.prospect.asesor || 'N/A';
+							document.getElementById('bulkCurrentAsesor').textContent = `Asesor actual: ${asesor}`;
+						}
+					})
+					.catch(() => {
+						document.getElementById('bulkCurrentAsesor').textContent = '';
+					});
+				
+				// Llenar select con asesores disponibles
+				const selectAsesor = document.getElementById('bulkUpdateAsesor');
+				if (selectAsesor) {
+					// Limpiar opciones previas (excepto la primera)
+					while (selectAsesor.options.length > 1) {
+						selectAsesor.remove(1);
+					}
+					// Cargar asesores desde el servidor
+					try {
+						const response = await fetch(`${BASE_URL}crm/getProspectAsesores`);
+						const data = await response.json();
+						if (data.success && Array.isArray(data.data)) {
+							data.data.forEach(asesor => {
+								const opt = document.createElement('option');
+								opt.value = asesor;
+								opt.textContent = asesor;
+								selectAsesor.appendChild(opt);
+							});
+						}
+					} catch (error) {
+						console.error('Error cargando asesores:', error);
+					}
+				}
+			}
+		});
+	}
+
+	// Submit del formulario de actualización masiva
+	const bulkUpdateForm = document.getElementById('bulkUpdateForm');
+	if (bulkUpdateForm) {
+		bulkUpdateForm.addEventListener('submit', async (e) => {
+			e.preventDefault();
+
+			const newStage = document.getElementById('bulkNewStageSelect').value;
+			const note = document.getElementById('bulkUpdateNote').value.trim();
+			const newAsesor = document.getElementById('bulkUpdateAsesor').value.trim();
+			const contactIds = Array.from(bulkActionState.selectedIds);
+
+			if (!newStage || contactIds.length === 0) {
+				window.showGlobalNotification?.('Por favor selecciona una etapa y al menos un cliente potencial', 'warning');
+				return;
+			}
+
+			try {
+				const response = await fetch(`${BASE_URL}crm/bulkUpdateProspects`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+					contact_ids: contactIds,
+					new_stage: newStage,
+					note: note,
+					...(newAsesor && { new_asesor: newAsesor })
+				}),
+				});
+
+				if (!response.ok) throw new Error('Error en la actualización');
+
+				const data = await response.json();
+			let message = `Etapa '${newStage}' actualizada para ${contactIds.length} prospect(os)`;
+			if (newAsesor) {
+				message += ` + Asesor cambió a: ${newAsesor}`;
+			} else if (data.asesor && data.asesor !== 'N/A') {
+				message += ` (Asesor actual: ${data.asesor})`;
+			}
+			window.showGlobalNotification?.(message, 'success');
+				document.querySelectorAll('.prospect-bulk-checkbox').forEach(cb => cb.checked = false);
+				document.getElementById('crmSelectAllCheck').checked = false;
+				bulkActionState.updateBulkUI();
+
+				// Cerrar modal
+				const modal = bootstrap.Modal.getInstance(document.getElementById('bulkUpdateModal'));
+				if (modal) modal.hide();
+
+				// Recargar tabla
+				location.reload();
+		} catch (error) {
+			window.showGlobalNotification?.(error.message, 'error');
+		}
+	});
+}
 });

@@ -85,7 +85,7 @@ function sidebarActive(string $prefix, string $relPath): string {
 		<div class="sidebar-group" data-sidebar-group="crm">
 			<button type="button" class="sidebar-toggle" aria-expanded="false" aria-controls="submenu-crm">
 				<span class="sidebar-title sidebar-group-title">
-					<i class="bi bi-graph-up-arrow me-1" style="color:#F27024"></i> CRM
+					<i class="bi bi-graph-up-arrow me-1" style="color:#F27024"></i> CRM Académico
 				</span>
 				<i class="toggle-caret bi bi-chevron-down"></i>
 			</button>

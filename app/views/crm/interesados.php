@@ -2,6 +2,7 @@
 	<?php $estudiantesSuperarse = $estudiantesSuperarse ?? []; ?>
 	<?php $programas = $programas ?? []; ?>
 	<?php $pipelineEstados = $pipelineEstados ?? []; ?>
+	<?php $pipelineEstadosEstudiantes = $pipelineEstadosEstudiantes ?? $pipelineEstados; ?>
 	<?php $periodos = $periodos ?? []; ?>
 	<?php $periodoSeleccionado = $periodoSeleccionado ?? ''; ?>
 	<?php $sourceLabel = $sourceLabel ?? 'No disponible'; ?>
@@ -171,7 +172,7 @@
 								Todas las etapas
 							</button>
 							<div class="dropdown-menu p-2 w-100" style="max-height: 240px; overflow-y: auto;">
-								<?php foreach ($pipelineEstados as $index => $etapa): ?>
+								<?php foreach (($pipelineEstadosEstudiantes ?? $pipelineEstados) as $index => $etapa): ?>
 									<?php $etapaNombre = (string) ($etapa['nombre'] ?? ''); ?>
 									<div class="form-check">
 										<input class="form-check-input crm-filter-checkbox" type="checkbox" value="<?= e(strtolower($etapaNombre)) ?>" id="crmPipelineOpt<?= (int) $index ?>" data-filter-group="pipeline">
@@ -411,10 +412,32 @@
 				</div>
 			</div>
 			<div class="card-body p-0">
+				<!-- Toolbar para selección masiva -->
+				<div id="bulkActionsToolbar" class="alert alert-info d-none mb-3" role="alert">
+					<div class="d-flex justify-content-between align-items-center">
+						<div>
+							<strong>Seleccionados:</strong> <span id="bulkSelectionCount">0</span> prospect(os)
+						</div>
+						<div class="btn-group gap-2" role="group">
+							<button type="button" id="bulkChangeStageBtn" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#bulkUpdateModal">
+							<i class="bi bi-arrow-left-right"></i> Cambio masivo
+							</button>
+							<button type="button" id="bulkClearSelectionBtn" class="btn btn-sm btn-secondary">
+								Limpiar selección
+							</button>
+						</div>
+					</div>
+				</div>
+				
 				<div class="table-responsive" data-mobile-cards>
 					<table class="table table-hover align-middle mb-0" id="crmProspectsTable">
 						<thead>
 							<tr>
+								<th style="width: 40px;">
+									<div class="form-check">
+										<input class="form-check-input" type="checkbox" id="crmSelectAllCheck" title="Seleccionar todos">
+									</div>
+								</th>
 								<th>#</th>
 								<th>
 									<div class="d-inline-flex align-items-center gap-2">
@@ -468,6 +491,11 @@
 									data-prospect-datetime="<?= e((string) ($prospecto['created_at'] ?? '')) ?>"
 									data-prospect-contact-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
 								>
+									<td>
+										<div class="form-check">
+											<input class="form-check-input prospect-bulk-checkbox" type="checkbox" data-contact-id="<?= e($prospecto['contacto_id'] ?? '') ?>">
+										</div>
+									</td>
 									<td data-prospect-row-num><?= (int) ($index + 1) ?></td>
 									<td>
 										<button
@@ -498,18 +526,27 @@
 									<td><?= e($prospecto['origen'] ?? '-') ?></td>
 									<td><?= e($prospecto['creado_por'] ?? '-') ?></td>
 									<td class="text-end">
-										<button
-											type="button"
-											class="btn btn-sm btn-outline-primary student-pipeline-action"
-											data-student-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
-											data-entity-type="contact"
-											data-bs-toggle="modal"
-											data-bs-target="#studentPipelineModal"
-											title="Ver / Editar CRM"
-											aria-label="Ver / Editar CRM"
-										>
-											<i class="bi bi-pencil-square"></i> Ver / Editar CRM
-										</button>
+											<div class="btn-group btn-group-sm" role="group">
+												<button
+													type="button"
+													class="btn btn-outline-primary student-pipeline-action"
+													data-student-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
+													data-entity-type="contact"
+													data-bs-toggle="modal"
+													data-bs-target="#studentPipelineModal"
+													title="Editar etapa"
+												>
+													<i class="bi bi-pencil-square"></i>
+												</button>
+												<button
+													type="button"
+													class="btn btn-outline-danger prospect-delete-inline"
+													data-contact-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
+													title="Eliminar prospect"
+												>
+													<i class="bi bi-trash"></i>
+												</button>
+											</div>
 									</td>
 								</tr>
 							<?php endforeach; ?>
@@ -603,15 +640,8 @@
 							</select>
 						</div>
 						<div class="col-md-6">
-							<label for="prospectCreadoPor" class="form-label">Creado por</label>
-							<select id="prospectCreadoPor" name="creado_por" class="form-select" required>
-								<option value="">Seleccione creador</option>
-								<?php foreach ($prospectCreatorOptions as $creatorOption): ?>
-									<?php $creatorOption = trim((string) $creatorOption); ?>
-									<?php if ($creatorOption === '') continue; ?>
-									<option value="<?= e($creatorOption) ?>"><?= e($creatorOption) ?></option>
-								<?php endforeach; ?>
-							</select>
+							<label for="prospectCreadoPor" class="form-label">Creado por <small class="text-muted">(Automático)</small></label>
+							<input type="text" id="prospectCreadoPor" name="creado_por" class="form-control" readonly placeholder="Se completa automáticamente según el asesor">
 						</div>
 						<div class="col-md-6">
 							<label for="prospectCarrera" class="form-label">Carrera</label>
@@ -624,7 +654,9 @@
 						</div>
 						<div class="col-md-6">
 							<label for="prospectModalidad" class="form-label">Modalidad</label>
-							<input type="text" id="prospectModalidad" name="modalidad" class="form-control" maxlength="80" placeholder="Ej: Presencial, Virtual, Hibrida">
+						<select id="prospectModalidad" name="modalidad" class="form-select">
+							<option value="">Seleccione modalidad</option>
+						</select>
 						</div>
 						<div class="col-md-6">
 							<label for="prospectProvincia" class="form-label">Provincia</label>
@@ -658,7 +690,9 @@
 				</div>
 			</div>
 			<div class="modal-footer">
-				<button type="button" class="btn btn-primary" id="saveProspectBtn" data-contact-id="">Guardar cambios</button>
+				<button type="button" class="btn btn-success" id="saveProspectBtn" data-contact-id="" disabled>
+					<i class="bi bi-check2-circle"></i> <span id="saveProspectBtnText">Guardado automático</span>
+				</button>
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
 			</div>
 		</div>
@@ -707,6 +741,43 @@
 				<button type="button" class="btn btn-primary" id="saveStudentPipelineBtn" data-student-id="">Guardar pipeline</button>
 				<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
 			</div>
+		</div>
+	</div>
+</div>
+
+
+<!-- Modal Cambio de Etapa Masivo -->
+<div class="modal fade" id="bulkUpdateModal" tabindex="-1" aria-labelledby="bulkUpdateLabel" aria-hidden="true">
+	<div class="modal-dialog">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h5 class="modal-title" id="bulkUpdateLabel">Cambio masivo para <span id="bulkUpdateCount">0</span> prospect(os)</h5>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+			</div>
+			<form id="bulkUpdateForm" method="post" action="/crm/bulkUpdateProspects">
+				<div class="modal-body">
+					<div class="mb-3">
+						<label for="bulkNewStageSelect" class="form-label">Nueva etapa</label>
+						<select id="bulkNewStageSelect" name="new_stage" class="form-select form-select-sm" required>
+							<option value="" selected disabled>-- Seleccionar etapa --</option>
+						</select>
+					</div>
+					<div class="mb-3">
+						<label for="bulkUpdateNote" class="form-label">Nota interna (opcional)</label>
+						<textarea id="bulkUpdateNote" name="note" class="form-control form-control-sm" rows="3" placeholder="Nota que se agregara a cada prospect..."></textarea>
+					</div>				<div class="mb-3">
+					<label for="bulkUpdateAsesor" class="form-label">Cambiar asesor (opcional)</label>
+					<select id="bulkUpdateAsesor" name="new_asesor" class="form-select form-select-sm">
+						<option value="" selected>-- No cambiar --</option>
+					</select>
+					<small class="form-text text-muted" id="bulkCurrentAsesor"></small>
+				</div>					<input type="hidden" id="bulkUpdateContactIds" name="contact_ids" value="">
+				</div>
+				<div class="modal-footer">
+					<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+					<button type="submit" class="btn btn-primary"><i class="bi bi-check2-circle"></i> Cambio masivo</button>
+				</div>
+			</form>
 		</div>
 	</div>
 </div>

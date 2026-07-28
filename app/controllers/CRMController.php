@@ -451,10 +451,12 @@ class CRMController extends Controller
 		$db = Database::getInstance()->connection();
 		try {
 			$pipelineEstados = $this->fetchVisiblePipelineStates($db, 'id, nombre');
+			$pipelineEstadosEstudiantes = $this->fetchAllPipelineStates($db, 'id, nombre');
 			$prospectAdvisorOptions = $this->fetchProspectSelectorOptions($db, 'crm_prospect_asesores');
 			$prospectCreatorOptions = $this->fetchProspectSelectorOptions($db, 'crm_prospect_creadores');
 		} catch (Throwable $e) {
 			$pipelineEstados = [];
+			$pipelineEstadosEstudiantes = [];
 			$prospectAdvisorOptions = [];
 			$prospectCreatorOptions = [];
 		}
@@ -471,6 +473,7 @@ class CRMController extends Controller
 			'periodos' => $periodos,
 			'periodoSeleccionado' => $periodoFiltro,
 			'pipelineEstados' => $pipelineEstados,
+			'pipelineEstadosEstudiantes' => $pipelineEstadosEstudiantes,
 			'prospectAdvisorOptions' => $prospectAdvisorOptions,
 			'prospectCreatorOptions' => $prospectCreatorOptions,
 			'sourceLabel' => (string) ($studentsData['source'] ?? 'No disponible'),
@@ -501,7 +504,8 @@ class CRMController extends Controller
 		$correoPersonal = $this->normalizeEmailValue((string) ($_POST['correo_personal'] ?? ''));
 		$origen = trim((string) ($_POST['origen'] ?? 'crm_manual'));
 		$carrera = trim((string) ($_POST['carrera'] ?? ''));
-		$creadoPor = $this->normalizeCreatedByValue((string) ($_POST['creado_por'] ?? ''));
+		// Mapeo automático de Creado por según Asesor
+		$creadoPor = $this->mapAsesorToCreador($origen);
 		$modalidad = trim((string) ($_POST['modalidad'] ?? ''));
 		$provincia = trim((string) ($_POST['provincia'] ?? ''));
 		$ciudad = trim((string) ($_POST['ciudad'] ?? ''));
@@ -1550,6 +1554,17 @@ class CRMController extends Controller
 			if (!in_array('ciudad', $interesadosColumns, true)) {
 				$db->exec('ALTER TABLE interesados ADD COLUMN ciudad VARCHAR(120) NULL AFTER provincia');
 			}
+			if (!in_array('deleted_at', $interesadosColumns, true)) {
+				$db->exec('ALTER TABLE interesados ADD COLUMN deleted_at TIMESTAMP NULL DEFAULT NULL AFTER updated_at');
+			}
+			if (!in_array('razon_descalificacion', $interesadosColumns, true)) {
+				$db->exec('ALTER TABLE interesados ADD COLUMN razon_descalificacion INT NULL DEFAULT NULL');
+			}
+
+			$contactosColumns = $this->getTableColumnsSafe($db, 'contactos');
+			if (!in_array('deleted_at', $contactosColumns, true)) {
+				$db->exec('ALTER TABLE contactos ADD COLUMN deleted_at TIMESTAMP NULL DEFAULT NULL');
+			}
 
 			$this->ensureProspectSelectorCatalogTables($db);
 		} catch (Throwable $e) {
@@ -1576,6 +1591,48 @@ class CRMController extends Controller
 			updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			UNIQUE KEY uniq_crm_prospect_creador_nombre (nombre)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+		$db->exec("CREATE TABLE IF NOT EXISTS crm_modalidades (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			nombre VARCHAR(80) NOT NULL,
+			descripcion VARCHAR(255) NULL,
+			activo TINYINT(1) NOT NULL DEFAULT 1,
+			orden INT NOT NULL DEFAULT 0,
+			created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uniq_crm_modalidade_nombre (nombre)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+		// Insertar modalidades por defecto si no existen
+		$countModalidades = (int) $db->query("SELECT COUNT(*) FROM crm_modalidades")->fetchColumn();
+		if ($countModalidades === 0) {
+			$db->exec("INSERT INTO crm_modalidades (nombre, descripcion, activo, orden) VALUES
+				('Presencial Híbrida', 'Clases en sitio físico', 1, 1),
+				('Virtual Híbrida', 'Clases en línea', 1, 2),
+				('En Línea', 'Clases completamente en línea', 1, 3)");
+		}
+
+		$db->exec("CREATE TABLE IF NOT EXISTS crm_descalificacion_razones (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			nombre VARCHAR(150) NOT NULL,
+			orden INT NOT NULL DEFAULT 0,
+			activo TINYINT(1) NOT NULL DEFAULT 1,
+			created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+		$countRazones = (int) $db->query("SELECT COUNT(*) FROM crm_descalificacion_razones")->fetchColumn();
+		if ($countRazones === 0) {
+			$db->exec("INSERT INTO crm_descalificacion_razones (nombre, orden) VALUES
+				('Sin recursos económicos', 1),
+				('No cumple requisitos académicos', 2),
+				('Falta de tiempo', 3),
+				('Eligió otra institución', 4),
+				('No está interesado', 5),
+				('No se puede contactar', 6),
+				('Número equivocado', 7),
+				('Otro', 8)");
+		}
 	}
 
 	private function fetchProspectSelectorOptions(PDO $db, string $table): array
@@ -1595,12 +1652,39 @@ class CRMController extends Controller
 
 	private function fetchVisiblePipelineStates(PDO $db, string $columns = 'id, nombre'): array
 	{
+		// FASE 3: Solo mostrar estas 5 etapas en el CRM (en orden específico)
+		$allowedStages = ['1 Etapa interesado', '2 Etapa seguimiento', 'Siguiente periodo (no legaliza matricula)', 'Descalificado', 'Inscritos'];
+		$placeholders = implode(',', array_fill(0, count($allowedStages), '?'));
+		
 		$sql = "SELECT {$columns}
 			FROM pipeline_estados
 			WHERE estado = 'activo'
-			  AND LOWER(REPLACE(TRIM(COALESCE(categoria, '')), ' ', '_')) <> 'sin_crm'
-			ORDER BY orden ASC, id ASC";
-		$stmt = $db->query($sql);
+			  AND nombre IN ($placeholders)
+			ORDER BY 
+				CASE nombre
+					WHEN '1 Etapa interesado' THEN 1
+					WHEN '2 Etapa seguimiento' THEN 2
+					WHEN 'Siguiente periodo (no legaliza matricula)' THEN 3
+					WHEN 'Descalificado' THEN 4
+					WHEN 'Inscritos' THEN 5
+					ELSE 6
+				END ASC";
+		
+		$stmt = $db->prepare($sql);
+		$stmt->execute($allowedStages);
+		return $stmt ? ($stmt->fetchAll() ?: []) : [];
+	}
+
+	private function fetchAllPipelineStates(PDO $db, string $columns = 'id, nombre'): array
+	{
+		// Para estudiantes: obtener TODAS las etapas sin filtrar
+		$sql = "SELECT {$columns}
+			FROM pipeline_estados
+			WHERE estado = 'activo'
+			ORDER BY orden ASC, nombre ASC";
+		
+		$stmt = $db->prepare($sql);
+		$stmt->execute();
 		return $stmt ? ($stmt->fetchAll() ?: []) : [];
 	}
 
@@ -1612,8 +1696,8 @@ class CRMController extends Controller
 		try {
 			$db = Database::getInstance()->connection();
 			$orderBy = $sortDirection === 'asc'
-				? 'ORDER BY c.nombre ASC, c.apellido ASC, i.id ASC'
-				: 'ORDER BY c.nombre DESC, c.apellido DESC, i.id DESC';
+				? "ORDER BY COALESCE(c.nombre, 'Sin nombre') ASC, COALESCE(c.apellido, '') ASC, i.id ASC"
+				: "ORDER BY COALESCE(c.nombre, 'Sin nombre') DESC, COALESCE(c.apellido, '') DESC, i.id DESC";
 			$sql = "SELECT
 				i.id,
 				i.contacto_id,
@@ -1627,14 +1711,14 @@ class CRMController extends Controller
 				i.estado_id,
 				i.created_at,
 				COALESCE(pe.nombre, 'Sin etapa') AS etapa,
-				c.nombre,
-				c.apellido,
-				c.cedula,
-				c.email,
+				COALESCE(c.nombre, 'Sin nombre') AS nombre,
+				COALESCE(c.apellido, '') AS apellido,
+				COALESCE(c.cedula, '') AS cedula,
+				COALESCE(c.email, '') AS email,
 				CASE WHEN COALESCE(i.convertido, 0) = 1 THEN 'Estudiante' ELSE 'Cliente potencial' END AS estado_cliente,
 				COALESCE(tc.telefono, '') AS celular
 			FROM interesados i
-			INNER JOIN contactos c ON c.id = i.contacto_id
+			LEFT JOIN contactos c ON c.id = i.contacto_id
 			LEFT JOIN pipeline_estados pe ON pe.id = i.estado_id
 				AND LOWER(REPLACE(TRIM(COALESCE(pe.categoria, '')), ' ', '_')) <> 'sin_crm'
 			LEFT JOIN (
@@ -1647,7 +1731,7 @@ class CRMController extends Controller
 					GROUP BY contacto_id
 				) tx ON tx.first_id = t1.id
 			) tc ON tc.contacto_id = i.contacto_id
-			WHERE i.estado = 'activo' AND COALESCE(i.convertido, 0) = 0
+			WHERE i.estado = 'activo' AND COALESCE(i.convertido, 0) = 0 AND i.deleted_at IS NULL
 			{$orderBy}
 			LIMIT :perPage OFFSET :offset";
 
@@ -1665,7 +1749,7 @@ class CRMController extends Controller
 	{
 		try {
 			$db = Database::getInstance()->connection();
-			return (int) $db->query("SELECT COUNT(*) FROM interesados WHERE estado = 'activo' AND COALESCE(convertido, 0) = 0")->fetchColumn();
+			return (int) $db->query("SELECT COUNT(*) FROM interesados WHERE estado = 'activo' AND COALESCE(convertido, 0) = 0 AND deleted_at IS NULL")->fetchColumn();
 		} catch (Throwable $e) {
 			return 0;
 		}
@@ -1900,7 +1984,7 @@ class CRMController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
-			$activeEstados = $this->fetchVisiblePipelineStates($db, 'id, nombre');
+			$activeEstados = $this->fetchAllPipelineStates($db, 'id, nombre');
 			$stateIds = [];
 			$stateNames = [];
 			foreach ($activeEstados as $estado) {
@@ -2274,7 +2358,7 @@ class CRMController extends Controller
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
 
-		$contactoId = max(0, (int) ($_GET['id'] ?? 0));
+		$contactoId = max(0, (int) ($_GET['id'] ?? $_GET['contact_id'] ?? 0));
 		if ($contactoId <= 0) {
 			http_response_code(400);
 			echo json_encode(['success' => false, 'error' => 'ID inválido']);
@@ -2294,6 +2378,7 @@ class CRMController extends Controller
 				COALESCE(tp.telefono, '') AS celular,
 				COALESCE(i.origen, '') AS propietario,
 				COALESCE(i.creado_por, '') AS creado_por,
+				COALESCE(i.asesor, '') AS asesor,
 				COALESCE(i.carrera, '') AS carrera,
 				COALESCE(i.modalidad, '') AS modalidad,
 				COALESCE(i.provincia, '') AS provincia,
@@ -2313,7 +2398,7 @@ class CRMController extends Controller
 					GROUP BY contacto_id
 				) tx ON tx.first_id = t1.id
 			) tp ON tp.contacto_id = c.id
-			WHERE c.id = :id
+			WHERE c.id = :id AND c.deleted_at IS NULL
 			LIMIT 1";
 
 			$stmt = $db->prepare($sql);
@@ -2358,7 +2443,8 @@ class CRMController extends Controller
 		$celularRaw = trim((string) ($_POST['celular'] ?? ''));
 		$celular = $this->normalizeProspectPhoneValue($celularRaw);
 		$propietario = trim((string) ($_POST['propietario'] ?? ''));
-		$creadoPor = $this->normalizeCreatedByValue((string) ($_POST['creado_por'] ?? ''));
+		// Mapeo automático de Creado por según Asesor (propietario)
+		$creadoPor = $this->mapAsesorToCreador($propietario);
 		$carrera = trim((string) ($_POST['carrera'] ?? ''));
 		$modalidad = trim((string) ($_POST['modalidad'] ?? ''));
 		$provincia = trim((string) ($_POST['provincia'] ?? ''));
@@ -2636,46 +2722,72 @@ class CRMController extends Controller
 				$student['entity_type'] = 'contact';
 			} else {
 				$remote = $this->connectSuperarseDatabase();
-				if ($remote === null) {
-					throw new RuntimeException('No se pudo conectar a Superarse');
-				}
+				$sourceTable = $remote ? $this->resolveSuperarseStudentTable($remote) : null;
 
-				$sourceTable = $this->resolveSuperarseStudentTable($remote);
-				if ($sourceTable === null) {
-					throw new RuntimeException('Tabla de estudiantes no encontrada');
-				}
-
-				if ($sourceTable === 'users') {
-					$sql = "SELECT
-							u.id,
-							u.codigo_matricula AS codigo_estudiante,
-							u.primer_nombre,
-							u.segundo_nombre,
-							u.primer_apellido,
-							u.segundo_apellido,
-							u.correo_electronico AS email,
-							u.telefono,
-							u.celular,
-							u.programa AS carrera,
-							u.nivel,
-							u.sede,
-							u.estado,
-							u.fecha_matricula
-						FROM users u
-						WHERE u.id = :id
-						LIMIT 1";
+				if ($remote !== null && $sourceTable !== null) {
+					if ($sourceTable === 'users') {
+						$sql = "SELECT
+								u.id,
+								u.codigo_matricula AS codigo_estudiante,
+								u.primer_nombre,
+								u.segundo_nombre,
+								u.primer_apellido,
+								u.segundo_apellido,
+								u.correo_electronico AS email,
+								u.telefono,
+								u.celular,
+								u.programa AS carrera,
+								u.nivel,
+								u.sede,
+								u.estado,
+								u.fecha_matricula
+							FROM users u
+							WHERE u.id = :id
+							LIMIT 1";
+					} else {
+						$sql = "SELECT
+								e.id,
+								e.codigo_estudiante,
+								c.nombre AS primer_nombre,
+								'' AS segundo_nombre,
+								c.apellido AS primer_apellido,
+								'' AS segundo_apellido,
+								c.email,
+								c.telefono,
+								'' AS celular,
+								ca.nombre AS carrera,
+								'' AS sede,
+								e.estado,
+								e.created_at AS fecha_matricula
+							FROM estudiantes e
+							LEFT JOIN contactos c ON c.id = e.contacto_id
+							LEFT JOIN matriculas m ON m.estudiante_id = e.id
+							LEFT JOIN carreras ca ON ca.id = m.carrera_id
+							WHERE e.id = :id
+							LIMIT 1";
+					}
+					$stmt = $remote->prepare($sql);
+					$stmt->bindValue(':id', $entityId, PDO::PARAM_INT);
+					$stmt->execute();
+					$student = $stmt->fetch() ?: null;
 				} else {
-					$sql = "SELECT
+					$student = null;
+				}
+
+				// Fallback a base de datos local si Superarse no está disponible
+				if (!$student) {
+					$stmtLocal = $db->prepare("SELECT
 							e.id,
-							e.codigo_estudiante,
-							c.nombre AS primer_nombre,
+							COALESCE(e.codigo_estudiante, '') AS codigo_estudiante,
+							COALESCE(c.nombre, 'Sin nombre') AS primer_nombre,
 							'' AS segundo_nombre,
-							c.apellido AS primer_apellido,
+							COALESCE(c.apellido, '') AS primer_apellido,
 							'' AS segundo_apellido,
-							c.email,
-							c.telefono,
-							'' AS celular,
-							ca.nombre AS carrera,
+							COALESCE(c.email, '') AS email,
+							COALESCE(tp.telefono, '') AS telefono,
+							COALESCE(tp.telefono, '') AS celular,
+							COALESCE(ca.nombre, '') AS carrera,
+							'' AS nivel,
 							'' AS sede,
 							e.estado,
 							e.created_at AS fecha_matricula
@@ -2683,14 +2795,22 @@ class CRMController extends Controller
 						LEFT JOIN contactos c ON c.id = e.contacto_id
 						LEFT JOIN matriculas m ON m.estudiante_id = e.id
 						LEFT JOIN carreras ca ON ca.id = m.carrera_id
+						LEFT JOIN (
+							SELECT t1.contacto_id, t1.telefono
+							FROM telefonos_contacto t1
+							INNER JOIN (
+								SELECT contacto_id, MAX(id) AS first_id
+								FROM telefonos_contacto
+								WHERE estado = 'activo'
+								GROUP BY contacto_id
+							) tx ON tx.first_id = t1.id
+						) tp ON tp.contacto_id = e.contacto_id
 						WHERE e.id = :id
-						LIMIT 1";
+						LIMIT 1");
+					$stmtLocal->bindValue(':id', $entityId, PDO::PARAM_INT);
+					$stmtLocal->execute();
+					$student = $stmtLocal->fetch() ?: null;
 				}
-
-				$stmt = $remote->prepare($sql);
-				$stmt->bindValue(':id', $entityId, PDO::PARAM_INT);
-				$stmt->execute();
-				$student = $stmt->fetch();
 
 				if (!$student) {
 					throw new RuntimeException('Estudiante no encontrado');
@@ -2727,7 +2847,37 @@ class CRMController extends Controller
 			}
 			$student['pipeline_estado_id'] = $pipelineEstadoId;
 			$student['pipeline_estado_ids'] = array_values(array_unique(array_map('intval', $pipelineEstadoIds)));
-			$pipelineEstados = $this->fetchVisiblePipelineStates($db, 'id, nombre');
+			
+			// Para contactos (prospectos): solo 5 etapas. Para estudiantes: todas las etapas
+			if ($entityType === 'contact') {
+				$pipelineEstados = $this->fetchVisiblePipelineStates($db, 'id, nombre');
+			} else {
+				$pipelineEstados = $this->fetchAllPipelineStates($db, 'id, nombre');
+			}
+
+			// Obtener razones de descalificación
+			try {
+				$razonesStmt = $db->query('SELECT id, nombre FROM crm_descalificacion_razones ORDER BY nombre');
+				$razonesList = $razonesStmt ? ($razonesStmt->fetchAll() ?: []) : [];
+			} catch (Throwable $e) {
+				$razonesList = [];
+			}
+
+			// Obtener razón descalificación del prospecto si existe
+			$razonDescalificacionId = null;
+			if ($entityType === 'contact') {
+				try {
+					$razonStmt = $db->prepare('SELECT razon_descalificacion FROM interesados WHERE contacto_id = :id LIMIT 1');
+					$razonStmt->execute([':id' => $entityId]);
+					$razonResult = $razonStmt->fetch();
+					if ($razonResult) {
+						$razonDescalificacionId = (int) ($razonResult['razon_descalificacion'] ?? 0);
+					}
+				} catch (Throwable $e) {
+					// Columna puede no existir en produccion
+				}
+			}
+			$student['razon_descalificacion_id'] = $razonDescalificacionId;
 
 			$historyStmt = $db->prepare("SELECT
 					csn.id,
@@ -2747,6 +2897,7 @@ class CRMController extends Controller
 				'success' => true,
 				'student' => $student,
 				'estados' => $pipelineEstados,
+				'razones_descalificacion' => $razonesList,
 				'pipeline_history' => $pipelineHistory,
 			]);
 		} catch (Throwable $e) {
@@ -2883,6 +3034,16 @@ class CRMController extends Controller
 				':estado_id' => $primaryEstadoId,
 				':contacto_id' => $studentId,
 			]);
+
+			// Guardar razón de descalificación si aplica
+			$razonDescalificacion = (int) ($_POST['razon_descalificacion'] ?? 0);
+			if ($razonDescalificacion > 0) {
+				$updateRazonStmt = $db->prepare('UPDATE interesados SET razon_descalificacion = :razon WHERE contacto_id = :contacto_id LIMIT 1');
+				$updateRazonStmt->execute([
+					':razon' => $razonDescalificacion,
+					':contacto_id' => $studentId,
+				]);
+			}
 
 			$noteSql = "INSERT INTO crm_student_notes (student_id, source_type, note_text, created_by, created_at)
 					VALUES (:student_id, 'estado_change', :note_text, :user_id, NOW())";
@@ -4393,6 +4554,34 @@ class CRMController extends Controller
 		return (bool) $stmt->fetchColumn();
 	}
 
+	private function mapAsesorToCreador(string $asesor): string
+	{
+		$asesor = trim($asesor);
+		if ($asesor === '') {
+			return '';
+		}
+
+		// Regla A: Si asesor IN (Lizbeth Ochoa, Jennifer Betancourt, Melany Artieda) -> creado_por = "EQUIPO MAÑANA"
+		$equipoManana = ['Lizbeth Ochoa', 'Jennifer Betancourt', 'Melany Artieda'];
+		if (in_array($asesor, $equipoManana, true)) {
+			return 'EQUIPO MAÑANA';
+		}
+
+		// Regla B: Si asesor = "Melany Vásquez" -> creado_por = "EQUIPO NOCHE"
+		if ($asesor === 'Melany Vásquez') {
+			return 'EQUIPO NOCHE';
+		}
+
+		// Regla C: Si asesor IN (Luis Granja, Mayra Segarra, Noemi Toro) -> creado_por = mismo asesor
+		$equipoPropio = ['Luis Granja', 'Mayra Segarra', 'Noemi Toro'];
+		if (in_array($asesor, $equipoPropio, true)) {
+			return $asesor;
+		}
+
+		// Por defecto, retornar vacío
+		return '';
+	}
+
 	private function normalizeCreatedByValue(string $value): string
 	{
 		$items = preg_split('/\s*,\s*/', trim($value), -1, PREG_SPLIT_NO_EMPTY) ?: [];
@@ -4818,4 +5007,440 @@ class CRMController extends Controller
 			return [];
 		}
 	}
+
+	/**
+	 * Buscar prospectos por nota interna
+	 * Devuelve lista de prospect contact IDs que tienen notas con la palabra clave
+	 */
+	public function searchProspectsByNote(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		$keyword = trim((string) ($_GET['keyword'] ?? ''));
+
+		if ($keyword === '') {
+			echo json_encode([
+				'success' => true,
+				'contact_ids' => [],
+				'total' => 0,
+			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+			exit;
+		}
+
+		try {
+			$this->ensureCrmSupportTables();
+			$db = Database::getInstance()->connection();
+
+			// Buscar notas que contengan la palabra clave
+			$searchTerm = '%' . addcslashes($keyword, '%_') . '%';
+			$stmt = $db->prepare("
+				SELECT DISTINCT i.contacto_id
+				FROM crm_student_notes cn
+				INNER JOIN interesados i ON i.contacto_id = cn.student_id
+				WHERE cn.note_text LIKE :keyword
+				  AND i.estado = 'activo'
+				  AND COALESCE(i.convertido, 0) = 0
+				  AND i.deleted_at IS NULL
+				ORDER BY cn.created_at DESC
+				LIMIT 5000
+			");
+			$stmt->execute([':keyword' => $searchTerm]);
+			$results = $stmt->fetchAll() ?: [];
+
+			$contactIds = [];
+			foreach ($results as $row) {
+				$contactId = (int) ($row['contacto_id'] ?? 0);
+				if ($contactId > 0) {
+					$contactIds[] = $contactId;
+				}
+			}
+
+			echo json_encode([
+				'success' => true,
+				'contact_ids' => array_values(array_unique($contactIds)),
+				'total' => count(array_unique($contactIds)),
+			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		} catch (Throwable $e) {
+			http_response_code(500);
+			echo json_encode([
+				'success' => false,
+				'error' => $e->getMessage(),
+				'contact_ids' => [],
+				'total' => 0,
+			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		}
+
+		exit;
+	}
+
+	/**
+	 * Soft-delete un cliente potencial (prospect)
+	 * Marcacomo deleted_at = NOW() sin eliminar datos
+	 */
+	public function softDeleteProspect(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		$contactoId = max(0, (int) ($_POST['contacto_id'] ?? 0));
+		$razon = trim((string) ($_POST['razon'] ?? ''));
+
+		if ($contactoId <= 0) {
+			http_response_code(400);
+			echo json_encode(['success' => false, 'error' => 'ID inválido']);
+			exit;
+		}
+
+		try {
+			$this->ensureCrmSupportTables();
+			$db = Database::getInstance()->connection();
+			$db->beginTransaction();
+
+			// Soft-delete en contactos
+			$stmt = $db->prepare('UPDATE contactos SET deleted_at = NOW(), updated_at = NOW() WHERE id = :id LIMIT 1');
+			$stmt->execute([':id' => $contactoId]);
+
+			// Soft-delete en interesados
+			$stmt = $db->prepare('UPDATE interesados SET deleted_at = NOW(), updated_at = NOW() WHERE contacto_id = :contacto_id');
+			$stmt->execute([':contacto_id' => $contactoId]);
+
+			// Registrar en tabla de auditoría soft_delete_audit
+			$auditStmt = $db->prepare('INSERT INTO soft_delete_audit (entity_type, entity_id, deleted_by, deleted_at, reason)
+				VALUES (:entity_type, :entity_id, :deleted_by, NOW(), :reason)');
+			$auditStmt->execute([
+				':entity_type' => 'contacto',
+				':entity_id' => $contactoId,
+				':deleted_by' => $this->currentUserId() ?: null,
+				':reason' => $razon !== '' ? mb_substr($razon, 0, 255) : null,
+			]);
+
+			// Registrar nota histórica
+			try {
+				$noteText = 'Eliminó cliente potencial';
+				if ($razon !== '') {
+					$noteText .= '. Razón: ' . $razon;
+				}
+				$this->crmHistoryNote($contactoId, 'prospect_deleted', $noteText);
+			} catch (Throwable $ignore) {
+				// No interrumpir el flujo
+			}
+
+			$db->commit();
+
+			echo json_encode([
+				'success' => true,
+				'message' => 'Cliente potencial eliminado correctamente',
+			]);
+		} catch (Throwable $e) {
+			if (isset($db) && $db instanceof PDO && $db->inTransaction()) {
+				$db->rollBack();
+			}
+			http_response_code(500);
+			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+		}
+
+		exit;
+	}
+
+	/**
+	 * Restaurar un cliente potencial previamente eliminado
+	 */
+	public function restoreProspect(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		$contactoId = max(0, (int) ($_POST['contacto_id'] ?? 0));
+
+		if ($contactoId <= 0) {
+			http_response_code(400);
+			echo json_encode(['success' => false, 'error' => 'ID inválido']);
+			exit;
+		}
+
+		try {
+			$this->ensureCrmSupportTables();
+			$db = Database::getInstance()->connection();
+			$db->beginTransaction();
+
+			// Restaurar en contactos
+			$stmt = $db->prepare('UPDATE contactos SET deleted_at = NULL, updated_at = NOW() WHERE id = :id LIMIT 1');
+			$stmt->execute([':id' => $contactoId]);
+
+			// Restaurar en interesados
+			$stmt = $db->prepare('UPDATE interesados SET deleted_at = NULL, updated_at = NOW() WHERE contacto_id = :contacto_id');
+			$stmt->execute([':contacto_id' => $contactoId]);
+
+			// Actualizar tabla de auditoría
+			$auditStmt = $db->prepare('UPDATE soft_delete_audit SET restored_at = NOW(), restored_by = :restored_by
+				WHERE entity_type = :entity_type AND entity_id = :entity_id AND restored_at IS NULL
+				LIMIT 1');
+			$auditStmt->execute([
+				':entity_type' => 'contacto',
+				':entity_id' => $contactoId,
+				':restored_by' => $this->currentUserId() ?: null,
+			]);
+
+			// Registrar nota histórica
+			try {
+				$this->crmHistoryNote($contactoId, 'prospect_restored', 'Restauró cliente potencial eliminado');
+			} catch (Throwable $ignore) {
+				// No interrumpir el flujo
+			}
+
+			$db->commit();
+
+			echo json_encode([
+				'success' => true,
+				'message' => 'Cliente potencial restaurado correctamente',
+			]);
+		} catch (Throwable $e) {
+			if (isset($db) && $db instanceof PDO && $db->inTransaction()) {
+				$db->rollBack();
+			}
+			http_response_code(500);
+			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+		}
+
+		exit;
+	}
+
+	/**
+	 * FASE 3.3: Actualización masiva de etapas para múltiples prospectos
+	 * POST /crm/bulkUpdateProspects
+	 */
+	public function bulkUpdateProspects(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		// Leer JSON del body
+		$input = json_decode(file_get_contents('php://input'), true) ?? [];
+		$contactIds = $input['contact_ids'] ?? [];
+		$newStage = trim((string) ($input['new_stage'] ?? ''));
+		$note = trim((string) ($input['note'] ?? ''));
+
+		// Validaciones
+		if (!is_array($contactIds) || count($contactIds) === 0) {
+			http_response_code(400);
+			echo json_encode(['success' => false, 'error' => 'IDs de contactos inválidos']);
+			exit;
+		}
+
+		if (empty($newStage)) {
+			http_response_code(400);
+			echo json_encode(['success' => false, 'error' => 'Etapa no especificada']);
+			exit;
+		}
+
+		// Convertir contactIds a enteros
+		$contactIds = array_map(function($id) { return max(0, (int)$id); }, $contactIds);
+		$contactIds = array_filter($contactIds);
+
+		if (count($contactIds) === 0) {
+			http_response_code(400);
+			echo json_encode(['success' => false, 'error' => 'IDs de contactos inválidos']);
+			exit;
+		}
+
+		try {
+			$this->ensureCrmSupportTables();
+			$db = Database::getInstance()->connection();
+			$db->beginTransaction();
+
+			$placeholders = implode(',', array_fill(0, count($contactIds), '?'));
+
+			// Obtener ID de etapa
+			$stageStmt = $db->prepare('SELECT id FROM etapas WHERE nombre = ? LIMIT 1');
+			$stageStmt->execute([$newStage]);
+			$stageRow = $stageStmt->fetch(PDO::FETCH_ASSOC);
+
+			if (!$stageRow) {
+				// Si no existe, crear la etapa
+				$createStageStmt = $db->prepare('INSERT INTO etapas (nombre, descripcion, created_at) VALUES (?, ?, NOW())');
+				$createStageStmt->execute([$newStage, 'Etapa creada automáticamente']);
+				$stageId = (int)$db->lastInsertId();
+			} else {
+				$stageId = (int)$stageRow['id'];
+			}
+
+			// Si se proporciona new_asesor, actualizar también asesor
+			$newAsesor = trim($requestData['new_asesor'] ?? '');
+			if (!empty($newAsesor)) {
+				$updateAsesorStmt = $db->prepare("UPDATE interesados SET asesor = ? WHERE contacto_id IN ($placeholders) AND deleted_at IS NULL");
+				$params = array_merge([$newAsesor], $contactIds);
+				$updateAsesorStmt->execute($params);
+				$asesorDisplay = $newAsesor;
+			} else {
+				// Obtener asesor del primer prospecto para mostrar en respuesta
+				$firstContactId = reset($contactIds);
+				$asesorStmt = $db->prepare('SELECT DISTINCT i.asesor FROM interesados i WHERE i.contacto_id = ? AND i.asesor IS NOT NULL LIMIT 1');
+				$asesorStmt->execute([$firstContactId]);
+				$asesorRow = $asesorStmt->fetch(PDO::FETCH_ASSOC);
+				$asesorDisplay = $asesorRow['asesor'] ?? 'N/A';
+			}
+
+			// Actualizar etapas para cada prospect
+			$updateStmt = $db->prepare("UPDATE interesados SET estado_id = ?, updated_at = NOW() WHERE contacto_id IN ($placeholders) AND deleted_at IS NULL");
+			$params = [$stageId, ...$contactIds];
+			$updateStmt->execute($params);
+
+			$updatedCount = $updateStmt->rowCount();
+
+			// Si hay nota, agregarla a cada prospect
+			if (!empty($note)) {
+				foreach ($contactIds as $contactId) {
+					try {
+						// Agregar nota interna
+						$noteStmt = $db->prepare('INSERT INTO crm_student_notes (student_id, contact_id, note_text, user_id, created_at) VALUES (?, ?, ?, ?, NOW())');
+						$noteStmt->execute([$contactId, $contactId, $note, $this->currentUserId() ?: null]);
+					} catch (Throwable $ignore) {
+						// Continuar si falla inserción de nota
+					}
+				}
+			}
+
+			$db->commit();
+
+			echo json_encode([
+				'success' => true,
+				'message' => "Etapa '{$newStage}' actualizada para $updatedCount cliente(s)",
+				'updated_count' => $updatedCount,
+				'stage' => $newStage,
+				'asesor' => $asesorDisplay,
+			]);
+		} catch (Throwable $e) {
+			if (isset($db) && $db instanceof PDO && $db->inTransaction()) {
+				$db->rollBack();
+			}
+			http_response_code(500);
+			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+		}
+
+		exit;
+	}
+
+	public function getModalidades(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json');
+		try {
+			$db = Database::getInstance()->connection();
+			$this->ensureCrmSupportTables();
+			$stmt = $db->prepare("SELECT id, nombre FROM crm_modalidades WHERE activo = 1 ORDER BY orden ASC, nombre ASC");
+			$stmt->execute();
+			$modalidades = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+			echo json_encode(['success' => true, 'data' => $modalidades]);
+		} catch (Throwable $e) {
+			http_response_code(500);
+			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+		}
+		exit;
+	}
+
+	public function getPipelineStates(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json');
+		try {
+			$db = Database::getInstance()->connection();
+			$estados = $this->fetchVisiblePipelineStates($db, 'id, nombre');
+			echo json_encode(['success' => true, 'data' => $estados]);
+		} catch (Throwable $e) {
+			http_response_code(500);
+			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+		}
+		exit;
+	}
+
+	public function getProspectAsesores(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json');
+		try {
+			$db = Database::getInstance()->connection();
+			$asesores = $this->fetchProspectSelectorOptions($db, 'crm_prospect_asesores');
+			echo json_encode(['success' => true, 'data' => $asesores]);
+		} catch (Throwable $e) {
+			http_response_code(500);
+			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+		}
+		exit;
+	}
+
+	public function listModalidades(): void
+	{
+		Auth::requireAuth();
+		try {
+			$db = Database::getInstance()->connection();
+			$this->ensureCrmSupportTables();
+			$stmt = $db->prepare("SELECT id, nombre, descripcion, activo, orden, created_at FROM crm_modalidades ORDER BY orden ASC, nombre ASC");
+			$stmt->execute();
+			$modalidades = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+			$this->view('crm/modalidades', ['modalidades' => $modalidades], ['title' => 'Gestionar Modalidades']);
+		} catch (Throwable $e) {
+			redirect('/?error=' . urlencode($e->getMessage()));
+		}
+	}
+
+	public function saveModalidad(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json');
+		try {
+			$id = (int) ($_POST['id'] ?? 0);
+			$nombre = trim((string) ($_POST['nombre'] ?? ''));
+			$descripcion = trim((string) ($_POST['descripcion'] ?? ''));
+			$activo = (int) ($_POST['activo'] ?? 1);
+			$orden = (int) ($_POST['orden'] ?? 0);
+
+			if (empty($nombre)) {
+				throw new Exception('El nombre es requerido');
+			}
+
+			$db = Database::getInstance()->connection();
+			$this->ensureCrmSupportTables();
+
+			if ($id > 0) {
+				// Actualizar
+				$stmt = $db->prepare("UPDATE crm_modalidades SET nombre = ?, descripcion = ?, activo = ?, orden = ? WHERE id = ?");
+				$stmt->execute([$nombre, $descripcion, $activo, $orden, $id]);
+				echo json_encode(['success' => true, 'message' => 'Modalidad actualizada']);
+			} else {
+				// Crear
+				$stmt = $db->prepare("INSERT INTO crm_modalidades (nombre, descripcion, activo, orden) VALUES (?, ?, ?, ?)");
+				$stmt->execute([$nombre, $descripcion, $activo, $orden]);
+				$newId = $db->lastInsertId();
+				echo json_encode(['success' => true, 'id' => $newId, 'message' => 'Modalidad creada']);
+			}
+		} catch (Throwable $e) {
+			http_response_code(400);
+			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+		}
+		exit;
+	}
+
+	public function deleteModalidad(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json');
+		try {
+			$id = (int) ($_POST['id'] ?? 0);
+			if ($id <= 0) {
+				throw new Exception('ID inválido');
+			}
+
+			$db = Database::getInstance()->connection();
+			$this->ensureCrmSupportTables();
+			$stmt = $db->prepare("DELETE FROM crm_modalidades WHERE id = ?");
+			$stmt->execute([$id]);
+			echo json_encode(['success' => true, 'message' => 'Modalidad eliminada']);
+		} catch (Throwable $e) {
+			http_response_code(400);
+			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+		}
+		exit;
+	}
+
 }
