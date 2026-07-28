@@ -1545,6 +1545,9 @@ class CRMController extends Controller
 			if (!in_array('creado_por', $interesadosColumns, true)) {
 				$db->exec('ALTER TABLE interesados ADD COLUMN creado_por VARCHAR(255) NULL AFTER origen');
 			}
+			if (!in_array('asesor', $interesadosColumns, true)) {
+				$db->exec('ALTER TABLE interesados ADD COLUMN asesor VARCHAR(255) NULL AFTER origen');
+			}
 			if (!in_array('modalidad', $interesadosColumns, true)) {
 				$db->exec('ALTER TABLE interesados ADD COLUMN modalidad VARCHAR(80) NULL AFTER carrera');
 			}
