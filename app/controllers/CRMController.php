@@ -541,7 +541,8 @@ class CRMController extends Controller
 			if ($celular !== '') {
 				$phoneOwnerContactId = $this->findActiveContactIdByPhone($db, $celular);
 				if ($phoneOwnerContactId !== null && ($contactId === null || $phoneOwnerContactId !== (int) $contactId)) {
-					throw new RuntimeException('El número de celular ya existe en otro cliente potencial.');
+					$conflictSuffix = $this->buildConflictContactSuffix($db, $phoneOwnerContactId);
+					throw new RuntimeException('El número de celular ya existe en otro cliente potencial' . $conflictSuffix . '.');
 				}
 			}
 
@@ -2489,7 +2490,8 @@ class CRMController extends Controller
 			if ($celular !== '') {
 				$phoneOwnerContactId = $this->findActiveContactIdByPhone($db, $celular);
 				if ($phoneOwnerContactId !== null && $phoneOwnerContactId !== $contactoId) {
-					throw new RuntimeException('El número de celular ya existe en otro cliente potencial.');
+					$conflictSuffix = $this->buildConflictContactSuffix($db, $phoneOwnerContactId);
+					throw new RuntimeException('El número de celular ya existe en otro cliente potencial' . $conflictSuffix . '.');
 				}
 			}
 
@@ -2501,7 +2503,7 @@ class CRMController extends Controller
 
 			$conflictContactId = null;
 			if ($correoPersonal !== '' && !$this->canUseEmailAsPrimaryContact($db, $correoPersonal, $contactoId, $conflictContactId)) {
-				$conflictSuffix = $conflictContactId !== null ? (' (ID conflicto: ' . $conflictContactId . ')') : '';
+				$conflictSuffix = $this->buildConflictContactSuffix($db, $conflictContactId);
 				$connectionLabel = $this->getDbConnectionLabel($db);
 				$connectionSuffix = $connectionLabel !== '' ? (' [DB: ' . $connectionLabel . ']') : '';
 				throw new RuntimeException('El correo ya está registrado en otro cliente potencial' . $conflictSuffix . $connectionSuffix . '.');
@@ -2655,11 +2657,12 @@ class CRMController extends Controller
 			$this->ensureCrmSupportTables();
 			$db = Database::getInstance()->connection();
 			$ownerId = $this->findActiveContactIdByPhone($db, $celular);
+			$ownerSuffix = $this->buildConflictContactSuffix($db, $ownerId);
 
 			echo json_encode([
 				'success' => true,
 				'exists' => $ownerId !== null,
-				'message' => $ownerId !== null ? 'El número de celular ya está registrado.' : '',
+				'message' => $ownerId !== null ? ('El número de celular ya está registrado' . $ownerSuffix . '.') : '',
 			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 		} catch (Throwable $e) {
 			http_response_code(500);
@@ -4769,6 +4772,37 @@ class CRMController extends Controller
 		}
 
 		return $foundId === false;
+	}
+
+	private function buildConflictContactSuffix(PDO $db, ?int $contactId): string
+	{
+		if ($contactId === null || $contactId <= 0) {
+			return '';
+		}
+
+		$name = $this->getContactDisplayName($db, (int) $contactId);
+		if ($name !== '') {
+			return ' (ID conflicto: ' . (int) $contactId . ', contacto: ' . $name . ')';
+		}
+
+		return ' (ID conflicto: ' . (int) $contactId . ')';
+	}
+
+	private function getContactDisplayName(PDO $db, int $contactId): string
+	{
+		if ($contactId <= 0) {
+			return '';
+		}
+
+		$stmt = $db->prepare('SELECT nombre, apellido FROM contactos WHERE id = :id LIMIT 1');
+		$stmt->execute([':id' => $contactId]);
+		$row = $stmt->fetch();
+		if (!$row) {
+			return '';
+		}
+
+		$fullName = trim((string) ($row['nombre'] ?? '') . ' ' . (string) ($row['apellido'] ?? ''));
+		return $fullName;
 	}
 
 	private function getDbConnectionLabel(PDO $db): string
