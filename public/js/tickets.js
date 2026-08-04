@@ -107,6 +107,236 @@ document.addEventListener('DOMContentLoaded', () => {
 		const contactoSelect = document.getElementById('contacto_id');
 		const buscarCorreo = document.getElementById('buscar_correo');
 		const imageFileInput = document.getElementById('ticket-editor-image-file');
+		const ccHiddenInput = document.getElementById('cc');
+		const ccPickerInput = document.getElementById('cc_picker_input');
+		const ccPickerResults = document.getElementById('cc_picker_results');
+		const ccChips = document.getElementById('cc_chips');
+
+		const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+		const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+		const parseEmailList = (value) => {
+			const items = String(value || '').split(/[;,]+/).map((item) => normalizeEmail(item)).filter((item) => item !== '');
+			return Array.from(new Set(items));
+		};
+
+		const ccCatalog = new Map();
+		const ccSelected = new Map();
+		let activeSuggestionEmail = '';
+
+		const buildCcCatalog = () => {
+			if (!contactoSelect) {
+				return;
+			}
+
+			Array.from(contactoSelect.options || []).forEach((opt) => {
+				const rawName = String(opt.textContent || '').trim();
+				if (rawName === '' || String(opt.value || '').trim() === '') {
+					return;
+				}
+				const displayName = rawName.split(' - ')[0].trim();
+				const primary = normalizeEmail(opt.getAttribute('data-email') || '');
+				const extraList = String(opt.getAttribute('data-emails') || '')
+					.split(',')
+					.map((item) => normalizeEmail(item))
+					.filter((item) => item !== '');
+				const emailList = Array.from(new Set([primary, ...extraList].filter((item) => item !== '')));
+
+				emailList.forEach((email) => {
+					if (!isValidEmail(email)) {
+						return;
+					}
+					if (!ccCatalog.has(email)) {
+						ccCatalog.set(email, {
+							email,
+							name: displayName,
+						});
+					}
+				});
+			});
+		};
+
+		const updateCcHiddenValue = () => {
+			if (!ccHiddenInput) {
+				return;
+			}
+			ccHiddenInput.value = Array.from(ccSelected.keys()).join(', ');
+		};
+
+		const hideCcSuggestions = () => {
+			if (!ccPickerResults) {
+				return;
+			}
+			ccPickerResults.classList.add('d-none');
+			ccPickerResults.innerHTML = '';
+			activeSuggestionEmail = '';
+		};
+
+		const renderCcChips = () => {
+			if (!ccChips) {
+				return;
+			}
+
+			ccChips.innerHTML = '';
+			Array.from(ccSelected.values()).forEach((entry) => {
+				const chip = document.createElement('span');
+				chip.className = 'badge text-bg-light border d-inline-flex align-items-center gap-2 px-2 py-2';
+
+				const label = document.createElement('span');
+				label.textContent = entry.name ? `${entry.name} <${entry.email}>` : entry.email;
+				chip.appendChild(label);
+
+				const removeBtn = document.createElement('button');
+				removeBtn.type = 'button';
+				removeBtn.className = 'btn btn-sm btn-link text-danger p-0 m-0 lh-1';
+				removeBtn.setAttribute('aria-label', 'Quitar copia');
+				removeBtn.textContent = 'x';
+				removeBtn.addEventListener('click', () => {
+					ccSelected.delete(entry.email);
+					renderCcChips();
+					updateCcHiddenValue();
+				});
+				chip.appendChild(removeBtn);
+
+				ccChips.appendChild(chip);
+			});
+		};
+
+		const addCcEmail = (rawEmail) => {
+			const email = normalizeEmail(rawEmail);
+			if (!isValidEmail(email) || ccSelected.has(email)) {
+				return false;
+			}
+
+			const catalogEntry = ccCatalog.get(email);
+			ccSelected.set(email, {
+				email,
+				name: catalogEntry ? String(catalogEntry.name || '').trim() : '',
+			});
+			renderCcChips();
+			updateCcHiddenValue();
+			return true;
+		};
+
+		const renderCcSuggestions = () => {
+			if (!ccPickerInput || !ccPickerResults) {
+				return;
+			}
+
+			const query = String(ccPickerInput.value || '').trim().toLowerCase();
+			if (query === '') {
+				hideCcSuggestions();
+				return;
+			}
+
+			const matches = Array.from(ccCatalog.values())
+				.filter((entry) => !ccSelected.has(entry.email))
+				.filter((entry) => entry.email.includes(query) || String(entry.name || '').toLowerCase().includes(query))
+				.slice(0, 8);
+
+			if (matches.length === 0 && !isValidEmail(query)) {
+				hideCcSuggestions();
+				return;
+			}
+
+			ccPickerResults.innerHTML = '';
+			activeSuggestionEmail = '';
+
+			matches.forEach((entry, index) => {
+				const optionBtn = document.createElement('button');
+				optionBtn.type = 'button';
+				optionBtn.className = `list-group-item list-group-item-action${index === 0 ? ' active' : ''}`;
+				optionBtn.setAttribute('data-cc-email', entry.email);
+				optionBtn.textContent = entry.name ? `${entry.name} - ${entry.email}` : entry.email;
+				optionBtn.addEventListener('click', () => {
+					if (addCcEmail(entry.email) && ccPickerInput) {
+						ccPickerInput.value = '';
+						hideCcSuggestions();
+						ccPickerInput.focus();
+					}
+				});
+				ccPickerResults.appendChild(optionBtn);
+				if (index === 0) {
+					activeSuggestionEmail = entry.email;
+				}
+			});
+
+			if (matches.length === 0 && isValidEmail(query)) {
+				const freeOption = document.createElement('button');
+				freeOption.type = 'button';
+				freeOption.className = 'list-group-item list-group-item-action active';
+				freeOption.setAttribute('data-cc-email', query);
+				freeOption.textContent = `Agregar: ${query}`;
+				freeOption.addEventListener('click', () => {
+					if (addCcEmail(query) && ccPickerInput) {
+						ccPickerInput.value = '';
+						hideCcSuggestions();
+						ccPickerInput.focus();
+					}
+				});
+				ccPickerResults.appendChild(freeOption);
+				activeSuggestionEmail = query;
+			}
+
+			ccPickerResults.classList.remove('d-none');
+		};
+
+		const commitCcInput = () => {
+			if (!ccPickerInput) {
+				return;
+			}
+
+			const value = normalizeEmail(ccPickerInput.value || '');
+			if (value === '') {
+				hideCcSuggestions();
+				return;
+			}
+
+			const candidate = activeSuggestionEmail !== '' ? activeSuggestionEmail : value;
+			if (addCcEmail(candidate)) {
+				ccPickerInput.value = '';
+			}
+			hideCcSuggestions();
+		};
+
+		buildCcCatalog();
+		if (ccHiddenInput) {
+			parseEmailList(ccHiddenInput.value || '').forEach((email) => {
+				if (isValidEmail(email)) {
+					addCcEmail(email);
+				}
+			});
+			updateCcHiddenValue();
+		}
+
+		if (ccPickerInput) {
+			ccPickerInput.addEventListener('input', () => {
+				renderCcSuggestions();
+			});
+
+			ccPickerInput.addEventListener('keydown', (event) => {
+				if (event.key === 'Enter' || event.key === 'Tab' || event.key === ',' || event.key === ';') {
+					event.preventDefault();
+					commitCcInput();
+					return;
+				}
+
+				if (event.key === 'Backspace' && String(ccPickerInput.value || '').trim() === '') {
+					const keys = Array.from(ccSelected.keys());
+					const lastKey = keys.length > 0 ? keys[keys.length - 1] : '';
+					if (lastKey !== '') {
+						ccSelected.delete(lastKey);
+						renderCcChips();
+						updateCcHiddenValue();
+					}
+				}
+			});
+
+			ccPickerInput.addEventListener('blur', () => {
+				window.setTimeout(() => {
+					hideCcSuggestions();
+				}, 120);
+			});
+		}
 
 		document.querySelectorAll('[data-editor-cmd]').forEach((button) => {
 			button.addEventListener('click', () => {
@@ -157,15 +387,70 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 
 		if (buscarCorreo && contactoSelect) {
-			buscarCorreo.addEventListener('change', () => {
+			const optionContainsEmail = (option, emailValue) => {
+				const primary = (option?.getAttribute('data-email') || '').trim().toLowerCase();
+				if (primary === emailValue) {
+					return true;
+				}
+
+				const rawEmails = (option?.getAttribute('data-emails') || '').trim().toLowerCase();
+				if (rawEmails === '') {
+					return false;
+				}
+
+				const emails = rawEmails.split(',').map((item) => item.trim()).filter((item) => item !== '');
+				return emails.includes(emailValue);
+			};
+
+			const syncContactFromEmail = (enforce = false) => {
 				const value = (buscarCorreo.value || '').trim().toLowerCase();
-				if (value === '') return;
+				if (value === '') {
+					contactoSelect.setCustomValidity('');
+					return;
+				}
+
+				const datalist = document.getElementById('contactosCorreos');
+				const datalistOptions = datalist ? Array.from(datalist.querySelectorAll('option')) : [];
+				const datalistMatch = datalistOptions.find((opt) => String(opt.value || '').trim().toLowerCase() === value);
+				if (datalistMatch) {
+					const mappedId = String(datalistMatch.getAttribute('data-contacto-id') || '').trim();
+					if (mappedId !== '') {
+						contactoSelect.value = mappedId;
+						contactoSelect.setCustomValidity('');
+						return;
+					}
+				}
+
 				const options = Array.from(contactoSelect.options);
-				const match = options.find((opt) => (opt.getAttribute('data-email') || '').trim().toLowerCase() === value);
+				const match = options.find((opt) => optionContainsEmail(opt, value));
+
 				if (match) {
 					contactoSelect.value = match.value;
+					contactoSelect.setCustomValidity('');
+					return;
 				}
-			});
+
+				contactoSelect.value = '';
+				if (enforce) {
+					if (isValidEmail(value)) {
+						// Permitido: contacto nuevo se crea en backend al enviar.
+						contactoSelect.setCustomValidity('');
+					} else {
+						contactoSelect.setCustomValidity('Ingresa un correo válido para crear un nuevo contacto.');
+					}
+				} else {
+					contactoSelect.setCustomValidity('');
+				}
+			};
+
+			buscarCorreo.addEventListener('input', () => syncContactFromEmail(false));
+			buscarCorreo.addEventListener('change', () => syncContactFromEmail(true));
+			buscarCorreo.addEventListener('blur', () => syncContactFromEmail(true));
+			contactoSelect.addEventListener('change', () => contactoSelect.setCustomValidity(''));
+
+			// Algunos navegadores autocompletan campos despues de renderizar.
+			window.setTimeout(() => syncContactFromEmail(true), 0);
+			window.setTimeout(() => syncContactFromEmail(true), 250);
 		}
 
 		composeForm.addEventListener('submit', (event) => {
@@ -173,6 +458,32 @@ document.addEventListener('DOMContentLoaded', () => {
 			if (hiddenInput) {
 				hiddenInput.value = html;
 			}
+
+			if (buscarCorreo && contactoSelect) {
+				const typedEmail = (buscarCorreo.value || '').trim().toLowerCase();
+				if (typedEmail !== '') {
+					const selectedOption = contactoSelect.options[contactoSelect.selectedIndex] || null;
+					if (selectedOption && optionContainsEmail(selectedOption, typedEmail)) {
+						contactoSelect.setCustomValidity('');
+					} else if (!selectedOption || String(selectedOption.value || '').trim() === '') {
+						if (!isValidEmail(typedEmail)) {
+							event.preventDefault();
+							contactoSelect.setCustomValidity('Ingresa un correo válido para crear contacto nuevo.');
+							showGlobalNotification('El correo ingresado no es válido.', 'warning');
+							contactoSelect.reportValidity();
+							return;
+						}
+						contactoSelect.setCustomValidity('');
+					} else {
+						event.preventDefault();
+						contactoSelect.setCustomValidity('El contacto seleccionado no corresponde al correo buscado.');
+						showGlobalNotification('El correo buscado no está asociado al contacto seleccionado.', 'warning');
+						contactoSelect.reportValidity();
+						return;
+					}
+				}
+			}
+
 			const plain = (editor?.textContent || '').trim();
 			if (plain === '') {
 				event.preventDefault();

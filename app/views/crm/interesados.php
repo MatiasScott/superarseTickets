@@ -145,8 +145,8 @@
 						</div>
 					</div>
 					<div class="col-md-4">
-						<label for="crmFilterName" class="form-label mb-1"><i class="bi bi-search"></i> Buscar por nombre</label>
-						<input type="text" id="crmFilterName" class="form-control" placeholder="Ej: Francisco Carpio">
+						<label for="crmFilterName" class="form-label mb-1"><i class="bi bi-search"></i> Buscar por nombre o correo</label>
+						<input type="text" id="crmFilterName" class="form-control" placeholder="Ej: Francisco Carpio o correo@dominio.com">
 					</div>
 					<div class="col-md-2">
 						<label class="form-label mb-1"><i class="bi bi-book"></i> Carrera</label>
@@ -229,6 +229,7 @@
 						<tr
 							data-student-id="<?= e($item['id'] ?? '') ?>"
 							data-student-name="<?= e(strtolower(trim((($item['nombre'] ?? '') . ' ' . ($item['apellido'] ?? '')))) ) ?>"
+							data-student-email="<?= e(strtolower(trim((string) ($item['email'] ?? '')))) ?>"
 							data-student-career="<?= e(strtolower((string) ($item['carrera'] ?? ''))) ?>"
 							data-student-pipeline="<?= e(strtolower((string) ($item['pipeline_nombre'] ?? ''))) ?>"
 						>

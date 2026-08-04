@@ -784,6 +784,7 @@ document.addEventListener('DOMContentLoaded', () => {
 				<tr
 					data-student-id="${escapeHtml(item.id || '')}"
 					data-student-name="${escapeHtml(normalizeText(fullName))}"
+					data-student-email="${escapeHtml(normalizeText(item.email || ''))}"
 					data-student-career="${escapeHtml(normalizeText(item.carrera || ''))}"
 					data-student-pipeline="${escapeHtml(normalizeText(item.pipeline_nombre || ''))}"
 				>
@@ -862,6 +863,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		let visible = 0;
 		rows.forEach((row) => {
 			const rowName = normalizeText(row.getAttribute('data-student-name') || '');
+			const rowEmail = normalizeText(row.getAttribute('data-student-email') || '');
 			const rowCareer = normalizeText(row.getAttribute('data-student-career') || '');
 			const rowPipeline = normalizeText(row.getAttribute('data-student-pipeline') || '');
 			const cells = row.querySelectorAll('td');
@@ -869,7 +871,7 @@ document.addEventListener('DOMContentLoaded', () => {
 			const rowLevel = normalizeText(cells[5]?.textContent || '');
 
 			const matchPeriod = periodos.length === 0 || periodos.includes(rowPeriod);
-			const matchName = nombre === '' || rowName.includes(nombre);
+			const matchName = nombre === '' || rowName.includes(nombre) || rowEmail.includes(nombre);
 			const matchCareer = carreras.length === 0 || carreras.includes(rowCareer);
 			const matchPipeline = etapas.length === 0 || etapas.some((etapa) => rowPipeline.includes(etapa));
 			const matchLevel = niveles.length === 0 || niveles.includes(rowLevel);
@@ -1354,6 +1356,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		const body = document.getElementById('studentContactBody');
 		const saveBtn = document.getElementById('saveStudentContactBtn');
 		saveBtn.setAttribute('data-student-id', String(studentId));
+		saveBtn.setAttribute('data-contact-id', String(student.contacto_id || ''));
 
 		body.innerHTML = `
 			<div id="contactSaveStatus" class="d-none"></div>
@@ -2784,6 +2787,7 @@ document.addEventListener('DOMContentLoaded', () => {
 	if (saveContactBtn) {
 		saveContactBtn.addEventListener('click', async () => {
 			const studentId = Number(saveContactBtn.getAttribute('data-student-id') || 0);
+			const contactId = Number(saveContactBtn.getAttribute('data-contact-id') || 0);
 			const statusBox = document.getElementById('contactSaveStatus');
 			if (studentId <= 0) {
 				if (statusBox) {
@@ -2800,6 +2804,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 			const payload = new URLSearchParams({
 				student_id: String(studentId),
+				contacto_id: contactId > 0 ? String(contactId) : '',
 				email: String(document.getElementById('contactEmail')?.value || ''),
 				telefono: String(document.getElementById('contactPhone')?.value || ''),
 				celular: String(document.getElementById('contactCell')?.value || ''),

@@ -186,7 +186,8 @@ class MailService
 			return false;
 		}
 
-		$toList = array_values(array_filter(array_map('trim', array_merge([$to], $cc, $bcc)), static fn($v) => $v !== ''));
+		$toRecipients = $this->normalizeEmailList($to);
+		$toList = array_values(array_unique(array_filter(array_map('trim', array_merge($toRecipients, $cc, $bcc)), static fn($v) => $v !== '' && self::isValidEmail($v))));
 		if (empty($toList)) {
 			error_log('Mail SMTP Error: no hay destinatarios.');
 			return false;
@@ -241,7 +242,7 @@ class MailService
 				? mb_encode_mimeheader($subject, 'UTF-8')
 				: $subject;
 
-			$message = 'To: ' . $to . "\r\n";
+			$message = 'To: ' . implode(', ', $toRecipients) . "\r\n";
 			$message .= 'Subject: ' . $encodedSubject . "\r\n";
 			$message .= $payload['headers'] . "\r\n";
 			$message .= $this->normalizeSmtpBody($payload['body']) . "\r\n";
@@ -444,5 +445,20 @@ class MailService
 	public static function isValidEmail(string $email): bool
 	{
 		return filter_var($email, FILTER_VALIDATE_EMAIL) !== false;
+	}
+
+	private function normalizeEmailList(string $emails): array
+	{
+		$list = preg_split('/\s*[;,]\s*/', strtolower(trim($emails)), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+		$result = [];
+		foreach ($list as $email) {
+			$address = trim((string) $email);
+			if ($address === '' || !self::isValidEmail($address)) {
+				continue;
+			}
+			$result[$address] = $address;
+		}
+
+		return array_values($result);
 	}
 }

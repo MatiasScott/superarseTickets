@@ -66,6 +66,12 @@ class GraphMailService
 			return ['ok' => false, 'error' => 'La cuenta no tiene email configurado para enviar por Graph.'];
 		}
 
+		$toList = preg_split('/\s*[;,]\s*/', strtolower(trim($to)), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+		$toRecipients = $this->toRecipients($toList);
+		if (empty($toRecipients)) {
+			return ['ok' => false, 'error' => 'No hay destinatarios validos para enviar por Graph.'];
+		}
+
 		$payload = [
 			'message' => [
 				'subject' => $subject,
@@ -73,13 +79,7 @@ class GraphMailService
 					'contentType' => 'HTML',
 					'content' => $htmlBody,
 				],
-				'toRecipients' => [
-					[
-						'emailAddress' => [
-							'address' => $to,
-						],
-					],
-				],
+				'toRecipients' => $toRecipients,
 			],
 			'saveToSentItems' => true,
 		];

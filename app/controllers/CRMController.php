@@ -802,6 +802,7 @@ class CRMController extends Controller
 			$filtered = [];
 			foreach ($rows as $row) {
 				$fullName = $normalize((string) ($row['nombre'] ?? '') . ' ' . (string) ($row['apellido'] ?? ''));
+				$rowEmail = $normalize((string) ($row['email'] ?? ''));
 				$rowPeriod = $normalize($row['periodo_clave'] ?? ($row['periodo'] ?? ''));
 				$rowCareer = $normalize($row['carrera'] ?? '');
 				$rowStage = $normalize($row['pipeline_nombre'] ?? '');
@@ -815,7 +816,7 @@ class CRMController extends Controller
 				if (!empty($periodosNormalized) && !in_array($rowPeriod, $periodosNormalized, true)) {
 					continue;
 				}
-				if ($nombre !== '' && strpos($fullName, $nombre) === false) {
+				if ($nombre !== '' && strpos($fullName, $nombre) === false && strpos($rowEmail, $nombre) === false) {
 					continue;
 				}
 				if (!empty($carreras) && !in_array($rowCareer, $carreras, true)) {
@@ -2149,8 +2150,11 @@ class CRMController extends Controller
 			$this->ensureCrmSupportTables();
 			$remote = $this->connectSuperarseDatabase();
 			$student = null;
+			$resolvedContactoId = 0;
+			$resolvedSourceTable = null;
 			if ($remote instanceof PDO) {
 				$sourceTable = $this->resolveSuperarseStudentTable($remote);
+				$resolvedSourceTable = $sourceTable;
 				if ($sourceTable === 'users') {
 					$sql = "SELECT
 							u.id,
@@ -2165,6 +2169,7 @@ class CRMController extends Controller
 				} elseif ($sourceTable === 'estudiantes') {
 					$sql = "SELECT
 							e.id,
+							e.contacto_id,
 							e.codigo_estudiante,
 							TRIM(CONCAT_WS(' ', c.nombre, c.apellido)) AS nombre_completo,
 							c.email,
@@ -2193,6 +2198,10 @@ class CRMController extends Controller
 					$stmt->bindValue(':id', $studentId, PDO::PARAM_INT);
 					$stmt->execute();
 					$student = $stmt->fetch() ?: null;
+
+					if ($student && $sourceTable === 'estudiantes') {
+						$resolvedContactoId = (int) ($student['contacto_id'] ?? 0);
+					}
 				}
 			}
 
@@ -2200,6 +2209,7 @@ class CRMController extends Controller
 				$db = Database::getInstance()->connection();
 				$sql = "SELECT
 						e.id,
+						e.contacto_id,
 						e.codigo_estudiante,
 						TRIM(CONCAT_WS(' ', c.nombre, c.apellido)) AS nombre_completo,
 						c.email,
@@ -2223,6 +2233,9 @@ class CRMController extends Controller
 				$stmt->bindValue(':id', $studentId, PDO::PARAM_INT);
 				$stmt->execute();
 				$student = $stmt->fetch() ?: null;
+				if ($student) {
+					$resolvedContactoId = (int) ($student['contacto_id'] ?? 0);
+				}
 			}
 
 			if (!$student) {
@@ -2230,20 +2243,56 @@ class CRMController extends Controller
 			}
 
 			$db = Database::getInstance()->connection();
+			if ($resolvedContactoId <= 0 && $resolvedSourceTable === 'users') {
+				$historyStmt = $db->prepare('SELECT contacto_id
+					FROM crm_student_academic_history
+					WHERE source_user_id = :source_user_id
+					ORDER BY last_seen_at DESC, id DESC
+					LIMIT 1');
+				$historyStmt->execute([':source_user_id' => $studentId]);
+				$resolvedContactoId = (int) ($historyStmt->fetchColumn() ?: 0);
+			}
+
 			$extrasStmt = $db->prepare('SELECT extra_emails, extra_phones FROM crm_student_contact_extras WHERE student_id = :student_id LIMIT 1');
 			$extrasStmt->execute([':student_id' => $studentId]);
 			$extras = $extrasStmt->fetch() ?: ['extra_emails' => '', 'extra_phones' => ''];
+
+			$extraEmailsCsv = (string) ($extras['extra_emails'] ?? '');
+			if ($resolvedContactoId > 0) {
+				try {
+					$extraEmailRowsStmt = $db->prepare('SELECT correo FROM correos_contacto
+						WHERE contacto_id = :contacto_id
+						  AND estado = "activo"
+						  AND tipo = "extra"
+						ORDER BY id ASC');
+					$extraEmailRowsStmt->execute([':contacto_id' => $resolvedContactoId]);
+					$extraEmailRows = $extraEmailRowsStmt->fetchAll() ?: [];
+					$extraEmailValues = [];
+					foreach ($extraEmailRows as $extraEmailRow) {
+						$normalized = $this->normalizeEmailValue((string) ($extraEmailRow['correo'] ?? ''));
+						if ($normalized !== '') {
+							$extraEmailValues[$normalized] = $normalized;
+						}
+					}
+					if (!empty($extraEmailValues)) {
+						$extraEmailsCsv = implode(', ', array_values($extraEmailValues));
+					}
+				} catch (Throwable $ignore) {
+					// Mantener fallback de extras por student_id.
+				}
+			}
 
 			echo json_encode([
 				'success' => true,
 				'student' => [
 					'id' => (int) ($student['id'] ?? 0),
+					'contacto_id' => $resolvedContactoId > 0 ? $resolvedContactoId : null,
 					'codigo_estudiante' => (string) ($student['codigo_estudiante'] ?? ''),
 					'nombre_completo' => (string) ($student['nombre_completo'] ?? ''),
 					'email' => (string) ($student['email'] ?? ''),
 					'telefono' => (string) ($student['telefono'] ?? ''),
 					'celular' => (string) ($student['celular'] ?? ''),
-					'extra_emails' => (string) ($extras['extra_emails'] ?? ''),
+					'extra_emails' => $extraEmailsCsv,
 					'extra_phones' => (string) ($extras['extra_phones'] ?? ''),
 				],
 			]);
@@ -2260,6 +2309,7 @@ class CRMController extends Controller
 		header('Content-Type: application/json; charset=utf-8');
 
 		$studentId = max(0, (int) ($_POST['student_id'] ?? 0));
+		$contactoIdFromPayload = max(0, (int) ($_POST['contacto_id'] ?? 0));
 		$email = trim((string) ($_POST['email'] ?? ''));
 		$telefono = trim((string) ($_POST['telefono'] ?? ''));
 		$celular = trim((string) ($_POST['celular'] ?? ''));
@@ -2276,6 +2326,7 @@ class CRMController extends Controller
 			$this->ensureCrmSupportTables();
 			$db = Database::getInstance()->connection();
 			$beforeEmail = '';
+			$resolvedContactoId = $contactoIdFromPayload;
 			$contactStmtBefore = $db->prepare('SELECT c.email
 				FROM estudiantes e
 				LEFT JOIN contactos c ON c.id = e.contacto_id
@@ -2301,6 +2352,19 @@ class CRMController extends Controller
 						':celular' => $celular,
 						':id' => $studentId,
 					]);
+					$historyStmt = $db->prepare('SELECT contacto_id
+						FROM crm_student_academic_history
+						WHERE source_user_id = :source_user_id
+						ORDER BY last_seen_at DESC, id DESC
+						LIMIT 1');
+					$historyStmt->execute([':source_user_id' => $studentId]);
+					$historyContactoId = (int) ($historyStmt->fetchColumn() ?: 0);
+					if ($historyContactoId > 0) {
+						$resolvedContactoId = $historyContactoId;
+					}
+					if ($resolvedContactoId <= 0) {
+						$resolvedContactoId = $this->resolveOrCreateLocalContactFromRemoteUser($db, $remote, $studentId, $email);
+					}
 					$updated = true;
 				} elseif ($sourceTable === 'estudiantes') {
 					$contactoIdStmt = $remote->prepare('SELECT contacto_id FROM estudiantes WHERE id = :id LIMIT 1');
@@ -2312,6 +2376,7 @@ class CRMController extends Controller
 							':email' => $email !== '' ? $email : null,
 							':id' => $contactoId,
 						]);
+						$resolvedContactoId = $contactoId;
 						$updated = true;
 					}
 				}
@@ -2334,6 +2399,7 @@ class CRMController extends Controller
 					':email' => $email !== '' ? $email : null,
 					':id' => $contactoId,
 				]);
+				$resolvedContactoId = $contactoId;
 			}
 
 			$extraSql = "INSERT INTO crm_student_contact_extras (student_id, extra_emails, extra_phones, updated_by, updated_at)
@@ -2350,6 +2416,43 @@ class CRMController extends Controller
 				':extra_phones' => $extraPhones,
 				':updated_by' => $this->currentUserId(),
 			]);
+
+			if ($resolvedContactoId <= 0) {
+				$fallbackContactStmt = $db->prepare('SELECT contacto_id FROM estudiantes WHERE id = :id LIMIT 1');
+				$fallbackContactStmt->execute([':id' => $studentId]);
+				$resolvedContactoId = (int) ($fallbackContactStmt->fetchColumn() ?: 0);
+			}
+
+			if ($resolvedContactoId > 0) {
+				$emailPrincipal = $this->normalizeEmailValue($email);
+				if ($emailPrincipal !== '') {
+					$this->upsertContactEmail($db, $resolvedContactoId, $emailPrincipal, 'personal');
+				}
+
+				$extraEmailList = $this->parseCsvEmailValues($extraEmails);
+				if (empty($extraEmailList)) {
+					$deactivateExtra = $db->prepare('UPDATE correos_contacto
+						SET estado = "inactivo", updated_at = NOW()
+						WHERE contacto_id = :contacto_id
+						  AND tipo = "extra"
+						  AND estado = "activo"');
+					$deactivateExtra->execute([':contacto_id' => $resolvedContactoId]);
+				} else {
+					$emailPlaceholders = implode(',', array_fill(0, count($extraEmailList), '?'));
+					$deactivateExtra = $db->prepare("UPDATE correos_contacto
+						SET estado = 'inactivo', updated_at = NOW()
+						WHERE contacto_id = ?
+						  AND tipo = 'extra'
+						  AND estado = 'activo'
+						  AND LOWER(TRIM(correo)) NOT IN ({$emailPlaceholders})");
+					$deactivateParams = array_merge([$resolvedContactoId], $extraEmailList);
+					$deactivateExtra->execute($deactivateParams);
+
+					foreach ($extraEmailList as $extraEmail) {
+						$this->upsertContactEmail($db, $resolvedContactoId, $extraEmail, 'extra');
+					}
+				}
+			}
 
 			$historyNote = sprintf(
 				'Actualizó contacto. Email: %s -> %s. Teléfono: %s. Celular: %s. Correos extra: %s. Teléfonos extra: %s.',
@@ -2371,6 +2474,129 @@ class CRMController extends Controller
 			echo json_encode(['success' => false, 'error' => $e->getMessage()]);
 		}
 		exit;
+	}
+
+	private function resolveOrCreateLocalContactFromRemoteUser(PDO $db, PDO $remote, int $sourceUserId, string $preferredEmail = ''): int
+	{
+		if ($sourceUserId <= 0) {
+			return 0;
+		}
+
+		$stmt = $remote->prepare('SELECT
+			u.id,
+			u.numero_identificacion,
+			u.codigo_matricula,
+			u.primer_nombre,
+			u.segundo_nombre,
+			u.primer_apellido,
+			u.segundo_apellido,
+			u.correo_electronico,
+			u.programa,
+			u.nivel,
+			u.periodo,
+			u.estado
+		FROM users u
+		WHERE u.id = :id
+		LIMIT 1');
+		$stmt->execute([':id' => $sourceUserId]);
+		$row = $stmt->fetch();
+		if (!$row) {
+			return 0;
+		}
+
+		$identity = $this->normalizeIdentityValue((string) ($row['numero_identificacion'] ?? ''));
+		$contactId = $this->findPrimaryContactIdForMerge($db, $identity);
+
+		$emailCandidates = [];
+		$preferredEmailNormalized = $this->normalizeEmailValue($preferredEmail);
+		if ($preferredEmailNormalized !== '') {
+			$emailCandidates[] = $preferredEmailNormalized;
+		}
+		$remoteEmailNormalized = $this->normalizeEmailValue((string) ($row['correo_electronico'] ?? ''));
+		if ($remoteEmailNormalized !== '') {
+			$emailCandidates[] = $remoteEmailNormalized;
+		}
+
+		if ($contactId === null) {
+			foreach ($emailCandidates as $candidateEmail) {
+				$byEmail = $this->resolveContactByEmailFallback($db, $candidateEmail);
+				if ($byEmail !== null) {
+					$contactId = $byEmail;
+					break;
+				}
+			}
+		}
+
+		$firstName = trim((string) ($row['primer_nombre'] ?? '') . ' ' . (string) ($row['segundo_nombre'] ?? ''));
+		$lastName = trim((string) ($row['primer_apellido'] ?? '') . ' ' . (string) ($row['segundo_apellido'] ?? ''));
+		if ($firstName === '') {
+			$firstName = 'Sin nombre';
+		}
+
+		if ($contactId === null) {
+			$emailToStore = '';
+			foreach ($emailCandidates as $candidateEmail) {
+				if ($this->canUseEmailAsPrimaryContact($db, $candidateEmail, null)) {
+					$emailToStore = $candidateEmail;
+					break;
+				}
+			}
+
+			$insert = $db->prepare('INSERT INTO contactos (nombre, apellido, cedula, email, tipo, estado, created_at, updated_at)
+				VALUES (:nombre, :apellido, :cedula, :email, "estudiante", "activo", NOW(), NOW())');
+			$insert->execute([
+				':nombre' => mb_substr($firstName, 0, 150),
+				':apellido' => mb_substr($lastName, 0, 150),
+				':cedula' => $identity !== '' ? mb_substr($identity, 0, 20) : null,
+				':email' => $emailToStore !== '' ? $emailToStore : null,
+			]);
+			$contactId = (int) $db->lastInsertId();
+		} else {
+			$update = $db->prepare('UPDATE contactos
+				SET nombre = :nombre,
+					apellido = :apellido,
+					cedula = COALESCE(:cedula, cedula),
+					estado = "activo",
+					updated_at = NOW()
+				WHERE id = :id
+				LIMIT 1');
+			$update->execute([
+				':nombre' => mb_substr($firstName, 0, 150),
+				':apellido' => mb_substr($lastName, 0, 150),
+				':cedula' => $identity !== '' ? mb_substr($identity, 0, 20) : null,
+				':id' => $contactId,
+			]);
+		}
+
+		if ($contactId <= 0) {
+			return 0;
+		}
+
+		$estadoAcademico = strtolower(trim((string) ($row['estado'] ?? 'activo')));
+		$codigo = trim((string) ($row['codigo_matricula'] ?? ''));
+		$this->ensureStudentFromContact($db, $contactId, $codigo, $estadoAcademico);
+		$this->upsertAcademicHistory($db, $contactId, $row);
+
+		foreach ($emailCandidates as $candidateEmail) {
+			$this->upsertContactEmail($db, $contactId, $candidateEmail, 'personal');
+		}
+
+		return $contactId;
+	}
+
+	private function parseCsvEmailValues(string $value): array
+	{
+		$items = preg_split('/\s*,\s*/', (string) $value, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+		$result = [];
+		foreach ($items as $item) {
+			$email = $this->normalizeEmailValue((string) $item);
+			if ($email === '') {
+				continue;
+			}
+			$result[$email] = $email;
+		}
+
+		return array_values($result);
 	}
 
 	public function getProspectDetail(): void

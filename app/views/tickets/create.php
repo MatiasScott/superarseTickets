@@ -28,12 +28,22 @@
 				</div>
 				<div class="col-lg-6">
 					<label class="form-label" for="buscar_correo"><i class="bi bi-search"></i> Buscar correo registrado</label>
-					<input class="form-control" id="buscar_correo" list="contactosCorreos" placeholder="correo@dominio.com">
+					<input class="form-control" id="buscar_correo" name="buscar_correo" list="contactosCorreos" placeholder="correo@dominio.com">
 					<datalist id="contactosCorreos">
 						<?php foreach (($contactos ?? []) as $contacto): ?>
-							<?php $mail = trim((string) ($contacto['contacto_email'] ?? '')); ?>
-							<?php if ($mail !== ''): ?>
-								<option value="<?= e($mail) ?>" data-contacto-id="<?= e((string) ($contacto['id'] ?? '')) ?>"></option>
+							<?php $mails = (array) ($contacto['contacto_emails'] ?? []); ?>
+							<?php if (empty($mails)): ?>
+								<?php $singleMail = trim((string) ($contacto['contacto_email'] ?? '')); ?>
+								<?php if ($singleMail !== ''): ?>
+									<option value="<?= e($singleMail) ?>" data-contacto-id="<?= e((string) ($contacto['id'] ?? '')) ?>"></option>
+								<?php endif; ?>
+							<?php else: ?>
+								<?php foreach ($mails as $mail): ?>
+									<?php $mail = trim((string) $mail); ?>
+									<?php if ($mail !== ''): ?>
+										<option value="<?= e($mail) ?>" data-contacto-id="<?= e((string) ($contacto['id'] ?? '')) ?>"></option>
+									<?php endif; ?>
+								<?php endforeach; ?>
 							<?php endif; ?>
 						<?php endforeach; ?>
 					</datalist>
@@ -42,14 +52,15 @@
 
 			<div class="mb-3">
 				<label class="form-label" for="contacto_id"><i class="bi bi-person"></i> Contacto</label>
-				<select class="form-select" id="contacto_id" name="contacto_id" required>
+				<select class="form-select" id="contacto_id" name="contacto_id">
 					<option value="">Seleccione...</option>
 					<?php foreach (($contactos ?? []) as $contacto): ?>
-						<option value="<?= e((string) ($contacto['id'] ?? '')) ?>" data-email="<?= e((string) ($contacto['contacto_email'] ?? '')) ?>">
+						<option value="<?= e((string) ($contacto['id'] ?? '')) ?>" data-email="<?= e((string) ($contacto['contacto_email'] ?? '')) ?>" data-emails="<?= e((string) ($contacto['contacto_emails_csv'] ?? '')) ?>">
 							<?= e(trim((($contacto['nombre'] ?? '') . ' ' . ($contacto['apellido'] ?? '')))) ?><?= !empty($contacto['contacto_email']) ? (' - ' . e((string) $contacto['contacto_email'])) : '' ?>
 						</option>
 					<?php endforeach; ?>
 				</select>
+					<small class="text-muted">Si el correo no existe en la base, puedes dejar este campo vacío y se creará el contacto automáticamente al enviar.</small>
 			</div>
 
 			<div class="mb-3">
@@ -58,9 +69,57 @@
 			</div>
 
 			<div class="mb-3">
-				<label class="form-label" for="cc"><i class="bi bi-people"></i> Copia (CC)</label>
-				<input class="form-control" id="cc" name="cc" placeholder="cc1@dominio.com, cc2@dominio.com; cc3@dominio.com">
-				<small class="text-muted">Puedes agregar varios correos separados por coma o punto y coma.</small>
+				<label class="form-label" for="cc_picker_input"><i class="bi bi-people"></i> Copia (CC)</label>
+				<div class="border rounded p-2 bg-white position-relative" id="cc_picker_wrapper">
+					<div id="cc_chips" class="d-flex flex-wrap gap-2 mb-2"></div>
+					<input class="form-control" id="cc_picker_input" type="text" placeholder="Buscar contacto o escribir correo para agregar copia" autocomplete="off">
+					<div id="cc_picker_results" class="list-group position-absolute w-100 mt-1 d-none" style="max-height: 220px; overflow-y: auto; z-index: 1100;"></div>
+				</div>
+				<input type="hidden" id="cc" name="cc" value="">
+				<small class="text-muted">Selecciona correos como en Outlook. Enter agrega el correo resaltado.</small>
+			</div>
+
+			<div class="row g-3 mb-3">
+				<div class="col-md-3">
+					<label class="form-label" for="prioridad_id"><i class="bi bi-flag"></i> Prioridad</label>
+					<select class="form-select" id="prioridad_id" name="prioridad_id" required>
+						<option value="">Seleccione...</option>
+						<?php foreach (($prioridades ?? []) as $prioridad): ?>
+							<?php $selected = ((int) ($defaults['prioridad_id'] ?? 0) === (int) ($prioridad['id'] ?? 0)) ? 'selected' : ''; ?>
+							<option value="<?= e((string) ($prioridad['id'] ?? '')) ?>" <?= e($selected) ?>><?= e((string) ($prioridad['nombre'] ?? '')) ?></option>
+						<?php endforeach; ?>
+					</select>
+				</div>
+				<div class="col-md-3">
+					<label class="form-label" for="estado_id"><i class="bi bi-hourglass-split"></i> Estado</label>
+					<select class="form-select" id="estado_id" name="estado_id" required>
+						<option value="">Seleccione...</option>
+						<?php foreach (($estados ?? []) as $estado): ?>
+							<?php $selected = ((int) ($defaults['estado_id'] ?? 0) === (int) ($estado['id'] ?? 0)) ? 'selected' : ''; ?>
+							<option value="<?= e((string) ($estado['id'] ?? '')) ?>" <?= e($selected) ?>><?= e((string) ($estado['nombre'] ?? '')) ?></option>
+						<?php endforeach; ?>
+					</select>
+				</div>
+				<div class="col-md-3">
+					<label class="form-label" for="grupo_id"><i class="bi bi-people-fill"></i> Grupo</label>
+					<select class="form-select" id="grupo_id" name="grupo_id" required>
+						<option value="">Seleccione...</option>
+						<?php foreach (($grupos ?? []) as $grupo): ?>
+							<?php $selected = ((int) ($defaults['grupo_id'] ?? 0) === (int) ($grupo['id'] ?? 0)) ? 'selected' : ''; ?>
+							<option value="<?= e((string) ($grupo['id'] ?? '')) ?>" <?= e($selected) ?>><?= e((string) ($grupo['nombre'] ?? '')) ?></option>
+						<?php endforeach; ?>
+					</select>
+				</div>
+				<div class="col-md-3">
+					<label class="form-label" for="tipo_id"><i class="bi bi-tags"></i> Tipo</label>
+					<select class="form-select" id="tipo_id" name="tipo_id">
+						<option value="">Seleccione...</option>
+						<?php foreach (($tipos ?? []) as $tipo): ?>
+							<?php $selected = ((int) ($defaults['tipo_id'] ?? 0) === (int) ($tipo['id'] ?? 0)) ? 'selected' : ''; ?>
+							<option value="<?= e((string) ($tipo['id'] ?? '')) ?>" <?= e($selected) ?>><?= e((string) ($tipo['nombre'] ?? '')) ?></option>
+						<?php endforeach; ?>
+					</select>
+				</div>
 			</div>
 
 			<div class="mb-3">
@@ -81,10 +140,7 @@
 			</div>
 
 			<div class="ticket-defaults-note mb-3">
-				<div><strong>Prioridad:</strong> <?= e((string) (($defaults['prioridad_label'] ?? 'Media'))) ?></div>
-				<div><strong>Estado:</strong> <?= e((string) (($defaults['estado_label'] ?? 'Pendiente'))) ?></div>
-				<div><strong>Grupo:</strong> <?= e((string) (($defaults['grupo_label'] ?? 'Sin asignar'))) ?></div>
-				<div><strong>Tipo:</strong> Vacio</div>
+				Selecciona los valores del ticket antes de enviar.
 			</div>
 
 			<div class="mb-3">

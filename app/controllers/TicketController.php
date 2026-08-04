@@ -181,7 +181,15 @@ class TicketController extends Controller
 		$contactos = [];
 		$mailAccounts = [];
 		$defaultAccountAlias = '';
+		$estados = [];
+		$prioridades = [];
+		$tipos = [];
+		$grupos = [];
 		$defaults = [
+			'estado_id' => null,
+			'prioridad_id' => null,
+			'grupo_id' => null,
+			'tipo_id' => null,
 			'estado_label' => 'Pendiente',
 			'prioridad_label' => 'Media',
 			'grupo_label' => 'Sin asignar',
@@ -194,9 +202,23 @@ class TicketController extends Controller
 			$emailSql = $emailColumn !== null ? (', ' . $emailColumn . ' AS contacto_email') : ", '' AS contacto_email";
 
 			$contactos = $db->query("SELECT id, nombre, apellido{$emailSql} FROM contactos WHERE estado = 'activo' ORDER BY nombre")->fetchAll() ?: [];
+			$contactos = $this->decorateContactsWithEmails($db, $contactos);
 
 			$catalog = $this->resolveTicketDefaults($db);
+			$estados = $db->query("SELECT id, nombre FROM ticket_estados ORDER BY nombre")->fetchAll() ?: [];
+			$prioridades = $db->query("SELECT id, nombre FROM ticket_prioridades ORDER BY nombre")->fetchAll() ?: [];
+			$tipos = $db->query("SELECT id, nombre FROM ticket_tipos ORDER BY nombre")->fetchAll() ?: [];
+			try {
+				$grupos = $db->query("SELECT id, nombre FROM ticket_grupos WHERE activo = 1 ORDER BY nombre")->fetchAll() ?: [];
+			} catch (Throwable $eg) {
+				$grupos = $db->query("SELECT id, nombre FROM ticket_grupos ORDER BY nombre")->fetchAll() ?: [];
+			}
+
 			$defaults = [
+				'estado_id' => $catalog['estado_pendiente_id'] ?? ($catalog['estado_abierto_id'] ?? $catalog['estado_fallback_id'] ?? null),
+				'prioridad_id' => $catalog['prioridad_media_id'] ?? ($catalog['prioridad_fallback_id'] ?? null),
+				'grupo_id' => $catalog['grupo_sin_asignar_id'] ?? ($catalog['grupo_fallback_id'] ?? null),
+				'tipo_id' => $catalog['tipo_vacio_id'] ?? ($catalog['tipo_fallback_id'] ?? null),
 				'estado_label' => $catalog['estado_pendiente_label'] ?? ($catalog['estado_abierto_label'] ?? 'Pendiente'),
 				'prioridad_label' => $catalog['prioridad_media_label'] ?? 'Media',
 				'grupo_label' => $catalog['grupo_sin_asignar_label'] ?? 'Sin asignar',
@@ -209,7 +231,7 @@ class TicketController extends Controller
 			set_flash('error', 'No se pudieron cargar los catalogos de tickets.');
 		}
 
-		$this->view('tickets/create', compact('contactos', 'mailAccounts', 'defaultAccountAlias', 'defaults'), [
+		$this->view('tickets/create', compact('contactos', 'mailAccounts', 'defaultAccountAlias', 'defaults', 'estados', 'prioridades', 'tipos', 'grupos'), [
 			'title' => 'Crear ticket',
 		]);
 	}
@@ -223,8 +245,13 @@ class TicketController extends Controller
 			redirect('tickets/create');
 		}
 		$contactoId = (int) ($_POST['contacto_id'] ?? 0);
+		$newContactEmail = strtolower(trim((string) ($_POST['buscar_correo'] ?? '')));
 		$asunto = trim((string) ($_POST['asunto'] ?? ''));
 		$accountAlias = trim((string) ($_POST['account_alias'] ?? ''));
+		$estadoIdInput = (int) ($_POST['estado_id'] ?? 0);
+		$prioridadIdInput = (int) ($_POST['prioridad_id'] ?? 0);
+		$grupoIdInput = (int) ($_POST['grupo_id'] ?? 0);
+		$tipoIdInput = (int) ($_POST['tipo_id'] ?? 0);
 		$ccRaw = trim((string) ($_POST['cc'] ?? ''));
 		$descripcionHtml = $this->sanitizeRichText((string) ($_POST['descripcion_html'] ?? ''));
 		$descripcionTexto = trim(preg_replace('/\s+/', ' ', strip_tags($descripcionHtml)) ?? '');
@@ -237,7 +264,7 @@ class TicketController extends Controller
 			redirect('tickets/create');
 		}
 
-		if ($asunto === '' || $contactoId <= 0 || $descripcionTexto === '') {
+		if ($asunto === '' || $descripcionTexto === '') {
 			set_flash('error', 'Completa los campos obligatorios del ticket.');
 			redirect('tickets/create');
 		}
@@ -245,16 +272,39 @@ class TicketController extends Controller
 		try {
 			$db = Database::getInstance()->connection();
 			$this->ensureReplyAttachmentsTable($db);
+
+			if ($contactoId <= 0) {
+				if ($newContactEmail === '' || !MailService::isValidEmail($newContactEmail)) {
+					set_flash('error', 'Selecciona un contacto o ingresa un correo válido para crear uno nuevo.');
+					redirect('tickets/create');
+				}
+
+				$contactoId = $this->resolveOrCreateContactByEmail($db, $newContactEmail);
+				if ($contactoId <= 0) {
+					throw new RuntimeException('No se pudo crear el contacto para el correo ingresado.');
+				}
+			}
+
 			$catalog = $this->resolveTicketDefaults($db);
 			$ticketMeta = $this->getTableColumnMeta($db, 'tickets');
 
-			$estadoId = $catalog['estado_pendiente_id'] ?? $catalog['estado_abierto_id'] ?? $catalog['estado_fallback_id'];
-			$prioridadId = $catalog['prioridad_media_id'] ?? $catalog['prioridad_fallback_id'];
-			$grupoId = $catalog['grupo_sin_asignar_id'] ?? $catalog['grupo_fallback_id'];
+			$estados = $db->query("SELECT id FROM ticket_estados")->fetchAll(PDO::FETCH_COLUMN) ?: [];
+			$prioridades = $db->query("SELECT id FROM ticket_prioridades")->fetchAll(PDO::FETCH_COLUMN) ?: [];
+			$tipos = $db->query("SELECT id FROM ticket_tipos")->fetchAll(PDO::FETCH_COLUMN) ?: [];
+			$grupos = $db->query("SELECT id FROM ticket_grupos")->fetchAll(PDO::FETCH_COLUMN) ?: [];
+
+			$estadoIdDefault = $catalog['estado_pendiente_id'] ?? $catalog['estado_abierto_id'] ?? $catalog['estado_fallback_id'];
+			$prioridadIdDefault = $catalog['prioridad_media_id'] ?? $catalog['prioridad_fallback_id'];
+			$grupoIdDefault = $catalog['grupo_sin_asignar_id'] ?? $catalog['grupo_fallback_id'];
+
+			$estadoId = in_array($estadoIdInput, array_map('intval', $estados), true) ? $estadoIdInput : $estadoIdDefault;
+			$prioridadId = in_array($prioridadIdInput, array_map('intval', $prioridades), true) ? $prioridadIdInput : $prioridadIdDefault;
+			$grupoId = in_array($grupoIdInput, array_map('intval', $grupos), true) ? $grupoIdInput : $grupoIdDefault;
 			$tipoId = null;
 
 			if (($ticketMeta['tipo_id']['Null'] ?? 'NO') !== 'YES') {
-				$tipoId = $catalog['tipo_vacio_id'] ?? $catalog['tipo_fallback_id'];
+				$tipoIdDefault = $catalog['tipo_vacio_id'] ?? $catalog['tipo_fallback_id'];
+				$tipoId = in_array($tipoIdInput, array_map('intval', $tipos), true) ? $tipoIdInput : $tipoIdDefault;
 			}
 
 			if ($estadoId === null || $prioridadId === null || $grupoId === null) {
@@ -302,13 +352,14 @@ class TicketController extends Controller
 					'id' => $ticketId,
 				]);
 
-			$contactEmail = $this->fetchContactEmail($db, $contactoId);
+			$contactEmails = $this->fetchContactEmails($db, $contactoId);
+			$contactEmail = $contactEmails[0] ?? '';
 			$uid = Auth::user()['id'] ?? null;
 			$stmtMessage = $db->prepare("INSERT INTO ticket_mensajes
 				(tipo, para, cc, asunto, mensaje, cuenta_alias, ticket_id, usuario_id, fecha)
 				VALUES ('original', :para, :cc, :asunto, :mensaje, :alias, :ticket_id, :usuario_id, NOW())");
 			$stmtMessage->execute([
-				'para' => $contactEmail !== '' ? $contactEmail : null,
+				'para' => !empty($contactEmails) ? implode(', ', $contactEmails) : null,
 				'cc' => !empty($ccArr) ? implode(', ', $ccArr) : null,
 				'asunto' => $asunto,
 				'mensaje' => $descripcionHtml,
@@ -1703,14 +1754,14 @@ class TicketController extends Controller
 
 	private function sendTicketEmail(PDO $db, int $contactoId, string $asunto, string $descripcionHtml, string $accountAlias, string $ticketCode, array $cc = [], array $attachments = []): bool
 	{
-		$email = $this->fetchContactEmail($db, $contactoId);
-		if ($email === '' || !MailService::isValidEmail($email)) {
+		$emails = $this->fetchContactEmails($db, $contactoId);
+		if (empty($emails)) {
 			return false;
 		}
 
 		$body = $descripcionHtml . '<hr><p><strong>Codigo ticket:</strong> ' . e($ticketCode) . '</p>';
 		$mail = new MailService();
-		return $mail->send($email, $asunto, $body, $cc, [], $accountAlias !== '' ? $accountAlias : null, [], $attachments);
+		return $mail->send(implode(', ', $emails), $asunto, $body, $cc, [], $accountAlias !== '' ? $accountAlias : null, [], $attachments);
 	}
 
 	private function fetchContactEmail(PDO $db, int $contactoId): string
@@ -1724,6 +1775,216 @@ class TicketController extends Controller
 		$stmt = $db->prepare("SELECT {$emailColumn} AS email FROM contactos WHERE id = :id LIMIT 1");
 		$stmt->execute(['id' => $contactoId]);
 		return strtolower(trim((string) $stmt->fetchColumn()));
+	}
+
+	private function fetchContactEmails(PDO $db, int $contactoId): array
+	{
+		$emails = [];
+
+		$primary = $this->fetchContactEmail($db, $contactoId);
+		if ($primary !== '' && MailService::isValidEmail($primary)) {
+			$emails[$primary] = $primary;
+		}
+
+		try {
+			$stmt = $db->prepare("SELECT correo FROM correos_contacto WHERE contacto_id = :id AND estado = 'activo' ORDER BY id ASC");
+			$stmt->execute(['id' => $contactoId]);
+			foreach (($stmt->fetchAll(PDO::FETCH_COLUMN) ?: []) as $rowEmail) {
+				$email = strtolower(trim((string) $rowEmail));
+				if ($email === '' || !MailService::isValidEmail($email)) {
+					continue;
+				}
+				$emails[$email] = $email;
+			}
+		} catch (Throwable $e) {
+			// Mantener envio con el correo principal si correos_contacto no esta disponible.
+		}
+
+		return array_values($emails);
+	}
+
+	private function resolveOrCreateContactByEmail(PDO $db, string $email): int
+	{
+		$email = strtolower(trim($email));
+		if ($email === '' || !MailService::isValidEmail($email)) {
+			return 0;
+		}
+
+		$existing = $this->resolveContactIdByEmail($db, $email);
+		if ($existing > 0) {
+			return $existing;
+		}
+
+		$localPart = explode('@', $email)[0] ?? 'Contacto';
+		$label = preg_replace('/[^a-z0-9._-]+/i', ' ', $localPart);
+		$label = trim((string) $label);
+		if ($label === '') {
+			$label = 'Contacto';
+		}
+
+		$columns = $this->getTableColumns($db, 'contactos');
+		$emailColumn = $this->detectEmailColumn($columns);
+		if ($emailColumn !== null) {
+			$stmtInsert = $db->prepare("INSERT INTO contactos (nombre, apellido, {$emailColumn}, tipo, estado, created_at, updated_at)
+				VALUES (:nombre, :apellido, :email, 'externo', 'activo', NOW(), NOW())");
+			$stmtInsert->execute([
+				'nombre' => mb_substr($label, 0, 150),
+				'apellido' => 'Nuevo',
+				'email' => $email,
+			]);
+		} else {
+			$stmtInsert = $db->prepare("INSERT INTO contactos (nombre, apellido, tipo, estado, created_at, updated_at)
+				VALUES (:nombre, :apellido, 'externo', 'activo', NOW(), NOW())");
+			$stmtInsert->execute([
+				'nombre' => mb_substr($label, 0, 150),
+				'apellido' => 'Nuevo',
+			]);
+		}
+
+		$contactId = (int) $db->lastInsertId();
+		if ($contactId <= 0) {
+			return 0;
+		}
+
+		try {
+			$stmtMail = $db->prepare("INSERT INTO correos_contacto (contacto_id, correo, tipo, estado, created_at, updated_at)
+				VALUES (:contacto_id, :correo, 'personal', 'activo', NOW(), NOW())");
+			$stmtMail->execute([
+				'contacto_id' => $contactId,
+				'correo' => $email,
+			]);
+		} catch (Throwable $e) {
+			// No bloquear si correos_contacto no existe o tiene otra estructura.
+		}
+
+		return $contactId;
+	}
+
+	private function resolveContactIdByEmail(PDO $db, string $email): int
+	{
+		$email = strtolower(trim($email));
+		if ($email === '') {
+			return 0;
+		}
+
+		try {
+			$columns = $this->getTableColumns($db, 'contactos');
+			$emailColumn = $this->detectEmailColumn($columns);
+			if ($emailColumn !== null) {
+				$stmt = $db->prepare("SELECT id FROM contactos WHERE LOWER(TRIM({$emailColumn})) = :email ORDER BY id DESC LIMIT 1");
+				$stmt->execute(['email' => $email]);
+				$contactId = (int) ($stmt->fetchColumn() ?: 0);
+				if ($contactId > 0) {
+					return $contactId;
+				}
+			}
+		} catch (Throwable $e) {
+			// Continuar con fallback.
+		}
+
+		try {
+			$stmt = $db->prepare("SELECT contacto_id FROM correos_contacto WHERE LOWER(TRIM(correo)) = :email ORDER BY id DESC LIMIT 1");
+			$stmt->execute(['email' => $email]);
+			$contactId = (int) ($stmt->fetchColumn() ?: 0);
+			if ($contactId > 0) {
+				return $contactId;
+			}
+		} catch (Throwable $e) {
+			// Tabla puede no existir en algunos entornos.
+		}
+
+		try {
+			$stmt = $db->prepare("SELECT i.contacto_id
+				FROM interesados i
+				LEFT JOIN contactos c ON c.id = i.contacto_id
+				LEFT JOIN correos_contacto cc ON cc.contacto_id = i.contacto_id AND cc.estado = 'activo'
+				WHERE i.contacto_id IS NOT NULL
+				  AND (
+					LOWER(TRIM(COALESCE(c.email, ''))) = :email
+					OR LOWER(TRIM(COALESCE(cc.correo, ''))) = :email
+				  )
+				ORDER BY i.id DESC
+				LIMIT 1");
+			$stmt->execute(['email' => $email]);
+			$contactId = (int) ($stmt->fetchColumn() ?: 0);
+			if ($contactId > 0) {
+				return $contactId;
+			}
+		} catch (Throwable $e) {
+			// interesados puede no existir en algunos entornos.
+		}
+
+		return 0;
+	}
+
+	private function decorateContactsWithEmails(PDO $db, array $contacts): array
+	{
+		if (empty($contacts)) {
+			return [];
+		}
+
+		$contactIds = [];
+		$emailsByContact = [];
+		foreach ($contacts as $row) {
+			$contactId = (int) ($row['id'] ?? 0);
+			if ($contactId <= 0) {
+				continue;
+			}
+			$contactIds[$contactId] = $contactId;
+			$emailsByContact[$contactId] = [];
+			$primaryEmail = strtolower(trim((string) ($row['contacto_email'] ?? '')));
+			if ($primaryEmail !== '' && MailService::isValidEmail($primaryEmail)) {
+				$emailsByContact[$contactId][$primaryEmail] = $primaryEmail;
+			}
+		}
+
+		if (empty($contactIds)) {
+			return $contacts;
+		}
+
+		$placeholders = implode(',', array_fill(0, count($contactIds), '?'));
+		$params = array_values($contactIds);
+
+		try {
+			$stmt = $db->prepare("SELECT contacto_id, correo FROM correos_contacto WHERE estado = 'activo' AND contacto_id IN ({$placeholders})");
+			$stmt->execute($params);
+			foreach (($stmt->fetchAll() ?: []) as $row) {
+				$contactId = (int) ($row['contacto_id'] ?? 0);
+				$email = strtolower(trim((string) ($row['correo'] ?? '')));
+				if ($contactId <= 0 || $email === '' || !MailService::isValidEmail($email)) {
+					continue;
+				}
+				$emailsByContact[$contactId][$email] = $email;
+			}
+		} catch (Throwable $e) {
+			// Ignorar cuando correos_contacto no exista o no sea accesible.
+		}
+
+		foreach ($contacts as &$row) {
+			$contactId = (int) ($row['id'] ?? 0);
+			$list = array_values($emailsByContact[$contactId] ?? []);
+			$row['contacto_email'] = $list[0] ?? strtolower(trim((string) ($row['contacto_email'] ?? '')));
+			$row['contacto_emails'] = $list;
+			$row['contacto_emails_csv'] = implode(',', $list);
+		}
+		unset($row);
+
+		return $contacts;
+	}
+
+	private function parseCsvEmails(string $value): array
+	{
+		$result = [];
+		$items = preg_split('/\s*,\s*/', $value, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+		foreach ($items as $item) {
+			$email = strtolower(trim((string) $item));
+			if ($email === '' || !MailService::isValidEmail($email)) {
+				continue;
+			}
+			$result[$email] = $email;
+		}
+
+		return array_values($result);
 	}
 
 	private function parseEmailList(string $raw): array
