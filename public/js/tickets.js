@@ -1,6 +1,88 @@
 console.debug('Modulo tickets cargado');
 
 document.addEventListener('DOMContentLoaded', () => {
+	const setupManualEmailChipInput = (inputEl, chipsEl, hiddenEl) => {
+		if (!inputEl || !chipsEl || !hiddenEl) {
+			return {
+				add: () => false,
+				clear: () => {},
+			};
+		}
+
+		const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+		const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+		const selected = new Map();
+
+		const sync = () => {
+			hiddenEl.value = Array.from(selected.keys()).join(', ');
+			chipsEl.innerHTML = '';
+			Array.from(selected.values()).forEach((entry) => {
+				const chip = document.createElement('span');
+				chip.className = 'ticket-email-chip';
+				const text = document.createElement('span');
+				text.textContent = entry;
+				chip.appendChild(text);
+
+				const removeBtn = document.createElement('button');
+				removeBtn.type = 'button';
+				removeBtn.textContent = 'x';
+				removeBtn.addEventListener('click', () => {
+					selected.delete(entry);
+					sync();
+				});
+				chip.appendChild(removeBtn);
+				chipsEl.appendChild(chip);
+			});
+		};
+
+		const add = (rawValue) => {
+			const email = normalizeEmail(rawValue);
+			if (!isValidEmail(email) || selected.has(email)) {
+				return false;
+			}
+			selected.set(email, email);
+			sync();
+			return true;
+		};
+
+		inputEl.addEventListener('keydown', (event) => {
+			if (event.key === 'Enter' || event.key === ',' || event.key === ';' || event.key === 'Tab') {
+				event.preventDefault();
+				if (add(inputEl.value)) {
+					inputEl.value = '';
+				}
+			}
+			if (event.key === 'Backspace' && String(inputEl.value || '').trim() === '') {
+				const keys = Array.from(selected.keys());
+				const lastKey = keys.length > 0 ? keys[keys.length - 1] : '';
+				if (lastKey !== '') {
+					selected.delete(lastKey);
+					sync();
+				}
+			}
+		});
+
+		inputEl.addEventListener('blur', () => {
+			window.setTimeout(() => {
+				const value = String(inputEl.value || '').trim();
+				if (value !== '' && isValidEmail(value)) {
+					if (add(value)) {
+						inputEl.value = '';
+					}
+				}
+			}, 100);
+		});
+
+		return {
+			add,
+			clear: () => {
+				selected.clear();
+				inputEl.value = '';
+				sync();
+			},
+		};
+	};
+
 	const multiFilterForm = document.querySelector('[data-ticket-multi-filters]');
 	if (multiFilterForm) {
 		const updateTicketFilterLabel = (filterName) => {
@@ -453,6 +535,9 @@ document.addEventListener('DOMContentLoaded', () => {
 			window.setTimeout(() => syncContactFromEmail(true), 250);
 		}
 
+		const forwardRecipientsPicker = setupManualEmailChipInput(forwardRecipientsInput, forwardRecipientsChips, forwardRecipientsValue);
+		forwardRecipientsClear?.addEventListener('click', () => forwardRecipientsPicker.clear());
+
 		composeForm.addEventListener('submit', (event) => {
 			const html = (editor?.innerHTML || '').trim();
 			if (hiddenInput) {
@@ -495,10 +580,17 @@ document.addEventListener('DOMContentLoaded', () => {
 	const ticketShow = document.querySelector('[data-ticket-show="true"]');
 	if (ticketShow) {
 		const composeReply = document.getElementById('compose-reply');
+		const composeForward = document.getElementById('compose-forward');
 		const composeNote = document.getElementById('compose-note');
 		const tabReply = document.getElementById('tab-reply');
+		const tabForward = document.getElementById('tab-forward');
 		const tabNote = document.getElementById('tab-note');
 		const replyForm = document.getElementById('ticket-reply-form');
+		const forwardForm = document.getElementById('ticket-forward-form');
+		const forwardRecipientsInput = document.getElementById('forwardRecipientsInput');
+		const forwardRecipientsValue = document.getElementById('forwardRecipientsValue');
+		const forwardRecipientsChips = document.getElementById('forwardRecipientsChips');
+		const forwardRecipientsClear = document.getElementById('forwardRecipientsClear');
 		const replyEditor = document.getElementById('reply-editor');
 		const replyDropzone = document.getElementById('reply-dropzone');
 		const replyFileInput = document.getElementById('reply-attachments');
@@ -507,6 +599,8 @@ document.addEventListener('DOMContentLoaded', () => {
 		const uploadProgressBar = document.getElementById('reply-upload-progress-bar');
 		const uploadProgressText = document.getElementById('reply-upload-progress-text');
 		let previewObjectUrls = [];
+		const forwardRecipientsPicker = setupManualEmailChipInput(forwardRecipientsInput, forwardRecipientsChips, forwardRecipientsValue);
+		forwardRecipientsClear?.addEventListener('click', () => forwardRecipientsPicker.clear());
 
 		const formatFileSize = (bytes) => {
 			if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
@@ -880,10 +974,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
 		const setComposeMode = (mode) => {
 			const isReply = mode === 'reply';
+			const isForward = mode === 'forward';
 			if (composeReply) composeReply.style.display = isReply ? '' : 'none';
-			if (composeNote) composeNote.style.display = isReply ? 'none' : '';
+			if (composeForward) composeForward.style.display = isForward ? '' : 'none';
+			if (composeNote) composeNote.style.display = (!isReply && !isForward) ? '' : 'none';
 			if (tabReply) tabReply.classList.toggle('active', isReply);
-			if (tabNote) tabNote.classList.toggle('active', !isReply);
+			if (tabForward) tabForward.classList.toggle('active', isForward);
+			if (tabNote) tabNote.classList.toggle('active', (!isReply && !isForward));
 		};
 
 		ticketShow.querySelectorAll('[data-compose-mode]').forEach((button) => {
@@ -891,6 +988,21 @@ document.addEventListener('DOMContentLoaded', () => {
 				setComposeMode(button.getAttribute('data-compose-mode') || 'reply');
 			});
 		});
+
+		if (forwardForm) {
+			forwardForm.addEventListener('submit', (event) => {
+				if (forwardRecipientsInput && forwardRecipientsValue && String(forwardRecipientsInput.value || '').trim() !== '') {
+					forwardRecipientsPicker.add(forwardRecipientsInput.value);
+					forwardRecipientsInput.value = '';
+				}
+
+				if (!forwardRecipientsValue || String(forwardRecipientsValue.value || '').trim() === '') {
+					event.preventDefault();
+					showGlobalNotification('Debes agregar al menos un destinatario para reenviar.', 'warning');
+					forwardRecipientsInput?.focus();
+				}
+			});
+		}
 
 		ticketShow.querySelectorAll('[data-editor-cmd]').forEach((button) => {
 			button.addEventListener('click', () => {

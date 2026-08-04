@@ -747,7 +747,33 @@ class TicketController extends Controller
 		}
 
 		$ticketId = (int) $id;
-		$para     = trim((string) ($_POST['para']     ?? ''));
+		$ticket = (new Ticket())->findDetailed($ticketId);
+		if ($ticket === null) {
+			set_flash('error', 'El ticket no existe.');
+			redirect($this->buildTicketShowRedirect($ticketId, $return));
+		}
+
+		$db = Database::getInstance()->connection();
+		$para = '';
+		$stmtAlias = $db->prepare('SELECT account_alias, email_uid, graph_message_id, conversation_id, internet_message_id, message_id FROM mail_ticket_sync WHERE ticket_id = :tid ORDER BY id DESC LIMIT 1');
+		$stmtAlias->execute(['tid' => $ticketId]);
+		$threadOrigin = $stmtAlias->fetch() ?: [];
+		$originAlias = trim((string) ($threadOrigin['account_alias'] ?? ''));
+		$originUid = trim((string) ($threadOrigin['email_uid'] ?? ''));
+		if ($originAlias !== '' && $originUid !== '') {
+			try {
+				$mailbox = new MailboxService();
+				$messageResult = $mailbox->getMessage($originAlias, $originUid);
+				if (!empty($messageResult['ok']) && is_array($messageResult['message'] ?? null)) {
+					$para = strtolower(trim((string) ($messageResult['message']['from_email'] ?? '')));
+				}
+			} catch (Throwable $e) {
+				$para = '';
+			}
+		}
+		if ($para === '') {
+			$para = $this->fetchContactEmail($db, (int) ($ticket['contacto_id'] ?? 0));
+		}
 		$cc       = trim((string) ($_POST['cc']       ?? ''));
 		$asunto   = trim((string) ($_POST['asunto']   ?? ''));
 		$cuerpoHtml = $this->sanitizeRichText((string) ($_POST['cuerpo_html'] ?? ''));
@@ -785,17 +811,12 @@ class TicketController extends Controller
 		}
 
 		try {
-			$db  = Database::getInstance()->connection();
 			$uid = Auth::user()['id'] ?? null;
 			$this->ensureReplyAttachmentsTable($db);
 			$this->ensureTicketMensajesThreadColumns($db);
 
 			// Forzar cuenta de salida segun origen del ticket si existe.
-			$stmtAlias = $db->prepare('SELECT account_alias, email_uid, graph_message_id, conversation_id, internet_message_id, message_id FROM mail_ticket_sync WHERE ticket_id = :tid ORDER BY id DESC LIMIT 1');
-			$stmtAlias->execute(['tid' => $ticketId]);
-			$threadOrigin = $stmtAlias->fetch() ?: [];
-			$forcedAlias = trim((string) ($threadOrigin['account_alias'] ?? ''));
-			$originUid = trim((string) ($threadOrigin['email_uid'] ?? ''));
+			$forcedAlias = $originAlias;
 			$originGraphMessageId = trim((string) ($threadOrigin['graph_message_id'] ?? ''));
 			$originConversationId = trim((string) ($threadOrigin['conversation_id'] ?? ''));
 			$originInternetMessageId = trim((string) ($threadOrigin['internet_message_id'] ?? ($threadOrigin['message_id'] ?? '')));
@@ -983,6 +1004,97 @@ class TicketController extends Controller
 			}
 		} catch (Throwable $e) {
 			set_flash('error', 'Error al guardar la respuesta: ' . $e->getMessage());
+		}
+
+		redirect($this->buildTicketShowRedirect($ticketId, $return));
+	}
+
+	public function forwardTicket(string $id): void
+	{
+		Auth::requireAuth();
+		$return = trim((string) ($_POST['return'] ?? ''));
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			set_flash('error', 'Token CSRF inválido.');
+			redirect($this->buildTicketShowRedirect((int) $id, $return));
+		}
+
+		$ticketId = (int) $id;
+		$para = trim((string) ($_POST['para'] ?? ''));
+		$cc = trim((string) ($_POST['cc'] ?? ''));
+		$asunto = trim((string) ($_POST['asunto'] ?? ''));
+		$mensaje = trim((string) ($_POST['mensaje'] ?? ''));
+		$alias = trim((string) ($_POST['cuenta_alias'] ?? ''));
+
+		if ($para === '') {
+			set_flash('error', 'Debes indicar al menos un destinatario para reenviar.');
+			redirect($this->buildTicketShowRedirect($ticketId, $return));
+		}
+
+		$toParsed = $this->parseEmailList($para);
+		$toArr = $toParsed['valid'];
+		$toInvalid = $toParsed['invalid'];
+		if (empty($toArr)) {
+			set_flash('error', 'Debes indicar al menos un destinatario valido para reenviar.');
+			redirect($this->buildTicketShowRedirect($ticketId, $return));
+		}
+
+		$ccParsed = $this->parseEmailList($cc);
+		$ccArr = $ccParsed['valid'];
+		$ccInvalid = $ccParsed['invalid'];
+		if (!empty($toInvalid) || !empty($ccInvalid)) {
+			$invalid = array_merge($toInvalid, $ccInvalid);
+			set_flash('error', 'Hay correos inválidos: ' . implode(', ', array_values(array_unique($invalid))));
+			redirect($this->buildTicketShowRedirect($ticketId, $return));
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+			$this->ensureReplyAttachmentsTable($db);
+			$ticket = (new Ticket())->findDetailed($ticketId);
+			if ($ticket === null) {
+				throw new RuntimeException('El ticket solicitado no existe.');
+			}
+
+			$forwardBody = $this->buildForwardTicketBody($db, $ticketId, $mensaje);
+			$subject = $asunto !== '' ? $asunto : ('Fwd: ' . (string) ($ticket['asunto'] ?? 'Ticket'));
+			$uid = Auth::user()['id'] ?? null;
+
+			$stmt = $db->prepare("INSERT INTO ticket_mensajes
+				(tipo, para, cc, asunto, mensaje, cuenta_alias, ticket_id, usuario_id, fecha)
+				VALUES ('respuesta', :para, :cc, :asunto, :mensaje, :alias, :ticket_id, :usuario_id, NOW())");
+			$stmt->execute([
+				'para' => implode(', ', $toArr),
+				'cc' => !empty($ccArr) ? implode(', ', $ccArr) : null,
+				'asunto' => $subject,
+				'mensaje' => $forwardBody,
+				'alias' => $alias !== '' ? $alias : null,
+				'ticket_id' => $ticketId,
+				'usuario_id' => $uid,
+			]);
+			$mensajeId = (int) $db->lastInsertId();
+
+			$uploadResult = $this->storeReplyAttachments($db, $ticketId, $mensajeId, $_FILES['adjuntos'] ?? null);
+			$mailAttachments = (array) ($uploadResult['mailAttachments'] ?? []);
+			$uploadErrors = (array) ($uploadResult['errors'] ?? []);
+
+			$mailService = new MailService();
+			$mailSent = $mailService->send(implode(', ', $toArr), $subject, $forwardBody, $ccArr, [], $alias !== '' ? $alias : null, [], $mailAttachments);
+
+			if ($mailSent) {
+				$msg = 'Ticket reenviado correctamente.';
+				if (!empty($uploadErrors)) {
+					$msg .= ' Algunos adjuntos no se cargaron: ' . implode(' | ', $uploadErrors);
+				}
+				set_flash('success', $msg);
+			} else {
+				$msg = 'Ticket guardado para reenvío, pero no se pudo enviar el correo.';
+				if (!empty($uploadErrors)) {
+					$msg .= ' Adjuntos con error: ' . implode(' | ', $uploadErrors);
+				}
+				set_flash('error', $msg);
+			}
+		} catch (Throwable $e) {
+			set_flash('error', 'Error al reenviar el ticket: ' . $e->getMessage());
 		}
 
 		redirect($this->buildTicketShowRedirect($ticketId, $return));
@@ -1762,6 +1874,46 @@ class TicketController extends Controller
 		$body = $descripcionHtml . '<hr><p><strong>Codigo ticket:</strong> ' . e($ticketCode) . '</p>';
 		$mail = new MailService();
 		return $mail->send(implode(', ', $emails), $asunto, $body, $cc, [], $accountAlias !== '' ? $accountAlias : null, [], $attachments);
+	}
+
+	private function buildForwardTicketBody(PDO $db, int $ticketId, string $noteHtml = ''): string
+	{
+		$ticket = (new Ticket())->findDetailed($ticketId);
+		if ($ticket === null) {
+			throw new RuntimeException('El ticket solicitado no existe.');
+		}
+
+		$stmt = $db->prepare("SELECT tm.tipo, tm.para, tm.cc, tm.asunto, tm.mensaje, tm.fecha, u.nombre AS autor_nombre
+			FROM ticket_mensajes tm
+			LEFT JOIN usuarios u ON u.id = tm.usuario_id
+			WHERE tm.ticket_id = :ticket_id
+			ORDER BY tm.fecha ASC, tm.id ASC");
+		$stmt->execute(['ticket_id' => $ticketId]);
+		$mensajes = $stmt->fetchAll() ?: [];
+
+		$noteHtml = trim($noteHtml);
+		$summary = '<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#1f2937;">';
+		$summary .= '<p><strong>Reenvío del ticket:</strong> ' . e((string) ($ticket['codigo'] ?? '')) . '</p>';
+		$summary .= '<p><strong>Asunto:</strong> ' . e((string) ($ticket['asunto'] ?? '')) . '</p>';
+		$summary .= '<p><strong>Contacto:</strong> ' . e((string) ($ticket['contacto_nombre'] ?? '')) . '</p>';
+		if ($noteHtml !== '') {
+			$summary .= '<hr><div><strong>Mensaje adicional:</strong><div>' . nl2br(e($noteHtml)) . '</div></div>';
+		}
+		$summary .= '<hr><h4 style="margin:0 0 10px 0;">Historial de conversación</h4>';
+
+		foreach ($mensajes as $mensaje) {
+			$author = trim((string) ($mensaje['autor_nombre'] ?? $mensaje['tipo'] ?? 'Mensaje'));
+			$fecha = trim((string) ($mensaje['fecha'] ?? ''));
+			$cuerpo = (string) ($mensaje['mensaje'] ?? '');
+			$summary .= '<div style="border:1px solid #dbe2ea;border-radius:10px;padding:10px;margin-bottom:10px;">';
+			$summary .= '<div><strong>' . e($author) . '</strong>' . ($fecha !== '' ? (' <span style="color:#6b7280;">' . e($fecha) . '</span>') : '') . '</div>';
+			$summary .= '<div style="margin-top:6px;">' . $this->sanitizeRichText($cuerpo) . '</div>';
+			$summary .= '</div>';
+		}
+
+		$summary .= '</div>';
+
+		return $summary;
 	}
 
 	private function fetchContactEmail(PDO $db, int $contactoId): string

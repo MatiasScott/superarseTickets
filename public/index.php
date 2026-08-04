@@ -2,6 +2,18 @@
 
 declare(strict_types=1);
 
+// Extender sesión inactiva a 60 minutos.
+ini_set('session.gc_maxlifetime', '3600');
+ini_set('session.cookie_lifetime', '3600');
+session_set_cookie_params([
+	'lifetime' => 3600,
+	'path' => '/',
+	'domain' => '',
+	'secure' => !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off',
+	'httponly' => true,
+	'samesite' => 'Lax',
+]);
+
 session_start();
 
 define('ROOT_PATH', dirname(__DIR__));

@@ -1,4 +1,50 @@
 document.addEventListener('DOMContentLoaded', () => {
+        const markRequiredLabels = () => {
+            const controls = Array.from(document.querySelectorAll('input[required], select[required], textarea[required], [aria-required="true"]'));
+            const labelIds = new Set();
+
+            controls.forEach((control) => {
+                if (control.type === 'hidden' || control.disabled) {
+                    return;
+                }
+
+                const controlId = control.getAttribute('id') || '';
+                if (controlId !== '') {
+                    const label = document.querySelector(`label[for="${CSS.escape(controlId)}"]`);
+                    if (label) {
+                        labelIds.add(label);
+                    }
+                }
+
+                const wrapperLabel = control.closest('label');
+                if (wrapperLabel) {
+                    labelIds.add(wrapperLabel);
+                } else {
+                    const siblingLabel = control.previousElementSibling;
+                    if (siblingLabel && siblingLabel.tagName === 'LABEL') {
+                        labelIds.add(siblingLabel);
+                    }
+                }
+            });
+
+            labelIds.forEach((label) => {
+                if (label.dataset.requiredMarked === '1') {
+                    return;
+                }
+                label.dataset.requiredMarked = '1';
+                label.classList.add('is-required-field');
+
+                if (!label.querySelector('.required-field-marker')) {
+                    const marker = document.createElement('span');
+                    marker.className = 'required-field-marker';
+                    marker.textContent = ' *';
+                    label.appendChild(marker);
+                }
+            });
+        };
+
+        markRequiredLabels();
+
         const notificationsBtn = document.getElementById('topbarNotificationsBtn');
         const notificationsBadge = document.getElementById('topbarNotificationsBadge');
         const notificationsCount = document.getElementById('topbarNotificationsCount');

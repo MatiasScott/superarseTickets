@@ -263,6 +263,7 @@ $phones = array_values(array_unique($phones));
             <div class="ticket-compose">
                 <div class="compose-tabs">
                     <button class="compose-tab active" id="tab-reply" type="button" data-compose-mode="reply">Responder</button>
+                    <button class="compose-tab" id="tab-forward" type="button" data-compose-mode="forward">Reenviar</button>
                     <button class="compose-tab" id="tab-note" type="button" data-compose-mode="note">Nota interna</button>
                 </div>
 
@@ -301,7 +302,7 @@ $phones = array_values(array_unique($phones));
 
                         <div class="compose-row">
                             <label>Para:</label>
-                            <input type="email" name="para" required value="<?= e($contactoEmail) ?>" placeholder="destino@correo.com">
+                            <input type="text" name="para" value="<?= e($contactoEmail) ?>" readonly>
                         </div>
 
                         <div class="compose-row">
@@ -339,6 +340,42 @@ $phones = array_values(array_unique($phones));
                         <div class="compose-upload-progress" id="reply-upload-progress" style="display:none;">
                             <div class="compose-upload-progress-bar" id="reply-upload-progress-bar"></div>
                             <div class="compose-upload-progress-text" id="reply-upload-progress-text">Subiendo adjuntos...</div>
+                        </div>
+                    </form>
+                </div>
+
+                <div id="compose-forward" style="display:none;">
+                    <form id="ticket-forward-form" method="POST" action="<?= e(base_url('tickets/' . $ticketId . '/forward')) ?>">
+                        <input type="hidden" name="_token" value="<?= csrf_token() ?>">
+                        <input type="hidden" name="return" value="<?= e($ticketUrl) ?>">
+
+                        <div class="compose-row">
+                            <label>Para:<span class="required-field-marker"> *</span></label>
+                            <div class="ticket-email-chip-field">
+                                <div id="forwardRecipientsChips" class="ticket-email-chips"></div>
+                                <input type="text" id="forwardRecipientsInput" class="form-control" placeholder="Escribe un correo y presiona Enter">
+                                <input type="hidden" name="para" id="forwardRecipientsValue">
+                            </div>
+                        </div>
+
+                        <div class="compose-row">
+                            <label>CC:</label>
+                            <input type="text" name="cc" placeholder="Opcional: copias adicionales">
+                        </div>
+
+                        <div class="compose-row">
+                            <label>Asunto:</label>
+                            <input type="text" name="asunto" value="Fwd: <?= e($asunto) ?>">
+                        </div>
+
+                        <div class="compose-row">
+                            <label>Mensaje:</label>
+                            <textarea name="mensaje" class="form-control" rows="4" placeholder="Mensaje opcional que acompañará el reenvío"></textarea>
+                        </div>
+
+                        <div class="compose-actions">
+                            <button class="btn btn-outline-secondary btn-sm" type="button" id="forwardRecipientsClear">Limpiar destinatarios</button>
+                            <button class="btn btn-primary btn-sm" type="submit">Reenviar ticket</button>
                         </div>
                     </form>
                 </div>

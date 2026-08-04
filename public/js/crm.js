@@ -382,6 +382,8 @@ document.addEventListener('DOMContentLoaded', () => {
 	const initialQueryParams = new URLSearchParams(window.location.search);
 	const initialTab = normalizeText(initialQueryParams.get('tab') || '');
 	const initialOpenContactId = Number(initialQueryParams.get('open_contact_id') || 0);
+	const crmStudentsFiltersStorageKey = 'crm.interesados.students.filters.v1';
+	const crmProspectsFiltersStorageKey = 'crm.interesados.prospects.filters.v1';
 
 	const closeModalById = (modalId) => {
 		const modalEl = document.getElementById(modalId);
@@ -745,6 +747,116 @@ document.addEventListener('DOMContentLoaded', () => {
 		updateMultiFilterButtonLabel(prospectCreatedByBtn, getCheckedProspectFilterValues('prospect-created-by'), 'Todos', 'persona', 'personas');
 	};
 
+	const saveStudentsFiltersState = () => {
+		const payload = {
+			name: String(filterNameInput?.value || ''),
+			period: getCheckedFilterValues('period'),
+			career: getCheckedFilterValues('career'),
+			pipeline: getCheckedFilterValues('pipeline'),
+			level: getCheckedFilterValues('level'),
+		};
+
+		try {
+			window.sessionStorage?.setItem(crmStudentsFiltersStorageKey, JSON.stringify(payload));
+		} catch (error) {
+			// Ignorar errores de storage.
+		}
+	};
+
+	const saveProspectsFiltersState = () => {
+		const payload = {
+			search: String(prospectSearchInput?.value || ''),
+			origin: getCheckedProspectFilterValues('prospect-origin'),
+			stage: getCheckedProspectFilterValues('prospect-stage'),
+			career: getCheckedProspectFilterValues('prospect-career'),
+			createdBy: getCheckedProspectFilterValues('prospect-created-by'),
+			createdPreset: String(prospectCreatedPreset?.value || ''),
+			dateFrom: String(prospectDateFromInput?.value || ''),
+			dateTo: String(prospectDateToInput?.value || ''),
+		};
+
+		try {
+			window.sessionStorage?.setItem(crmProspectsFiltersStorageKey, JSON.stringify(payload));
+		} catch (error) {
+			// Ignorar errores de storage.
+		}
+	};
+
+	const restoreStudentsFiltersState = () => {
+		try {
+			const raw = window.sessionStorage?.getItem(crmStudentsFiltersStorageKey);
+			if (!raw) {
+				return;
+			}
+			const state = JSON.parse(raw);
+			if (!state || typeof state !== 'object') {
+				return;
+			}
+
+			if (filterNameInput && typeof state.name === 'string') {
+				filterNameInput.value = state.name;
+			}
+
+			const checkedByGroup = {
+				period: Array.isArray(state.period) ? state.period.map((value) => String(value || '').trim()) : [],
+				career: Array.isArray(state.career) ? state.career.map((value) => String(value || '').trim()) : [],
+				pipeline: Array.isArray(state.pipeline) ? state.pipeline.map((value) => String(value || '').trim()) : [],
+				level: Array.isArray(state.level) ? state.level.map((value) => String(value || '').trim()) : [],
+			};
+
+			Array.from(document.querySelectorAll('.crm-filter-checkbox')).forEach((checkbox) => {
+				const group = String(checkbox.getAttribute('data-filter-group') || '').trim();
+				const value = String(checkbox.value || '').trim();
+				const selected = checkedByGroup[group] || [];
+				checkbox.checked = selected.includes(value);
+			});
+		} catch (error) {
+			// Ignorar errores de storage/JSON.
+		}
+	};
+
+	const restoreProspectsFiltersState = () => {
+		try {
+			const raw = window.sessionStorage?.getItem(crmProspectsFiltersStorageKey);
+			if (!raw) {
+				return;
+			}
+			const state = JSON.parse(raw);
+			if (!state || typeof state !== 'object') {
+				return;
+			}
+
+			if (prospectSearchInput && typeof state.search === 'string') {
+				prospectSearchInput.value = state.search;
+			}
+			if (prospectCreatedPreset && typeof state.createdPreset === 'string') {
+				prospectCreatedPreset.value = state.createdPreset;
+			}
+			if (prospectDateFromInput && typeof state.dateFrom === 'string') {
+				prospectDateFromInput.value = state.dateFrom;
+			}
+			if (prospectDateToInput && typeof state.dateTo === 'string') {
+				prospectDateToInput.value = state.dateTo;
+			}
+
+			const checkedByGroup = {
+				'prospect-origin': Array.isArray(state.origin) ? state.origin.map((value) => normalizeText(String(value || ''))) : [],
+				'prospect-stage': Array.isArray(state.stage) ? state.stage.map((value) => normalizeText(String(value || ''))) : [],
+				'prospect-career': Array.isArray(state.career) ? state.career.map((value) => normalizeText(String(value || ''))) : [],
+				'prospect-created-by': Array.isArray(state.createdBy) ? state.createdBy.map((value) => normalizeText(String(value || ''))) : [],
+			};
+
+			Array.from(document.querySelectorAll('.crm-prospect-filter-checkbox')).forEach((checkbox) => {
+				const group = String(checkbox.getAttribute('data-filter-group') || '').trim();
+				const value = normalizeText(String(checkbox.value || ''));
+				const selected = checkedByGroup[group] || [];
+				checkbox.checked = selected.includes(value);
+			});
+		} catch (error) {
+			// Ignorar errores de storage/JSON.
+		}
+	};
+
 	const isVisibleRow = (row) => row && row.style.display !== 'none';
 	let studentsRowsCache = [];
 	let studentsFilterAbortController = null;
@@ -876,7 +988,9 @@ document.addEventListener('DOMContentLoaded', () => {
 			const matchPipeline = etapas.length === 0 || etapas.some((etapa) => rowPipeline.includes(etapa));
 			const matchLevel = niveles.length === 0 || niveles.includes(rowLevel);
 
-			const match = matchPeriod && matchName && matchCareer && matchPipeline && matchLevel;
+			const match = nombre !== ''
+				? matchName
+				: (matchPeriod && matchCareer && matchPipeline && matchLevel);
 			row.style.display = match ? '' : 'none';
 			if (match) {
 				visible += 1;
@@ -899,11 +1013,15 @@ document.addEventListener('DOMContentLoaded', () => {
 		const etapas = getCheckedFilterValues('pipeline');
 		const niveles = getCheckedFilterValues('level');
 
-		if (periodos.length > 0) params.set('periodo', periodos.join(','));
-		if (nombre !== '') params.set('nombre', nombre);
-		if (carreras.length > 0) params.set('carrera', carreras.join(','));
-		if (etapas.length > 0) params.set('etapa', etapas.join(','));
-		if (niveles.length > 0) params.set('nivel', niveles.join(','));
+		if (nombre !== '') {
+			// Búsqueda independiente: cuando hay texto, ignorar filtros activos temporalmente.
+			params.set('nombre', nombre);
+		} else {
+			if (periodos.length > 0) params.set('periodo', periodos.join(','));
+			if (carreras.length > 0) params.set('carrera', carreras.join(','));
+			if (etapas.length > 0) params.set('etapa', etapas.join(','));
+			if (niveles.length > 0) params.set('nivel', niveles.join(','));
+		}
 
 		studentsFilterRequestId += 1;
 		const requestId = studentsFilterRequestId;
@@ -1068,29 +1186,53 @@ document.addEventListener('DOMContentLoaded', () => {
 				}
 			}
 
-			row.style.display = (matchSearch && matchOrigin && matchStage && matchCareer && matchCreatedBy && matchCreated) ? '' : 'none';
+			const match = searchValue !== ''
+				? matchSearch
+				: (matchOrigin && matchStage && matchCareer && matchCreatedBy && matchCreated);
+			row.style.display = match ? '' : 'none';
 		});
 		reindexVisibleProspectsRows();
 		updateProspectsCounter();
+		saveProspectsFiltersState();
 	};
 
-	filterNameInput?.addEventListener('input', applyTableFilters);
+	restoreStudentsFiltersState();
+	restoreProspectsFiltersState();
+
+	filterNameInput?.addEventListener('input', () => {
+		saveStudentsFiltersState();
+		applyTableFilters();
+	});
 	Array.from(document.querySelectorAll('.crm-filter-checkbox')).forEach((checkbox) => {
 		checkbox.addEventListener('change', () => {
 			refreshStudentsMultiFilterLabels();
+			saveStudentsFiltersState();
 			applyTableFilters();
 		});
 	});
 	Array.from(document.querySelectorAll('.crm-prospect-filter-checkbox')).forEach((checkbox) => {
 		checkbox.addEventListener('change', () => {
 			refreshProspectMultiFilterLabels();
+			saveProspectsFiltersState();
 			applyProspectFilters();
 		});
 	});
-	prospectSearchInput?.addEventListener('input', applyProspectFilters);
-	prospectCreatedPreset?.addEventListener('change', applyProspectFilters);
-	prospectDateFromInput?.addEventListener('change', applyProspectFilters);
-	prospectDateToInput?.addEventListener('change', applyProspectFilters);
+	prospectSearchInput?.addEventListener('input', () => {
+		saveProspectsFiltersState();
+		applyProspectFilters();
+	});
+	prospectCreatedPreset?.addEventListener('change', () => {
+		saveProspectsFiltersState();
+		applyProspectFilters();
+	});
+	prospectDateFromInput?.addEventListener('change', () => {
+		saveProspectsFiltersState();
+		applyProspectFilters();
+	});
+	prospectDateToInput?.addEventListener('change', () => {
+		saveProspectsFiltersState();
+		applyProspectFilters();
+	});
 	filterClearBtn?.addEventListener('click', () => {
 		if (filterNameInput) {
 			filterNameInput.value = '';
@@ -1099,6 +1241,7 @@ document.addEventListener('DOMContentLoaded', () => {
 			checkbox.checked = false;
 		});
 		refreshStudentsMultiFilterLabels();
+		saveStudentsFiltersState();
 
 		applyTableFilters();
 	});
@@ -1120,6 +1263,7 @@ document.addEventListener('DOMContentLoaded', () => {
 			prospectDateToInput.value = '';
 		}
 		refreshProspectMultiFilterLabels();
+		saveProspectsFiltersState();
 		applyProspectFilters();
 	});
 
@@ -1127,6 +1271,8 @@ document.addEventListener('DOMContentLoaded', () => {
 	applyProspectFilters();
 	refreshStudentsMultiFilterLabels();
 	refreshProspectMultiFilterLabels();
+	saveStudentsFiltersState();
+	saveProspectsFiltersState();
 
 	function bindStudentActions() {
 		const contactLinks = document.querySelectorAll('.student-contact-link');
