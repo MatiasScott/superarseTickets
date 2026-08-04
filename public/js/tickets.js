@@ -535,9 +535,6 @@ document.addEventListener('DOMContentLoaded', () => {
 			window.setTimeout(() => syncContactFromEmail(true), 250);
 		}
 
-		const forwardRecipientsPicker = setupManualEmailChipInput(forwardRecipientsInput, forwardRecipientsChips, forwardRecipientsValue);
-		forwardRecipientsClear?.addEventListener('click', () => forwardRecipientsPicker.clear());
-
 		composeForm.addEventListener('submit', (event) => {
 			const html = (editor?.innerHTML || '').trim();
 			if (hiddenInput) {
