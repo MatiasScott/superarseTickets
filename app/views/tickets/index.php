@@ -293,13 +293,17 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 		<!-- Tabla de tickets -->
 		<?php
 		// Construir query string preservando filtros
-				$qBase = http_build_query(array_filter($filters, static function ($value): bool {
+				$returnParams = array_filter($filters, static function ($value): bool {
 					if (is_array($value)) {
 						return !empty($value);
 					}
 
 					return $value !== '';
-				}));
+				});
+		if ($page > 1) {
+			$returnParams['page'] = $page;
+		}
+		$qBase = http_build_query($returnParams);
 		$qBase = $qBase !== '' ? $qBase . '&' : '';
 		$returnUrl = base_url('tickets' . ($qBase !== '' ? ('?' . rtrim($qBase, '&')) : ''));
 		?>

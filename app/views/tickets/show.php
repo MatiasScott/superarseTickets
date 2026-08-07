@@ -271,6 +271,7 @@ $phones = array_values(array_unique($phones));
                     <form id="ticket-reply-form" method="POST" action="<?= e(base_url('tickets/' . $ticketId . '/reply')) ?>" enctype="multipart/form-data" data-editor-form="reply-editor:reply-body" data-reply-upload-form="true">
                         <input type="hidden" name="_token" value="<?= csrf_token() ?>">
                         <input type="hidden" name="cuerpo_html" id="reply-body">
+                        <input type="hidden" name="request_key" id="reply-request-key" value="">
                            <input type="hidden" name="return" value="<?= e($ticketUrl) ?>">
 
                         <?php if (!empty($mailAccounts)): ?>
@@ -334,7 +335,7 @@ $phones = array_values(array_unique($phones));
 
                         <div class="compose-actions">
                             <button class="btn btn-outline-secondary btn-sm" type="button" data-editor-target="reply-editor" data-editor-clear="true">Limpiar</button>
-                            <button class="btn btn-primary btn-sm" type="submit">Enviar respuesta</button>
+                            <button class="btn btn-primary btn-sm" type="submit" id="reply-submit-button">Enviar respuesta</button>
                         </div>
 
                         <div class="compose-upload-progress" id="reply-upload-progress" style="display:none;">

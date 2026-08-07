@@ -665,6 +665,7 @@ class TicketController extends Controller
 			$total = $ticketModel->countFiltered($activeFilters);
 			$pages = max(1, (int) ceil($total / $perPage));
 			$page = min($page, $pages);
+			$db = Database::getInstance()->connection();
 
 			$offset = ($page - 1) * $perPage;
 			$rows = $ticketModel->getFiltered($activeFilters, $perPage, $offset);
@@ -674,7 +675,7 @@ class TicketController extends Controller
 
 			$currentIndex = array_search($ticketId, $ids, true);
 			if ($currentIndex === false) {
-				return $result;
+				return $this->resolveTicketNavigationIdFallback($db, $ticketId, $queryParams, $filters['direction'] ?? 'desc');
 			}
 
 			$prevId = null;
@@ -717,7 +718,55 @@ class TicketController extends Controller
 				];
 			}
 		} catch (Throwable $e) {
-			return $result;
+			try {
+				$db = Database::getInstance()->connection();
+				return $this->resolveTicketNavigationIdFallback($db, $ticketId, $queryParams, $filters['direction'] ?? 'desc');
+			} catch (Throwable $inner) {
+				return $result;
+			}
+		}
+
+		return $result;
+	}
+
+	private function resolveTicketNavigationIdFallback(PDO $db, int $ticketId, array $queryParams, string $direction): array
+	{
+		$result = [
+			'prev' => null,
+			'next' => null,
+		];
+
+		$dir = strtolower(trim($direction));
+		$isAsc = $dir === 'asc';
+
+		if ($isAsc) {
+			$stmtPrev = $db->prepare('SELECT id FROM tickets WHERE id < :id ORDER BY id DESC LIMIT 1');
+			$stmtNext = $db->prepare('SELECT id FROM tickets WHERE id > :id ORDER BY id ASC LIMIT 1');
+		} else {
+			$stmtPrev = $db->prepare('SELECT id FROM tickets WHERE id > :id ORDER BY id ASC LIMIT 1');
+			$stmtNext = $db->prepare('SELECT id FROM tickets WHERE id < :id ORDER BY id DESC LIMIT 1');
+		}
+
+		$stmtPrev->execute(['id' => $ticketId]);
+		$stmtNext->execute(['id' => $ticketId]);
+
+		$prevId = (int) ($stmtPrev->fetchColumn() ?: 0);
+		$nextId = (int) ($stmtNext->fetchColumn() ?: 0);
+
+		unset($queryParams['page']);
+
+		if ($prevId > 0) {
+			$result['prev'] = [
+				'id' => $prevId,
+				'url' => $this->buildTicketShowUrlWithReturn($prevId, $queryParams, 1),
+			];
+		}
+
+		if ($nextId > 0) {
+			$result['next'] = [
+				'id' => $nextId,
+				'url' => $this->buildTicketShowUrlWithReturn($nextId, $queryParams, 1),
+			];
 		}
 
 		return $result;
@@ -810,10 +859,26 @@ class TicketController extends Controller
 			redirect($this->buildTicketShowRedirect($ticketId, $return));
 		}
 
+		$uid = Auth::user()['id'] ?? null;
+		$uidInt = (int) ($uid ?? 0);
+		$requestKey = $this->normalizeReplyRequestKey((string) ($_POST['request_key'] ?? ''));
+
 		try {
-			$uid = Auth::user()['id'] ?? null;
 			$this->ensureReplyAttachmentsTable($db);
 			$this->ensureTicketMensajesThreadColumns($db);
+			if ($requestKey !== '') {
+				$this->ensureTicketReplyRequestsTable($db);
+				$requestGuard = $this->acquireTicketReplyRequest($db, $ticketId, $uidInt, $requestKey);
+				if (empty($requestGuard['acquired'])) {
+					$status = trim((string) ($requestGuard['status'] ?? ''));
+					if ($status === 'processing') {
+						set_flash('info', 'La respuesta ya se esta procesando. Evitamos un envio duplicado.');
+					} else {
+						set_flash('info', 'La respuesta ya fue procesada anteriormente. No se realizo un nuevo envio.');
+					}
+					redirect($this->buildTicketShowRedirect($ticketId, $return));
+				}
+			}
 
 			// Forzar cuenta de salida segun origen del ticket si existe.
 			$forcedAlias = $originAlias;
@@ -847,6 +912,9 @@ class TicketController extends Controller
 				'internet_message_id' => $originInternetMessageId !== '' ? $originInternetMessageId : null,
 			]);
 			$mensajeId = (int) $db->lastInsertId();
+			if ($requestKey !== '') {
+				$this->markTicketReplyRequest($db, $ticketId, $requestKey, 'processing', $mensajeId, null);
+			}
 
 			$uploadResult = $this->storeReplyAttachments($db, $ticketId, $mensajeId, $_FILES['adjuntos'] ?? null);
 			$inlineResult = $this->storeInlineImagesFromHtml($db, $ticketId, $mensajeId, $cuerpoHtml);
@@ -956,6 +1024,11 @@ class TicketController extends Controller
 				]);
 			}
 
+			if ($requestKey !== '') {
+				$resultLabel = $sent ? 'sent' : 'saved_without_send';
+				$this->markTicketReplyRequest($db, $ticketId, $requestKey, 'succeeded', $mensajeId, $resultLabel);
+			}
+
 			if ($sent) {
 				$this->appendTicketMailDebug('ticket.reply.final', [
 					'ticket_id' => $ticketId,
@@ -1003,6 +1076,13 @@ class TicketController extends Controller
 				}
 			}
 		} catch (Throwable $e) {
+			if ($requestKey !== '') {
+				try {
+					$this->markTicketReplyRequest($db, $ticketId, $requestKey, 'failed', null, mb_substr($e->getMessage(), 0, 500));
+				} catch (Throwable $inner) {
+					// ignore secondary error while writing idempotency state
+				}
+			}
 			set_flash('error', 'Error al guardar la respuesta: ' . $e->getMessage());
 		}
 
@@ -2250,6 +2330,112 @@ class TicketController extends Controller
 		$clean = strip_tags($html, $allowed);
 		$clean = preg_replace('/javascript\s*:/i', '', $clean) ?? $clean;
 		return trim($clean);
+	}
+
+	private function normalizeReplyRequestKey(string $value): string
+	{
+		$key = trim($value);
+		if ($key === '') {
+			return '';
+		}
+
+		if (!preg_match('/^[a-zA-Z0-9._:-]{8,120}$/', $key)) {
+			return '';
+		}
+
+		return $key;
+	}
+
+	private function ensureTicketReplyRequestsTable(PDO $db): void
+	{
+		$db->exec("CREATE TABLE IF NOT EXISTS ticket_reply_requests (
+			id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+			ticket_id INT NOT NULL,
+			usuario_id INT NULL,
+			request_key VARCHAR(120) NOT NULL,
+			status VARCHAR(20) NOT NULL DEFAULT 'processing',
+			mensaje_id INT NULL,
+			error_message VARCHAR(500) NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uq_ticket_reply_request (ticket_id, request_key),
+			INDEX idx_ticket_reply_request_status (status),
+			INDEX idx_ticket_reply_request_ticket (ticket_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+	}
+
+	private function acquireTicketReplyRequest(PDO $db, int $ticketId, int $usuarioId, string $requestKey): array
+	{
+		if ($ticketId <= 0 || $requestKey === '') {
+			return ['acquired' => true, 'status' => ''];
+		}
+
+		try {
+			$stmtInsert = $db->prepare('INSERT INTO ticket_reply_requests (ticket_id, usuario_id, request_key, status, mensaje_id, error_message, created_at, updated_at)
+				VALUES (:ticket_id, :usuario_id, :request_key, :status, NULL, NULL, NOW(), NOW())');
+			$stmtInsert->execute([
+				'ticket_id' => $ticketId,
+				'usuario_id' => $usuarioId > 0 ? $usuarioId : null,
+				'request_key' => $requestKey,
+				'status' => 'processing',
+			]);
+			return ['acquired' => true, 'status' => 'processing'];
+		} catch (PDOException $e) {
+			$sqlState = (string) ($e->getCode() ?? '');
+			if ($sqlState !== '23000') {
+				throw $e;
+			}
+		}
+
+		$stmtSelect = $db->prepare('SELECT status FROM ticket_reply_requests WHERE ticket_id = :ticket_id AND request_key = :request_key LIMIT 1');
+		$stmtSelect->execute([
+			'ticket_id' => $ticketId,
+			'request_key' => $requestKey,
+		]);
+		$row = $stmtSelect->fetch() ?: [];
+		$status = trim((string) ($row['status'] ?? ''));
+
+		if ($status === 'failed') {
+			$stmtUpdate = $db->prepare('UPDATE ticket_reply_requests
+				SET status = :status,
+					usuario_id = :usuario_id,
+					mensaje_id = NULL,
+					error_message = NULL,
+					updated_at = NOW()
+				WHERE ticket_id = :ticket_id AND request_key = :request_key
+				LIMIT 1');
+			$stmtUpdate->execute([
+				'status' => 'processing',
+				'usuario_id' => $usuarioId > 0 ? $usuarioId : null,
+				'ticket_id' => $ticketId,
+				'request_key' => $requestKey,
+			]);
+			return ['acquired' => true, 'status' => 'processing'];
+		}
+
+		return ['acquired' => false, 'status' => $status !== '' ? $status : 'processing'];
+	}
+
+	private function markTicketReplyRequest(PDO $db, int $ticketId, string $requestKey, string $status, ?int $mensajeId = null, ?string $errorMessage = null): void
+	{
+		if ($ticketId <= 0 || $requestKey === '') {
+			return;
+		}
+
+		$stmt = $db->prepare('UPDATE ticket_reply_requests
+			SET status = :status,
+				mensaje_id = :mensaje_id,
+				error_message = :error_message,
+				updated_at = NOW()
+			WHERE ticket_id = :ticket_id AND request_key = :request_key
+			LIMIT 1');
+		$stmt->execute([
+			'status' => $status,
+			'mensaje_id' => ($mensajeId !== null && $mensajeId > 0) ? $mensajeId : null,
+			'error_message' => $errorMessage !== null && $errorMessage !== '' ? mb_substr($errorMessage, 0, 500) : null,
+			'ticket_id' => $ticketId,
+			'request_key' => $requestKey,
+		]);
 	}
 
 	private function ensureReplyAttachmentsTable(PDO $db): void

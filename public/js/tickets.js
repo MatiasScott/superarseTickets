@@ -595,9 +595,136 @@ document.addEventListener('DOMContentLoaded', () => {
 		const uploadProgress = document.getElementById('reply-upload-progress');
 		const uploadProgressBar = document.getElementById('reply-upload-progress-bar');
 		const uploadProgressText = document.getElementById('reply-upload-progress-text');
+		const replyRequestKeyInput = document.getElementById('reply-request-key');
+		const replySubmitButton = document.getElementById('reply-submit-button');
 		let previewObjectUrls = [];
+		let replyUploadInFlight = false;
+		let pendingReplyPayload = false;
 		const forwardRecipientsPicker = setupManualEmailChipInput(forwardRecipientsInput, forwardRecipientsChips, forwardRecipientsValue);
 		forwardRecipientsClear?.addEventListener('click', () => forwardRecipientsPicker.clear());
+
+		const createReplyRequestKey = () => {
+			if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+				return window.crypto.randomUUID();
+			}
+			return `rk-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+		};
+
+		const ensureReplyRequestKey = () => {
+			if (!replyRequestKeyInput) {
+				return '';
+			}
+			const current = String(replyRequestKeyInput.value || '').trim();
+			if (current !== '') {
+				return current;
+			}
+			const generated = createReplyRequestKey();
+			replyRequestKeyInput.value = generated;
+			return generated;
+		};
+
+		const rotateReplyRequestKey = () => {
+			if (!replyRequestKeyInput) {
+				return;
+			}
+			replyRequestKeyInput.value = createReplyRequestKey();
+		};
+
+		const setReplySubmittingState = (isSubmitting) => {
+			if (!replySubmitButton) {
+				return;
+			}
+
+			replySubmitButton.disabled = isSubmitting;
+			replySubmitButton.textContent = isSubmitting ? 'Enviando...' : 'Enviar respuesta';
+		};
+
+		const markReplyAsPendingUntilOnline = () => {
+			if (!uploadProgress || !uploadProgressText || !uploadProgressBar) {
+				return;
+			}
+			uploadProgress.style.display = '';
+			uploadProgressBar.style.width = '100%';
+			uploadProgressText.textContent = 'Sin conexion. Esperando internet para reintentar...';
+		};
+
+		const sendReplyPayload = (formData) => {
+			if (!replyForm || !uploadProgress || !uploadProgressBar || !uploadProgressText) {
+				return;
+			}
+			if (replyUploadInFlight) {
+				return;
+			}
+
+			replyUploadInFlight = true;
+			setReplySubmittingState(true);
+
+			const xhr = new XMLHttpRequest();
+			xhr.open('POST', replyForm.action, true);
+			xhr.timeout = 180000;
+
+			uploadProgress.style.display = '';
+			uploadProgressBar.style.width = '0%';
+			uploadProgressText.textContent = 'Subiendo adjuntos... 0%';
+
+			xhr.upload.addEventListener('progress', (e) => {
+				if (!e.lengthComputable) return;
+				const percent = Math.min(100, Math.round((e.loaded / e.total) * 100));
+				uploadProgressBar.style.width = `${percent}%`;
+				uploadProgressText.textContent = `Subiendo adjuntos... ${percent}%`;
+			});
+
+			xhr.addEventListener('load', () => {
+				replyUploadInFlight = false;
+				if (xhr.status >= 200 && xhr.status < 400) {
+					uploadProgressBar.style.width = '100%';
+					uploadProgressText.textContent = 'Procesando respuesta...';
+					pendingReplyPayload = false;
+					rotateReplyRequestKey();
+					window.location.reload();
+					return;
+				}
+
+				setReplySubmittingState(false);
+				uploadProgressText.textContent = 'No se pudo enviar la respuesta.';
+				showGlobalNotification('No se pudo enviar la respuesta. Puedes reintentar sin duplicar envio.', 'danger');
+			});
+
+			const handleNetworkFailure = () => {
+				replyUploadInFlight = false;
+				if (!navigator.onLine) {
+					markReplyAsPendingUntilOnline();
+					showGlobalNotification('Conexion perdida. Reintentaremos automaticamente cuando vuelva internet.', 'warning');
+					return;
+				}
+
+				setReplySubmittingState(false);
+				uploadProgressText.textContent = 'No se pudo subir los adjuntos.';
+				showGlobalNotification('No se pudo subir los adjuntos. Reintenta para continuar.', 'danger');
+			};
+
+			xhr.addEventListener('error', handleNetworkFailure);
+			xhr.addEventListener('timeout', handleNetworkFailure);
+
+			xhr.send(formData);
+		};
+
+		window.addEventListener('online', () => {
+			if (!pendingReplyPayload || replyUploadInFlight) {
+				return;
+			}
+
+			showGlobalNotification('Internet restablecido. Reintentando envio pendiente...', 'info');
+			sendReplyPayload(new FormData(replyForm));
+		});
+
+		window.addEventListener('offline', () => {
+			if (replyUploadInFlight) {
+				markReplyAsPendingUntilOnline();
+			}
+		});
+
+		ensureReplyRequestKey();
 
 		const formatFileSize = (bytes) => {
 			if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
@@ -1067,7 +1194,16 @@ document.addEventListener('DOMContentLoaded', () => {
 					return;
 				}
 
+				if (replyUploadInFlight) {
+					event.preventDefault();
+					showGlobalNotification('Ya existe un envio en curso. Espera un momento.', 'info');
+					return;
+				}
+
+				ensureReplyRequestKey();
+
 				if (!replyFileInput || !uploadProgress || !uploadProgressBar || !uploadProgressText) {
+					setReplySubmittingState(true);
 					return;
 				}
 
@@ -1089,37 +1225,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
 				const files = Array.from(replyFileInput.files || []);
 				if (files.length === 0) {
+					setReplySubmittingState(true);
 					return;
 				}
 
 				event.preventDefault();
 				const formData = new FormData(replyForm);
-				const xhr = new XMLHttpRequest();
-				xhr.open('POST', replyForm.action, true);
+				pendingReplyPayload = true;
 
-				uploadProgress.style.display = '';
-				uploadProgressBar.style.width = '0%';
-				uploadProgressText.textContent = 'Subiendo adjuntos... 0%';
+				if (!navigator.onLine) {
+					setReplySubmittingState(true);
+					markReplyAsPendingUntilOnline();
+					showGlobalNotification('Sin internet. El envio quedo en espera y se reintentara al reconectar.', 'warning');
+					return;
+				}
 
-				xhr.upload.addEventListener('progress', (e) => {
-					if (!e.lengthComputable) return;
-					const percent = Math.min(100, Math.round((e.loaded / e.total) * 100));
-					uploadProgressBar.style.width = `${percent}%`;
-					uploadProgressText.textContent = `Subiendo adjuntos... ${percent}%`;
-				});
-
-				xhr.addEventListener('load', () => {
-					uploadProgressBar.style.width = '100%';
-					uploadProgressText.textContent = 'Procesando respuesta...';
-					window.location.reload();
-				});
-
-				xhr.addEventListener('error', () => {
-					uploadProgressText.textContent = 'No se pudo subir los adjuntos.';
-					showGlobalNotification('No se pudo subir los adjuntos.', 'danger');
-				});
-
-				xhr.send(formData);
+				sendReplyPayload(formData);
 			});
 		}
 
