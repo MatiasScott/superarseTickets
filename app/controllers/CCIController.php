@@ -1230,9 +1230,15 @@ class CCIController extends Controller
 
 	private function normalizeImportedFreshchatMedia(PDO $db): int
 	{
+		// En algunos entornos bot_mensajes no tiene columna tipo/updated_at: evitar romper el sync.
+		$columns = $this->getTableColumnsSafe($db, 'bot_mensajes');
+		if (!in_array('tipo', $columns, true)) {
+			return 0;
+		}
+		$setUpdatedAt = in_array('updated_at', $columns, true) ? ', bm.updated_at = NOW()' : '';
 		$stmt = $db->prepare('UPDATE bot_mensajes bm
 			INNER JOIN bot_conversaciones bc ON bc.id = bm.conversacion_id
-			SET bm.tipo = "archivo", bm.updated_at = NOW()
+			SET bm.tipo = "archivo"' . $setUpdatedAt . '
 			WHERE bc.canal = "freshchat" AND bm.tipo = "texto" AND bm.mensaje REGEXP "^https?://"');
 		$stmt->execute();
 		return $stmt->rowCount();
@@ -1314,6 +1320,9 @@ class CCIController extends Controller
 
 	private function normalizeFreshchatMediaUrls(PDO $db): int
 	{
+		if (!in_array('tipo', $this->getTableColumnsSafe($db, 'bot_mensajes'), true)) {
+			return 0;
+		}
 		$stmt = $db->query('SELECT bm.id, bm.mensaje
 			FROM bot_mensajes bm
 			INNER JOIN bot_conversaciones bc ON bc.id = bm.conversacion_id
@@ -2066,7 +2075,7 @@ class CCIController extends Controller
 			) tc ON tc.contacto_id = bc.contacto_id
 			WHERE {$whereSql}
 			GROUP BY bc.id, bc.contacto_id, bc.canal, bc.estado, bc.asignado_a, bc.fecha_inicio, bc.created_at, c.nombre, c.apellido, tc.telefono, u.nombre
-			ORDER BY COALESCE(ultimo_mensaje_fecha, bc.fecha_inicio, bc.created_at) DESC";
+			ORDER BY COALESCE(MAX(COALESCE(bm.fecha, bm.created_at)), bc.fecha_inicio, bc.created_at) DESC";
 			$stmt = $db->prepare($sql);
 			$stmt->execute($params);
 			$items = $stmt->fetchAll() ?: [];
@@ -2083,10 +2092,15 @@ class CCIController extends Controller
 				$selStmt->execute(['id' => $selectedId]);
 				$selected = $selStmt->fetch() ?: null;
 
-				$threadStmt = $db->prepare("SELECT id, mensaje, tipo, es_bot, fecha, created_at
+				// En algunos entornos bot_mensajes no tiene columna tipo/fecha: seleccionar solo lo disponible.
+				$msgColumns = $this->getTableColumnsSafe($db, 'bot_mensajes');
+				$selectParts = ['id', 'mensaje', 'es_bot', 'created_at'];
+				$selectParts[] = in_array('tipo', $msgColumns, true) ? 'tipo' : "'texto' AS tipo";
+				$selectParts[] = in_array('fecha', $msgColumns, true) ? 'fecha' : 'created_at AS fecha';
+				$threadStmt = $db->prepare('SELECT ' . implode(', ', $selectParts) . '
 					FROM bot_mensajes
 					WHERE conversacion_id = :id
-					ORDER BY COALESCE(fecha, created_at) ASC, id ASC");
+					ORDER BY COALESCE(' . (in_array('fecha', $msgColumns, true) ? 'fecha' : 'created_at') . ', created_at) ASC, id ASC');
 				$threadStmt->execute(['id' => $selectedId]);
 				$thread = $threadStmt->fetchAll() ?: [];
 
@@ -2094,6 +2108,7 @@ class CCIController extends Controller
 			}
 
 		} catch (Throwable $e) {
+			error_log('CCI conversaciones() error: ' . $e->getMessage());
 			$items = [];
 		}
 
