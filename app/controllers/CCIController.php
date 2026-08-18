@@ -75,6 +75,63 @@ class CCIController extends Controller
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
+		$db->exec("CREATE TABLE IF NOT EXISTS cci_conversacion_refs (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			provider_code VARCHAR(50) NOT NULL,
+			external_conversation_id VARCHAR(191) NOT NULL,
+			conversacion_id INT NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uniq_cci_conv_ref (provider_code, external_conversation_id),
+			INDEX idx_cci_conv_ref_conversacion (conversacion_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+		$db->exec("CREATE TABLE IF NOT EXISTS cci_asesor_usuario_map (
+			crm_asesor_id INT PRIMARY KEY,
+			usuario_id INT NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			INDEX idx_cci_asesor_usuario_usuario (usuario_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+		$db->exec("CREATE TABLE IF NOT EXISTS user_notifications (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			user_id INT NOT NULL,
+			title VARCHAR(180) NOT NULL,
+			message TEXT NOT NULL,
+			url VARCHAR(500) NULL,
+			type VARCHAR(50) NOT NULL DEFAULT 'info',
+			is_read TINYINT(1) NOT NULL DEFAULT 0,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_user_notifications_user_read (user_id, is_read),
+			INDEX idx_user_notifications_created (created_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+		// El ENUM original solo admite activo/inactivo: ampliarlo para poder cerrar conversaciones.
+		try {
+			$estadoCol = $db->query("SHOW COLUMNS FROM bot_conversaciones LIKE 'estado'")->fetch();
+			if ($estadoCol && !str_contains(strtolower((string) ($estadoCol['Type'] ?? '')), "'cerrado'")) {
+				$db->exec("ALTER TABLE bot_conversaciones MODIFY estado ENUM('activo','inactivo','cerrado') NULL DEFAULT 'activo'");
+			}
+		} catch (Throwable $e) {
+			// Sin permisos de ALTER se mantiene el comportamiento actual.
+		}
+
+		$db->exec("CREATE TABLE IF NOT EXISTS cci_sync_diagnostics (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			provider_code VARCHAR(50) NOT NULL,
+			window_start DATETIME NULL,
+			window_end DATETIME NULL,
+			source_rows INT NOT NULL DEFAULT 0,
+			conversation_rows INT NOT NULL DEFAULT 0,
+			imported_rows INT NOT NULL DEFAULT 0,
+			skipped_rows INT NOT NULL DEFAULT 0,
+			delimiter_name VARCHAR(20) NULL,
+			headers_json TEXT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_cci_sync_diag_provider_created (provider_code, created_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
 		$db->exec("CREATE TABLE IF NOT EXISTS cci_plantillas (
 			id BIGINT AUTO_INCREMENT PRIMARY KEY,
 			nombre VARCHAR(150) NOT NULL,
@@ -500,6 +557,13 @@ class CCIController extends Controller
 		// Normalizar tipo al ENUM válido de la BD: 'texto' | 'archivo'
 		$fileTypes = ['image', 'video', 'audio', 'document', 'sticker', 'voice', 'archivo'];
 		$tipoNorm = in_array(strtolower($tipo), $fileTypes, true) ? 'archivo' : 'texto';
+		$normalizedDateTime = date('Y-m-d H:i:s');
+		if (trim($dateTime) !== '') {
+			$timestamp = strtotime($dateTime);
+			if ($timestamp !== false) {
+				$normalizedDateTime = date('Y-m-d H:i:s', $timestamp);
+			}
+		}
 
 		$columns = $this->getTableColumnsSafe($db, 'bot_mensajes');
 		$allowed = [
@@ -507,7 +571,7 @@ class CCIController extends Controller
 			'mensaje' => mb_substr($text, 0, 10000),
 			'es_bot' => $isOut ? 1 : 0,
 			'tipo' => $tipoNorm,
-			'fecha' => $dateTime !== '' ? $dateTime : date('Y-m-d H:i:s'),
+			'fecha' => $normalizedDateTime,
 			'created_at' => date('Y-m-d H:i:s'),
 			'updated_at' => date('Y-m-d H:i:s'),
 		];
@@ -876,6 +940,12 @@ class CCIController extends Controller
 		
 		$db = $this->db();
 		$this->ensureCciTables($db);
+		$conversationStmt = $db->prepare('SELECT canal FROM bot_conversaciones WHERE id = :id LIMIT 1');
+		$conversationStmt->execute(['id' => $id]);
+		if ((string) ($conversationStmt->fetchColumn() ?: '') === 'freshchat') {
+			set_flash('error', 'El envío desde CCI está deshabilitado para Freshchat hasta implementar su respuesta por API.');
+			redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
+		}
 		$phone = $this->resolveConversationPhone($db, (int) $id);
 		if ($phone === '') {
 			set_flash('error', 'No se encontró un número para la conversación seleccionada.');
@@ -1125,6 +1195,453 @@ class CCIController extends Controller
 	public function syncWhatsApp(): void
 	{
 		$this->syncWhatchimp();
+	}
+
+	private function extractFreshchatMessage(string $messageParts): array
+	{
+		$parts = json_decode($messageParts, true);
+		if (!is_array($parts)) {
+			$text = trim($messageParts);
+			return ['text' => $text, 'tipo' => preg_match('#^https?://#i', $text) ? 'archivo' : 'texto'];
+		}
+
+		$texts = [];
+		$mediaUrls = [];
+		foreach ($parts as $part) {
+			if (!is_array($part)) {
+				continue;
+			}
+			$text = trim((string) ($part['text']['content'] ?? ''));
+			if ($text !== '') {
+				$texts[] = $text;
+			}
+			foreach (['image', 'video', 'file'] as $mediaType) {
+				$url = trim((string) ($part[$mediaType]['url'] ?? ''));
+				if ($url !== '') {
+					$mediaUrls[] = $url;
+				}
+			}
+		}
+		if ($mediaUrls !== []) {
+			return ['text' => implode("\n", $mediaUrls), 'tipo' => 'archivo'];
+		}
+		return ['text' => implode("\n", $texts), 'tipo' => 'texto'];
+	}
+
+	private function normalizeImportedFreshchatMedia(PDO $db): int
+	{
+		$stmt = $db->prepare('UPDATE bot_mensajes bm
+			INNER JOIN bot_conversaciones bc ON bc.id = bm.conversacion_id
+			SET bm.tipo = "archivo", bm.updated_at = NOW()
+			WHERE bc.canal = "freshchat" AND bm.tipo = "texto" AND bm.mensaje REGEXP "^https?://"');
+		$stmt->execute();
+		return $stmt->rowCount();
+	}
+
+	private function cacheFreshchatMedia(string $url, string $externalMessageId): string
+	{
+		if (!filter_var($url, FILTER_VALIDATE_URL) || !function_exists('curl_init')) {
+			return $url;
+		}
+
+		$headers = [];
+		$curl = curl_init($url);
+		if ($curl === false) {
+			return $url;
+		}
+		curl_setopt_array($curl, [
+			CURLOPT_RETURNTRANSFER => true,
+			CURLOPT_FOLLOWLOCATION => true,
+			CURLOPT_CONNECTTIMEOUT => 10,
+			CURLOPT_TIMEOUT => 45,
+			CURLOPT_SSL_VERIFYPEER => true,
+			CURLOPT_SSL_VERIFYHOST => 2,
+			CURLOPT_HEADERFUNCTION => static function ($curl, string $header) use (&$headers): int {
+				$separator = strpos($header, ':');
+				if ($separator !== false) {
+					$headers[strtolower(trim(substr($header, 0, $separator)))] = trim(substr($header, $separator + 1));
+				}
+				return strlen($header);
+			},
+		]);
+		$body = curl_exec($curl);
+		$httpCode = (int) curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+		curl_close($curl);
+		if (!is_string($body) || $httpCode < 200 || $httpCode >= 300 || strlen($body) > 25 * 1024 * 1024) {
+			return $url;
+		}
+
+		$path = (string) (parse_url($url, PHP_URL_PATH) ?? '');
+		$extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+		$contentType = strtolower((string) ($headers['content-type'] ?? ''));
+		if ($extension === '') {
+			$extension = match (true) {
+				str_contains($contentType, 'jpeg') => 'jpg',
+				str_contains($contentType, 'png') => 'png',
+				str_contains($contentType, 'gif') => 'gif',
+				str_contains($contentType, 'webp') => 'webp',
+				str_contains($contentType, 'pdf') => 'pdf',
+				str_contains($contentType, 'mp4') => 'mp4',
+				str_contains($contentType, 'mpeg') => 'mp3',
+				default => 'bin',
+			};
+		}
+
+		$filename = 'freshchat_' . substr(hash('sha256', $externalMessageId . '|' . $url), 0, 32) . '.' . $extension;
+		$storageDir = STORAGE_PATH . '/uploads/cci-attachments';
+		$publicDir = PUBLIC_PATH . '/cci-attachments';
+		if ((!is_dir($storageDir) && !@mkdir($storageDir, 0755, true)) || (!is_dir($publicDir) && !@mkdir($publicDir, 0755, true))) {
+			return $url;
+		}
+		if (file_put_contents($storageDir . '/' . $filename, $body) === false || file_put_contents($publicDir . '/' . $filename, $body) === false) {
+			return $url;
+		}
+		@chmod($storageDir . '/' . $filename, 0644);
+		@chmod($publicDir . '/' . $filename, 0644);
+		return $filename;
+	}
+
+	private function extractFreshchatMediaUrl(string $value): string
+	{
+		if (preg_match('#https?://[^\s"<>]+?\.(?:jpe?g|png|gif|webp|bmp|mp4|mov|mp3|wav|m4a|pdf|docx?|xlsx?|zip)(?:\?[^\s"<>]*)?#i', $value, $match)) {
+			return (string) $match[0];
+		}
+		if (preg_match('#https?://[^\s"<>]+#i', $value, $match)) {
+			return (string) $match[0];
+		}
+		return '';
+	}
+
+	private function normalizeFreshchatMediaUrls(PDO $db): int
+	{
+		$stmt = $db->query('SELECT bm.id, bm.mensaje
+			FROM bot_mensajes bm
+			INNER JOIN bot_conversaciones bc ON bc.id = bm.conversacion_id
+			WHERE bc.canal = "freshchat" AND bm.tipo = "archivo" AND bm.mensaje LIKE "http%"');
+		$rows = $stmt ? ($stmt->fetchAll() ?: []) : [];
+		$update = $db->prepare('UPDATE bot_mensajes SET mensaje = :mensaje, updated_at = NOW() WHERE id = :id');
+		$updated = 0;
+		foreach ($rows as $row) {
+			$current = (string) ($row['mensaje'] ?? '');
+			$url = $this->extractFreshchatMediaUrl($current);
+			if ($url !== '' && $url !== $current) {
+				$update->execute(['mensaje' => $url, 'id' => (int) $row['id']]);
+				$updated++;
+			}
+		}
+		return $updated;
+	}
+
+	private function ensureFreshchatConversation(PDO $db, int $contactId, string $externalConversationId): ?int
+	{
+		$lookup = $db->prepare('SELECT conversacion_id FROM cci_conversacion_refs WHERE provider_code = "freshchat" AND external_conversation_id = :external_id LIMIT 1');
+		$lookup->execute(['external_id' => $externalConversationId]);
+		$conversationId = (int) ($lookup->fetchColumn() ?: 0);
+		if ($conversationId > 0) {
+			return $conversationId;
+		}
+
+		$columns = $this->getTableColumnsSafe($db, 'bot_conversaciones');
+		$allowed = [
+			'contacto_id' => $contactId,
+			'canal' => 'freshchat',
+			'estado' => 'activo',
+			'fecha_inicio' => date('Y-m-d H:i:s'),
+			'created_at' => date('Y-m-d H:i:s'),
+			'updated_at' => date('Y-m-d H:i:s'),
+		];
+		$data = array_filter($allowed, static fn($key) => in_array($key, $columns, true), ARRAY_FILTER_USE_KEY);
+		if ($data === []) {
+			return null;
+		}
+		$insert = $db->prepare('INSERT INTO bot_conversaciones (' . implode(', ', array_keys($data)) . ') VALUES (' . implode(', ', array_map(static fn($key) => ':' . $key, array_keys($data))) . ')');
+		$insert->execute($data);
+		$conversationId = (int) $db->lastInsertId();
+		if ($conversationId <= 0) {
+			return null;
+		}
+
+		$save = $db->prepare('INSERT INTO cci_conversacion_refs (provider_code, external_conversation_id, conversacion_id, created_at, updated_at)
+			VALUES ("freshchat", :external_id, :conversacion_id, NOW(), NOW())
+			ON DUPLICATE KEY UPDATE updated_at = NOW()');
+		$save->execute(['external_id' => $externalConversationId, 'conversacion_id' => $conversationId]);
+
+		// Otra ejecución pudo registrar la misma conversación: conservar la referencia ganadora.
+		$lookup->execute(['external_id' => $externalConversationId]);
+		$storedId = (int) ($lookup->fetchColumn() ?: 0);
+		return $storedId > 0 ? $storedId : $conversationId;
+	}
+
+	private function freshchatRowValue(array $row, array $keys): string
+	{
+		foreach ($keys as $key) {
+			$value = trim((string) ($row[$key] ?? ''));
+			if ($value !== '') {
+				return $value;
+			}
+		}
+		return '';
+	}
+
+	private function importFreshchatTranscript(PDO $db, string $csv): array
+	{
+		$firstLine = strtok($csv, "\r\n");
+		$delimiterCandidates = [',', ';', "\t"];
+		$delimiter = ',';
+		$delimiterCount = 0;
+		foreach ($delimiterCandidates as $candidate) {
+			$count = substr_count((string) $firstLine, $candidate);
+			if ($count > $delimiterCount) {
+				$delimiter = $candidate;
+				$delimiterCount = $count;
+			}
+		}
+
+		$stream = fopen('php://temp', 'r+');
+		fwrite($stream, $csv);
+		rewind($stream);
+		$headers = fgetcsv($stream, 0, $delimiter);
+		if (!is_array($headers)) {
+			return ['created' => 0, 'skipped' => 0, 'error' => 'El reporte Freshchat no contiene encabezados CSV.'];
+		}
+		$headers = array_map(static function ($header): string {
+			$normalized = strtolower(trim((string) $header));
+			$normalized = preg_replace('/^\xEF\xBB\xBF/', '', $normalized) ?? $normalized;
+			return trim((string) preg_replace('/[^a-z0-9]+/', '_', $normalized), '_');
+		}, $headers);
+		$rowsByConversation = [];
+		$sourceRows = 0;
+		while (($values = fgetcsv($stream, 0, $delimiter)) !== false) {
+			if (count($values) !== count($headers)) {
+				continue;
+			}
+			$sourceRows++;
+			$row = array_combine($headers, $values);
+			$conversationId = $this->freshchatRowValue($row, ['conversation_id', 'conversationid', 'conv_id', 'convid']);
+			if ($conversationId !== '') {
+				$rowsByConversation[$conversationId][] = $row;
+			}
+		}
+		fclose($stream);
+
+		$created = 0;
+		$skipped = 0;
+		foreach ($rowsByConversation as $externalConversationId => $rows) {
+			$phone = '';
+			$name = '';
+			foreach ($rows as $row) {
+				$phone = $this->normalizePhone($this->freshchatRowValue($row, ['user_phone', 'userphone', 'customer_phone', 'customerphone', 'actor_phone', 'actorphone']));
+				if ($phone !== '') {
+					$name = trim($this->freshchatRowValue($row, ['actor_first_name', 'actorfirstname', 'user_first_name', 'userfirstname']) . ' ' . $this->freshchatRowValue($row, ['actor_last_name', 'actorlastname', 'user_last_name', 'userlastname']));
+					break;
+				}
+			}
+			if ($phone === '') {
+				$skipped += count($rows);
+				continue;
+			}
+			$contactId = $this->ensureContactByPhone($db, $phone, $name);
+			$localConversationId = $this->ensureFreshchatConversation($db, (int) $contactId, $externalConversationId);
+			if ($localConversationId === null) {
+				$skipped += count($rows);
+				continue;
+			}
+			foreach ($rows as $row) {
+				$messageId = $this->freshchatRowValue($row, ['message_id', 'messageid', 'id']);
+				$message = $this->extractFreshchatMessage($this->freshchatRowValue($row, ['message_parts', 'messageparts', 'message_part', 'messagepart']));
+				$text = trim((string) ($message['text'] ?? ''));
+				if ($messageId === '' || $text === '') {
+					$skipped++;
+					continue;
+				}
+				if ($this->messageRefExists($db, 'freshchat', $messageId)) {
+					$skipped++;
+					continue;
+				}
+				$isOut = strtoupper($this->freshchatRowValue($row, ['actor_type', 'actortype'])) !== 'USER';
+				$tipo = (string) ($message['tipo'] ?? 'texto');
+				if ($tipo === 'archivo') {
+					$text = $this->extractFreshchatMediaUrl($text) ?: $text;
+					$text = $this->cacheFreshchatMedia($text, $messageId);
+				}
+				$localMessageId = $this->insertBotMessage($db, $localConversationId, $text, $isOut, $this->freshchatRowValue($row, ['created_time', 'createdtime', 'created_at', 'createdat', 'timestamp']), $tipo);
+				if ($localMessageId > 0) {
+					$this->saveMessageRef($db, 'freshchat', $messageId, $localConversationId, $localMessageId, $isOut ? 'out' : 'in');
+					$created++;
+				}
+			}
+		}
+
+		return [
+			'created' => $created,
+			'skipped' => $skipped,
+			'source_rows' => $sourceRows,
+			'conversation_rows' => array_sum(array_map('count', $rowsByConversation)),
+			'headers' => $headers,
+			'delimiter_name' => $delimiter === "\t" ? 'tabulador' : ($delimiter === ';' ? 'punto y coma' : 'coma'),
+		];
+	}
+
+	private function saveFreshchatDiagnostic(PDO $db, array $result, array $pending): void
+	{
+		$stmt = $db->prepare('INSERT INTO cci_sync_diagnostics (provider_code, window_start, window_end, source_rows, conversation_rows, imported_rows, skipped_rows, delimiter_name, headers_json, created_at)
+			VALUES ("freshchat", :window_start, :window_end, :source_rows, :conversation_rows, :imported_rows, :skipped_rows, :delimiter_name, :headers_json, NOW())');
+		$stmt->execute([
+			'window_start' => !empty($pending['window_start']) ? date('Y-m-d H:i:s', strtotime((string) $pending['window_start'])) : null,
+			'window_end' => !empty($pending['window_end']) ? date('Y-m-d H:i:s', strtotime((string) $pending['window_end'])) : null,
+			'source_rows' => (int) ($result['source_rows'] ?? 0),
+			'conversation_rows' => (int) ($result['conversation_rows'] ?? 0),
+			'imported_rows' => (int) ($result['created'] ?? 0),
+			'skipped_rows' => (int) ($result['skipped'] ?? 0),
+			'delimiter_name' => (string) ($result['delimiter_name'] ?? ''),
+			'headers_json' => json_encode(array_values($result['headers'] ?? []), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+		]);
+	}
+
+	public function freshchatDiagnostico(): void
+	{
+		Auth::requireAuth();
+		$db = $this->db();
+		$this->ensureCciTables($db);
+		$stmt = $db->query('SELECT * FROM cci_sync_diagnostics WHERE provider_code = "freshchat" ORDER BY id DESC LIMIT 10');
+		$diagnostics = $stmt ? ($stmt->fetchAll() ?: []) : [];
+		$this->view('cci/freshchat-diagnostico', compact('diagnostics'), [
+			'title' => 'Diagnóstico Freshchat',
+			'styles' => ['cci.css'],
+		]);
+	}
+
+	/**
+	 * Ejecuta un paso del ciclo Freshchat: importa el reporte pendiente o solicita la siguiente ventana diaria.
+	 */
+	private function processFreshchatSyncStep(PDO $db): array
+	{
+		$service = new FreshchatService();
+		$config = $service->getConfig();
+		if (trim((string) ($config['api_token'] ?? '')) === '') {
+			return ['ok' => true, 'status' => 'disabled', 'message' => 'Freshchat no tiene token configurado.'];
+		}
+
+		$stateStmt = $db->prepare('SELECT last_cursor FROM cci_sync_state WHERE provider_code = "freshchat" LIMIT 1');
+		$stateStmt->execute();
+		$state = $stateStmt->fetch() ?: [];
+		$pending = json_decode((string) ($state['last_cursor'] ?? ''), true);
+
+		if (is_array($pending) && !empty($pending['report_id'])) {
+			$report = $service->getReport((string) $pending['report_id']);
+			if (!$report['ok']) {
+				return ['ok' => false, 'status' => 'error', 'message' => (string) $report['error']];
+			}
+			$link = (string) ($report['data']['links'][0]['link']['href'] ?? '');
+			if ($link === '') {
+				return ['ok' => true, 'status' => 'pending', 'message' => 'La exportación Freshchat sigue en proceso.'];
+			}
+			$download = $service->downloadCsv($link);
+			if (!$download['ok']) {
+				return ['ok' => false, 'status' => 'error', 'message' => (string) $download['error']];
+			}
+
+			$result = $this->importFreshchatTranscript($db, (string) $download['csv']);
+			$result['normalized_media'] = $this->normalizeImportedFreshchatMedia($db);
+			$result['normalized_media_urls'] = $this->normalizeFreshchatMediaUrls($db);
+			$this->saveFreshchatDiagnostic($db, $result, $pending);
+
+			$windowEnd = trim((string) ($pending['window_end'] ?? ''));
+			$overallEnd = trim((string) ($pending['overall_end'] ?? ''));
+			$nextCursor = '';
+			if ($windowEnd !== '' && $overallEnd !== '' && strtotime($windowEnd) < strtotime($overallEnd)) {
+				$nextCursor = json_encode(['next_start' => $windowEnd, 'overall_end' => $overallEnd], JSON_UNESCAPED_SLASHES);
+			}
+			$saveState = $db->prepare('INSERT INTO cci_sync_state (provider_code, last_cursor, last_sync_at, updated_at) VALUES ("freshchat", :cursor, NOW(), NOW()) ON DUPLICATE KEY UPDATE last_cursor = VALUES(last_cursor), last_sync_at = NOW(), updated_at = NOW()');
+			$saveState->execute(['cursor' => $nextCursor]);
+
+			return [
+				'ok' => true,
+				'status' => 'imported',
+				'created' => (int) ($result['created'] ?? 0),
+				'skipped' => (int) ($result['skipped'] ?? 0),
+				'source_rows' => (int) ($result['source_rows'] ?? 0),
+				'message' => 'Freshchat sincronizado. Filas del reporte: ' . (int) ($result['source_rows'] ?? 0)
+					. ', importados: ' . (int) ($result['created'] ?? 0)
+					. ', omitidos: ' . (int) ($result['skipped'] ?? 0) . '.',
+			];
+		}
+
+		$overallEnd = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+		$startRaw = is_array($pending) ? trim((string) ($pending['next_start'] ?? '')) : trim((string) ($config['sync_start'] ?? ''));
+		try {
+			$start = $startRaw !== ''
+				? new DateTimeImmutable($startRaw, new DateTimeZone('UTC'))
+				: $overallEnd->sub(new DateInterval('P30D'));
+		} catch (Throwable $e) {
+			return ['ok' => false, 'status' => 'error', 'message' => 'FRESHCHAT_SYNC_START no tiene una fecha UTC válida.'];
+		}
+		if ($start >= $overallEnd) {
+			return ['ok' => true, 'status' => 'up_to_date', 'message' => 'El historial Freshchat ya está actualizado.'];
+		}
+
+		$windowEnd = min($start->add(new DateInterval('P1D')), $overallEnd);
+		$report = $service->requestChatTranscript($start->format('Y-m-d\TH:i:s.000\Z'), $windowEnd->format('Y-m-d\TH:i:s.000\Z'));
+		if (!$report['ok']) {
+			return ['ok' => false, 'status' => 'error', 'message' => (string) $report['error']];
+		}
+		$reportId = trim((string) ($report['data']['id'] ?? ''));
+		if ($reportId === '') {
+			return ['ok' => false, 'status' => 'error', 'message' => 'Freshchat no devolvió un identificador para la exportación.'];
+		}
+
+		$cursor = json_encode([
+			'report_id' => $reportId,
+			'window_start' => $start->format(DateTimeInterface::ATOM),
+			'window_end' => $windowEnd->format(DateTimeInterface::ATOM),
+			'overall_end' => $overallEnd->format(DateTimeInterface::ATOM),
+		], JSON_UNESCAPED_SLASHES);
+		$save = $db->prepare('INSERT INTO cci_sync_state (provider_code, last_cursor, updated_at) VALUES ("freshchat", :cursor, NOW()) ON DUPLICATE KEY UPDATE last_cursor = VALUES(last_cursor), updated_at = NOW()');
+		$save->execute(['cursor' => $cursor]);
+
+		return [
+			'ok' => true,
+			'status' => 'requested',
+			'message' => 'Exportación Freshchat solicitada para ' . $start->format('Y-m-d') . '.',
+		];
+	}
+
+	/**
+	 * Reclama el turno de ejecución de forma atómica para que dos procesos no sincronicen a la vez.
+	 */
+	private function claimFreshchatAutoSync(PDO $db): bool
+	{
+		$intervalSeconds = max(60, (int) env('FRESHCHAT_SYNC_INTERVAL_SECONDS', 300));
+		$db->prepare('INSERT IGNORE INTO cci_sync_state (provider_code, last_sync_at, updated_at) VALUES ("freshchat_auto", NULL, NOW())')
+			->execute();
+
+		$claim = $db->prepare('UPDATE cci_sync_state
+			SET last_sync_at = NOW(), updated_at = NOW()
+			WHERE provider_code = "freshchat_auto"
+			  AND (last_sync_at IS NULL OR last_sync_at <= DATE_SUB(NOW(), INTERVAL :seconds SECOND))');
+		$claim->bindValue(':seconds', $intervalSeconds, PDO::PARAM_INT);
+		$claim->execute();
+
+		return $claim->rowCount() > 0;
+	}
+
+	/**
+	 * Sincroniza Freshchat sin contexto HTTP (sin auth/csrf/redirect). Para uso desde AutoSyncScheduler.
+	 */
+	public function runFreshchatSyncBackground(): array
+	{
+		try {
+			$db = $this->db();
+			$this->ensureCciTables($db);
+
+			if (!$this->claimFreshchatAutoSync($db)) {
+				return ['ok' => true, 'status' => 'throttled'];
+			}
+
+			return $this->processFreshchatSyncStep($db);
+		} catch (Throwable $e) {
+			return ['ok' => false, 'status' => 'error', 'message' => $e->getMessage()];
+		}
 	}
 
 	/**
@@ -1494,24 +2011,36 @@ class CCIController extends Controller
 		$this->ensureCciTables($db);
 		$this->ensureProspectByInteraction($db);
 
-		$page = max(1, (int) ($_GET['page'] ?? 1));
-		$perPage = (int) ($_GET['per_page'] ?? 20);
-		if (!in_array($perPage, [20, 50, 100], true)) {
-			$perPage = 20;
-		}
 		$selectedId = (int) ($_GET['selected_id'] ?? 0);
+		$estadoFilter = strtolower(trim((string) ($_GET['estado'] ?? 'activo')));
+		if (!in_array($estadoFilter, ['activo', 'cerrado', 'todos'], true)) {
+			$estadoFilter = 'activo';
+		}
+		$asesorFilter = (int) ($_GET['asesor'] ?? 0);
 
 		$total = 0;
 		$items = [];
 		$thread = [];
 		$notes = [];
 		$selected = null;
+		$advisors = $this->fetchCciAdvisorOptions($db);
 
 		try {
-			$total = (int) $db->query('SELECT COUNT(*) FROM bot_conversaciones')->fetchColumn();
-			$pages = max(1, (int) ceil($total / $perPage));
-			$page = max(1, min($page, $pages));
-			$offset = ($page - 1) * $perPage;
+			$where = ["bc.canal = 'freshchat'"];
+			$params = [];
+			if ($estadoFilter !== 'todos') {
+				$where[] = 'bc.estado = :estado';
+				$params['estado'] = $estadoFilter;
+			}
+			if ($asesorFilter > 0) {
+				$where[] = 'bc.asignado_a = :asesor';
+				$params['asesor'] = $asesorFilter;
+			}
+			$whereSql = implode(' AND ', $where);
+
+			$countStmt = $db->prepare('SELECT COUNT(*) FROM bot_conversaciones bc WHERE ' . $whereSql);
+			$countStmt->execute($params);
+			$total = (int) $countStmt->fetchColumn();
 
 			$sql = "SELECT bc.id, bc.contacto_id, bc.canal, bc.estado, bc.asignado_a,
 				COALESCE(bc.fecha_inicio, bc.created_at) AS fecha_inicio,
@@ -1535,13 +2064,11 @@ class CCIController extends Controller
 					GROUP BY contacto_id
 				) y ON y.first_id = x.id
 			) tc ON tc.contacto_id = bc.contacto_id
+			WHERE {$whereSql}
 			GROUP BY bc.id, bc.contacto_id, bc.canal, bc.estado, bc.asignado_a, bc.fecha_inicio, bc.created_at, c.nombre, c.apellido, tc.telefono, u.nombre
-			ORDER BY COALESCE(ultimo_mensaje_fecha, bc.fecha_inicio, bc.created_at) DESC
-			LIMIT :limit OFFSET :offset";
+			ORDER BY COALESCE(ultimo_mensaje_fecha, bc.fecha_inicio, bc.created_at) DESC";
 			$stmt = $db->prepare($sql);
-			$stmt->bindValue(':limit', $perPage, PDO::PARAM_INT);
-			$stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
-			$stmt->execute();
+			$stmt->execute($params);
 			$items = $stmt->fetchAll() ?: [];
 
 			if ($selectedId <= 0 && !empty($items)) {
@@ -1549,7 +2076,10 @@ class CCIController extends Controller
 			}
 
 			if ($selectedId > 0) {
-				$selStmt = $db->prepare('SELECT * FROM bot_conversaciones WHERE id = :id LIMIT 1');
+				$selStmt = $db->prepare('SELECT bc.*, COALESCE(u.nombre, "Sin asignar") AS asesor
+					FROM bot_conversaciones bc
+					LEFT JOIN usuarios u ON u.id = bc.asignado_a
+					WHERE bc.id = :id AND bc.canal = "freshchat" LIMIT 1');
 				$selStmt->execute(['id' => $selectedId]);
 				$selected = $selStmt->fetch() ?: null;
 
@@ -1563,9 +2093,8 @@ class CCIController extends Controller
 				$notes = (new CciConversationNote())->byConversation($selectedId);
 			}
 
-			$pages = max(1, (int) ceil($total / $perPage));
 		} catch (Throwable $e) {
-			$pages = 1;
+			$items = [];
 		}
 
 		// Endpoint JSON para auto-refresh de mensajes desde el frontend
@@ -1586,10 +2115,42 @@ class CCIController extends Controller
 			exit;
 		}
 
-		$this->view('cci/conversaciones', compact('items', 'total', 'page', 'pages', 'perPage', 'selectedId', 'selected', 'thread', 'notes'), [
+		$this->view('cci/conversaciones', compact('items', 'total', 'selectedId', 'selected', 'thread', 'notes', 'advisors', 'estadoFilter', 'asesorFilter'), [
 			'title' => 'Centro de Comunicaciones - Conversaciones',
 			'styles' => ['cci.css'],
 		]);
+	}
+
+	public function updateConversationEstado(int $id): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			set_flash('error', 'Token CSRF inválido.');
+			redirect('cci/conversaciones?selected_id=' . max(1, $id));
+		}
+
+		$estado = strtolower(trim((string) ($_POST['estado'] ?? '')));
+		if (!in_array($estado, ['activo', 'cerrado'], true)) {
+			set_flash('error', 'Estado de conversación no válido.');
+			redirect('cci/conversaciones?selected_id=' . max(1, $id));
+		}
+
+		$db = $this->db();
+		$this->ensureCciTables($db);
+		$before = $db->prepare('SELECT estado FROM bot_conversaciones WHERE id = :id AND canal = "freshchat" LIMIT 1');
+		$before->execute(['id' => $id]);
+		$estadoActual = $before->fetchColumn();
+		if ($estadoActual === false) {
+			set_flash('error', 'Conversación Freshchat no encontrada.');
+			redirect('cci/conversaciones');
+		}
+
+		$db->prepare('UPDATE bot_conversaciones SET estado = :estado, updated_at = NOW() WHERE id = :id')
+			->execute(['estado' => $estado, 'id' => $id]);
+		AuditLogger::log('UPDATE', 'cci_conversacion_estado', $id, ['estado' => $estadoActual], ['estado' => $estado]);
+
+		set_flash('success', $estado === 'cerrado' ? 'Conversación cerrada.' : 'Conversación reabierta.');
+		redirect('cci/conversaciones?selected_id=' . max(1, $id));
 	}
 
 	public function storeConversationNote(int $id): void
@@ -2594,6 +3155,133 @@ class CCIController extends Controller
 		redirect('cci/respuestas-rapidas');
 	}
 
+	private function fetchCciAdvisorOptions(PDO $db): array
+	{
+		try {
+			$rows = $db->query('SELECT a.id, a.nombre, m.usuario_id AS mapped_usuario_id, u.nombre AS mapped_usuario_nombre
+				FROM crm_prospect_asesores a
+				LEFT JOIN cci_asesor_usuario_map m ON m.crm_asesor_id = a.id
+				LEFT JOIN usuarios u ON u.id = m.usuario_id AND u.estado = "activo"
+				WHERE a.estado = "activo"
+				ORDER BY a.nombre ASC')->fetchAll() ?: [];
+			$users = $db->query('SELECT id, nombre, email FROM usuarios WHERE estado = "activo" ORDER BY nombre ASC')->fetchAll() ?: [];
+			$options = [];
+			foreach ($rows as $row) {
+				$userId = (int) ($row['mapped_usuario_id'] ?? 0);
+				$userName = trim((string) ($row['mapped_usuario_nombre'] ?? ''));
+				if ($userId <= 0 || $userName === '') {
+					$advisorName = $this->normalizeAdvisorIdentity((string) ($row['nombre'] ?? ''));
+					foreach ($users as $user) {
+						$userNameKey = $this->normalizeAdvisorIdentity((string) ($user['nombre'] ?? ''));
+						$emailKey = $this->normalizeAdvisorIdentity((string) strtok((string) ($user['email'] ?? ''), '@'));
+						if ($advisorName !== '' && ($advisorName === $userNameKey || $advisorName === $emailKey)) {
+							$userId = (int) ($user['id'] ?? 0);
+							$userName = (string) ($user['nombre'] ?? '');
+							break;
+						}
+					}
+				}
+				if ($userId > 0 && $userName !== '') {
+					$row['usuario_id'] = $userId;
+					$row['usuario_nombre'] = $userName;
+					$options[] = $row;
+				}
+			}
+			return $options;
+		} catch (Throwable $e) {
+			return [];
+		}
+	}
+
+	private function normalizeAdvisorIdentity(string $value): string
+	{
+		$value = trim(mb_strtolower($value));
+		$value = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $value) ?: $value;
+		return preg_replace('/[^a-z0-9]+/', '', $value) ?? '';
+	}
+
+	public function mapCciAdvisorUser(int $advisorId): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			set_flash('error', 'Token CSRF inválido.');
+			redirect('cci/asignaciones');
+		}
+		$db = $this->db();
+		$this->ensureCciTables($db);
+		$userId = (int) ($_POST['usuario_id'] ?? 0);
+		$advisorStmt = $db->prepare('SELECT id FROM crm_prospect_asesores WHERE id = :id AND estado = "activo" LIMIT 1');
+		$advisorStmt->execute(['id' => $advisorId]);
+		$userStmt = $db->prepare('SELECT id FROM usuarios WHERE id = :id AND estado = "activo" LIMIT 1');
+		$userStmt->execute(['id' => $userId]);
+		if (!$advisorStmt->fetchColumn() || !$userStmt->fetchColumn()) {
+			set_flash('error', 'Selecciona un asesor CRM y un usuario activo válidos.');
+			redirect('cci/asignaciones');
+		}
+		$db->prepare('INSERT INTO cci_asesor_usuario_map (crm_asesor_id, usuario_id, created_at, updated_at)
+			VALUES (:advisor_id, :user_id, NOW(), NOW())
+			ON DUPLICATE KEY UPDATE usuario_id = VALUES(usuario_id), updated_at = NOW()')
+			->execute(['advisor_id' => $advisorId, 'user_id' => $userId]);
+		set_flash('success', 'Cuenta del asesor CRM vinculada correctamente.');
+		redirect('cci/asignaciones');
+	}
+
+	public function assignConversation(int $id): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			set_flash('error', 'Token CSRF inválido.');
+			redirect('cci/conversaciones?selected_id=' . $id);
+		}
+		$db = $this->db();
+		$this->ensureCciTables($db);
+		$advisorId = (int) ($_POST['crm_asesor_id'] ?? 0);
+		$target = $db->prepare('SELECT a.nombre AS asesor_nombre, m.usuario_id, u.nombre AS usuario_nombre
+			FROM crm_prospect_asesores a
+			INNER JOIN cci_asesor_usuario_map m ON m.crm_asesor_id = a.id
+			INNER JOIN usuarios u ON u.id = m.usuario_id AND u.estado = "activo"
+			WHERE a.id = :advisor_id AND a.estado = "activo" LIMIT 1');
+		$target->execute(['advisor_id' => $advisorId]);
+		$advisor = $target->fetch() ?: null;
+		if ($advisor === null) {
+			$options = $this->fetchCciAdvisorOptions($db);
+			foreach ($options as $option) {
+				if ((int) ($option['id'] ?? 0) === $advisorId) {
+					$advisor = [
+						'asesor_nombre' => (string) ($option['nombre'] ?? ''),
+						'usuario_id' => (int) ($option['usuario_id'] ?? 0),
+						'usuario_nombre' => (string) ($option['usuario_nombre'] ?? ''),
+					];
+					break;
+				}
+			}
+		}
+		if ($advisor === null) {
+			set_flash('error', 'El asesor CRM seleccionado aún no está vinculado a un usuario activo.');
+			redirect('cci/asignaciones');
+		}
+		$conversation = $db->prepare('SELECT id, asignado_a FROM bot_conversaciones WHERE id = :id AND canal = "freshchat" LIMIT 1');
+		$conversation->execute(['id' => $id]);
+		$row = $conversation->fetch() ?: null;
+		if ($row === null) {
+			set_flash('error', 'Conversación Freshchat no encontrada.');
+			redirect('cci/conversaciones');
+		}
+		$userId = (int) $advisor['usuario_id'];
+		$db->prepare('UPDATE bot_conversaciones SET asignado_a = :user_id, updated_at = NOW() WHERE id = :id')
+			->execute(['user_id' => $userId, 'id' => $id]);
+		$db->prepare('INSERT INTO user_notifications (user_id, title, message, url, type, is_read, created_at)
+			VALUES (:user_id, :title, :message, :url, "cci_assignment", 0, NOW())')->execute([
+				'user_id' => $userId,
+				'title' => 'Chat Freshchat asignado',
+				'message' => 'Tienes una conversación Freshchat asignada como ' . (string) $advisor['asesor_nombre'] . '.',
+				'url' => base_url('cci/conversaciones?selected_id=' . $id),
+			]);
+		AuditLogger::log('UPDATE', 'cci_conversacion_asignacion', $id, ['asignado_a' => $row['asignado_a']], ['asignado_a' => $userId, 'crm_asesor_id' => $advisorId]);
+		set_flash('success', 'Conversación asignada a ' . (string) $advisor['asesor_nombre'] . '. Se notificó a ' . (string) $advisor['usuario_nombre'] . '.');
+		redirect('cci/conversaciones?selected_id=' . $id);
+	}
+
 	public function asignaciones(): void
 	{
 		Auth::requireAuth();
@@ -2601,7 +3289,12 @@ class CCIController extends Controller
 		$this->ensureCciTables($db);
 
 		$items = [];
+		$advisors = $this->fetchCciAdvisorOptions($db);
+		$allCrmAdvisors = [];
+		$users = [];
 		try {
+			$allCrmAdvisors = $db->query('SELECT id, nombre FROM crm_prospect_asesores WHERE estado = "activo" ORDER BY nombre ASC')->fetchAll() ?: [];
+			$users = $db->query('SELECT id, nombre, email FROM usuarios WHERE estado = "activo" ORDER BY nombre ASC')->fetchAll() ?: [];
 			$items = $db->query("SELECT bc.id,
 				COALESCE(c.nombre, '') AS nombre,
 				COALESCE(c.apellido, '') AS apellido,
@@ -2609,7 +3302,8 @@ class CCIController extends Controller
 				COALESCE(i.carrera, '') AS carrera,
 				COALESCE(i.modalidad, '') AS modalidad,
 				COALESCE(bc.estado, 'pendiente') AS estado,
-				COALESCE(bc.fecha_inicio, bc.created_at) AS fecha
+				COALESCE(bc.fecha_inicio, bc.created_at) AS fecha,
+				COALESCE(u.nombre, 'Sin asignar') AS asesor_actual
 			FROM bot_conversaciones bc
 			LEFT JOIN contactos c ON c.id = bc.contacto_id
 			LEFT JOIN interesados i ON i.contacto_id = bc.contacto_id AND i.estado = 'activo'
@@ -2623,14 +3317,15 @@ class CCIController extends Controller
 					GROUP BY contacto_id
 				) y ON y.first_id = x.id
 			) tc ON tc.contacto_id = bc.contacto_id
-			WHERE bc.asignado_a IS NULL
+			LEFT JOIN usuarios u ON u.id = bc.asignado_a
+			WHERE bc.canal = 'freshchat'
 			ORDER BY COALESCE(bc.fecha_inicio, bc.created_at) DESC
 			LIMIT 200")->fetchAll() ?: [];
 		} catch (Throwable $e) {
 			$items = [];
 		}
 
-		$this->view('cci/asignaciones', compact('items'), [
+		$this->view('cci/asignaciones', compact('items', 'advisors', 'allCrmAdvisors', 'users'), [
 			'title' => 'Centro de Comunicaciones - Asignaciones',
 		]);
 	}

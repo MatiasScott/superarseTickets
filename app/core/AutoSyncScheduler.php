@@ -119,6 +119,19 @@ class AutoSyncScheduler
 		} catch (Throwable $e) {
 			error_log('AutoSyncScheduler WhatsApp error: ' . $e->getMessage());
 		}
+
+		// Sincronización automática de Freshchat (CCI)
+		try {
+			$fcResult = (new CCIController())->runFreshchatSyncBackground();
+			$fcSummary = 'Freshchat-sync: ' . (string) ($fcResult['status'] ?? '?')
+				. ' created=' . (int) ($fcResult['created'] ?? 0)
+				. ' skipped=' . (int) ($fcResult['skipped'] ?? 0)
+				. (empty($fcResult['ok']) ? ' error=' . ($fcResult['message'] ?? '?') : '');
+			error_log($fcSummary);
+			self::appendRunLog($fcSummary, $fcResult);
+		} catch (Throwable $e) {
+			error_log('AutoSyncScheduler Freshchat error: ' . $e->getMessage());
+		}
 	}
 
 	/**

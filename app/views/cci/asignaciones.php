@@ -1,4 +1,9 @@
-<?php $items = $items ?? []; ?>
+<?php
+$items = $items ?? [];
+$advisors = $advisors ?? [];
+$allCrmAdvisors = $allCrmAdvisors ?? [];
+$users = $users ?? [];
+?>
 
 <section class="module-page cci-page">
 	<div class="container-fluid py-4">
@@ -11,6 +16,26 @@
 		</div>
 
 		<div class="card cci-card">
+			<div class="card-header bg-white"><strong>Vincular asesor CRM con cuenta del sistema</strong></div>
+			<div class="card-body border-bottom">
+				<div class="row g-2">
+					<?php foreach ($allCrmAdvisors as $crmAdvisor): ?>
+						<form class="col-md-6" method="POST" action="<?= e(base_url('cci/asesores/' . (int) ($crmAdvisor['id'] ?? 0) . '/usuario')) ?>">
+							<?= csrf_field() ?>
+							<div class="input-group">
+								<span class="input-group-text"><?= e((string) ($crmAdvisor['nombre'] ?? 'Asesor')) ?></span>
+								<select class="form-select" name="usuario_id" required>
+									<option value="">Seleccionar cuenta</option>
+									<?php foreach ($users as $user): ?>
+										<option value="<?= e((string) ($user['id'] ?? 0)) ?>"><?= e((string) ($user['nombre'] ?? 'Usuario')) ?></option>
+									<?php endforeach; ?>
+								</select>
+								<button class="btn btn-outline-primary" type="submit" title="Vincular cuenta"><i class="bi bi-link-45deg"></i></button>
+							</div>
+						</form>
+					<?php endforeach; ?>
+				</div>
+			</div>
 			<div class="card-body">
 				<div class="table-responsive" data-mobile-cards>
 					<table class="table table-hover align-middle mb-0">
@@ -22,6 +47,7 @@
 								<th>Modalidad</th>
 								<th>Fecha</th>
 								<th>Estado</th>
+								<th>Asignado a</th>
 								<th class="text-end">Acciones</th>
 							</tr>
 						</thead>
@@ -34,15 +60,23 @@
 									<td><?= e((string) ($item['modalidad'] ?? '')) ?></td>
 									<td><?= e((string) ($item['fecha'] ?? '')) ?></td>
 									<td><span class="badge text-bg-light border"><?= e((string) ($item['estado'] ?? 'pendiente')) ?></span></td>
+									<td><?= e((string) ($item['asesor_actual'] ?? 'Sin asignar')) ?></td>
 									<td class="text-end">
-										<a class="btn btn-sm btn-outline-primary" href="<?= e(base_url('cci/conversaciones?selected_id=' . (int) ($item['id'] ?? 0))) ?>">Asignar</a>
-										<a class="btn btn-sm btn-outline-secondary" href="<?= e(base_url('cci/conversaciones?selected_id=' . (int) ($item['id'] ?? 0))) ?>">Reasignar</a>
-										<a class="btn btn-sm btn-success" href="<?= e(base_url('cci/conversaciones?selected_id=' . (int) ($item['id'] ?? 0))) ?>">Finalizar</a>
+										<form class="d-flex gap-1 justify-content-end" method="POST" action="<?= e(base_url('cci/conversaciones/' . (int) ($item['id'] ?? 0) . '/assign')) ?>">
+											<?= csrf_field() ?>
+											<select class="form-select form-select-sm" name="crm_asesor_id" required style="max-width: 180px;">
+												<option value="">Seleccionar asesor</option>
+												<?php foreach ($advisors as $advisor): ?>
+													<option value="<?= e((string) ($advisor['id'] ?? 0)) ?>"><?= e((string) ($advisor['nombre'] ?? 'Asesor')) ?></option>
+												<?php endforeach; ?>
+											</select>
+											<button class="btn btn-sm btn-outline-primary" type="submit"><?= e(!empty($item['asesor_actual']) && $item['asesor_actual'] !== 'Sin asignar' ? 'Reasignar' : 'Asignar') ?></button>
+										</form>
 									</td>
 								</tr>
 							<?php endforeach; ?>
 							<?php if (empty($items)): ?>
-								<tr><td colspan="7" class="text-center text-muted">No hay solicitudes pendientes.</td></tr>
+								<tr><td colspan="8" class="text-center text-muted">No hay conversaciones Freshchat para asignar.</td></tr>
 							<?php endif; ?>
 						</tbody>
 					</table>

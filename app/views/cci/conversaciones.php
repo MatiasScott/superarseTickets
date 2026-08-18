@@ -1,13 +1,15 @@
 <?php
 $items = $items ?? [];
 $total = (int) ($total ?? 0);
-$page = (int) ($page ?? 1);
-$pages = (int) ($pages ?? 1);
-$perPage = (int) ($perPage ?? 20);
 $selectedId = (int) ($selectedId ?? 0);
 $selected = $selected ?? null;
 $thread = $thread ?? [];
 $notes = $notes ?? [];
+$advisors = $advisors ?? [];
+$estadoFilter = (string) ($estadoFilter ?? 'activo');
+$asesorFilter = (int) ($asesorFilter ?? 0);
+$isFreshchatConversation = (string) ($selected['canal'] ?? '') === 'freshchat';
+$filterQuery = 'estado=' . rawurlencode($estadoFilter) . '&asesor=' . $asesorFilter;
 ?>
 
 <section class="module-page cci-page" style="height: 100%; display: flex; flex-direction: column; padding: 0;">
@@ -17,16 +19,18 @@ $notes = $notes ?? [];
 				<h1 class="h4 mb-0"><i class="bi bi-chat-square-text"></i> Conversaciones</h1>
 			</div>
 			<div class="d-flex align-items-center gap-2">
-				<form action="<?= e(base_url('cci/sync/whatsapp')) ?>" method="POST" class="d-inline">
-					<?= csrf_field() ?>
-					<button class="btn btn-sm btn-outline-primary" type="submit"><i class="bi bi-arrow-repeat"></i> Sincronizar</button>
-				</form>
-				<form method="GET" class="d-flex align-items-center gap-2" data-validate>
-					<label class="form-label mb-0" style="font-size: 0.9rem;"><i class="bi bi-list-ol"></i> Por página</label>
-					<input type="hidden" name="selected_id" value="<?= e((string) $selectedId) ?>">
-					<select class="form-select" style="width:100px; font-size: 0.9rem;" name="per_page" onchange="this.form.submit()">
-						<?php foreach ([20, 50, 100] as $opt): ?>
-							<option value="<?= e((string) $opt) ?>" <?= $perPage === $opt ? 'selected' : '' ?>><?= e((string) $opt) ?></option>
+				<form method="GET" class="d-flex align-items-center gap-2">
+					<label class="form-label mb-0" style="font-size: 0.9rem;"><i class="bi bi-funnel"></i> Estado</label>
+					<select class="form-select" style="width:130px; font-size: 0.9rem;" name="estado" onchange="this.form.submit()">
+						<?php foreach (['activo' => 'Activas', 'cerrado' => 'Cerradas', 'todos' => 'Todas'] as $value => $label): ?>
+							<option value="<?= e($value) ?>" <?= $estadoFilter === $value ? 'selected' : '' ?>><?= e($label) ?></option>
+						<?php endforeach; ?>
+					</select>
+					<label class="form-label mb-0" style="font-size: 0.9rem;"><i class="bi bi-person-badge"></i> Asesor</label>
+					<select class="form-select" style="width:180px; font-size: 0.9rem;" name="asesor" onchange="this.form.submit()">
+						<option value="0">Todos</option>
+						<?php foreach ($advisors as $advisor): ?>
+							<option value="<?= e((string) ($advisor['usuario_id'] ?? 0)) ?>" <?= $asesorFilter === (int) ($advisor['usuario_id'] ?? 0) ? 'selected' : '' ?>><?= e((string) ($advisor['nombre'] ?? 'Asesor')) ?></option>
 						<?php endforeach; ?>
 					</select>
 				</form>
@@ -63,7 +67,7 @@ $notes = $notes ?? [];
 						$asesor = (string) ($row['asesor'] ?? 'Sin asignar');
 						$hayNuevos = $active ? false : ($row['hay_nuevos'] ?? false);
 					?>
-					<a class="cci-thread-item<?= $active ? ' active' : '' ?>" href="<?= e(base_url('cci/conversaciones?per_page=' . $perPage . '&page=' . $page . '&selected_id=' . $id)) ?>" style="position: relative;">
+					<a class="cci-thread-item<?= $active ? ' active' : '' ?>" href="<?= e(base_url('cci/conversaciones?' . $filterQuery . '&selected_id=' . $id)) ?>" style="position: relative;">
 						<?php if ($hayNuevos): ?>
 							<span class="cci-badge-unread">•</span>
 						<?php endif; ?>
@@ -74,6 +78,12 @@ $notes = $notes ?? [];
 								<small style="font-size: 0.8rem;"><?= e($fecha) ?></small>
 							</div>
 							<div class="cci-thread-meta" style="font-size: 0.8rem;"><?= e($numero !== '' ? $numero : 'Sin número') ?></div>
+							<div class="cci-thread-meta" style="font-size: 0.78rem;">
+								<i class="bi bi-person-badge"></i> <?= e($asesor) ?>
+								<?php if ($estado === 'cerrado'): ?>
+									<span class="badge text-bg-secondary" style="font-size: 0.65rem;">Cerrada</span>
+								<?php endif; ?>
+							</div>
 							<div class="cci-thread-snippet"><?= e(mb_substr($ultimo, 0, 50)) ?></div>
 						</div>
 					</a>
@@ -100,10 +110,33 @@ $notes = $notes ?? [];
 							Conversación #<?= e((string) $selectedId) ?>
 						</div>
 						<div class="cci-thread-subtitle">Estado: <?= e((string) (($selected['estado'] ?? 'activo'))) ?></div>
+						<div class="cci-thread-subtitle"><i class="bi bi-person-badge"></i> Asesor: <?= e((string) ($selected['asesor'] ?? 'Sin asignar')) ?></div>
 					</div>
-					<div class="d-flex gap-2">
+					<div class="d-flex gap-2 align-items-center">
+						<?php if (!empty($advisors)): ?>
+							<form method="POST" action="<?= e(base_url('cci/conversaciones/' . $selectedId . '/assign')) ?>" class="d-flex gap-1">
+								<?= csrf_field() ?>
+								<select class="form-select form-select-sm" name="crm_asesor_id" required style="max-width: 180px;">
+									<option value="">Asignar a...</option>
+									<?php foreach ($advisors as $advisor): ?>
+										<option value="<?= e((string) ($advisor['id'] ?? 0)) ?>"><?= e((string) ($advisor['nombre'] ?? 'Asesor')) ?></option>
+									<?php endforeach; ?>
+								</select>
+								<button class="btn btn-sm btn-outline-primary" type="submit" title="Asignar o reasignar conversación"><i class="bi bi-person-check"></i></button>
+							</form>
+						<?php else: ?>
+							<a class="btn btn-sm btn-outline-warning" href="<?= e(base_url('cci/asignaciones')) ?>">Vincular asesores</a>
+						<?php endif; ?>
+						<form method="POST" action="<?= e(base_url('cci/conversaciones/' . $selectedId . '/estado')) ?>">
+							<?= csrf_field() ?>
+							<?php $estadoActual = (string) ($selected['estado'] ?? 'activo'); ?>
+							<input type="hidden" name="estado" value="<?= $estadoActual === 'cerrado' ? 'activo' : 'cerrado' ?>">
+							<button class="btn btn-sm <?= $estadoActual === 'cerrado' ? 'btn-outline-success' : 'btn-outline-danger' ?>" type="submit">
+								<i class="bi <?= $estadoActual === 'cerrado' ? 'bi-arrow-counterclockwise' : 'bi-check2-circle' ?>"></i>
+								<?= $estadoActual === 'cerrado' ? 'Reabrir' : 'Cerrar' ?>
+							</button>
+						</form>
 						<a class="btn btn-sm btn-outline-secondary" href="<?= e(base_url('cci/contactos')) ?>"><i class="bi bi-person-vcard"></i> Contactos</a>
-						<a class="btn btn-sm btn-primary" href="<?= e(base_url('cci/asignaciones')) ?>"><i class="bi bi-diagram-3"></i> Asignar</a>
 					</div>
 				</div>
 
@@ -219,6 +252,9 @@ $notes = $notes ?? [];
 
 					<!-- PESTAÑA: RESPONDER -->
 					<div id="responder-tab" class="cci-reply-content active">
+						<?php if ($isFreshchatConversation): ?>
+							<div class="alert alert-info mb-0">Esta conversación fue importada desde Freshchat. La respuesta desde CCI se habilitará al completar la integración de envío Freshchat.</div>
+						<?php else: ?>
 						<form method="POST" action="<?= e(base_url('cci/conversaciones/' . $selectedId . '/reply')) ?>" enctype="multipart/form-data" class="cci-reply-form">
 							<?= csrf_field() ?>
 							<textarea class="cci-reply-textarea" name="reply_text" rows="3" maxlength="10000" placeholder="Escribe tu mensaje aquí..." id="cci-reply-text"></textarea>
@@ -239,6 +275,7 @@ $notes = $notes ?? [];
 								</button>
 							</div>
 						</form>
+						<?php endif; ?>
 					</div>
 
 					<!-- PESTAÑA: NOTAS PRIVADAS (NO SE ENVÍAN) -->

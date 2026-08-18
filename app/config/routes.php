@@ -100,6 +100,7 @@ return static function (Router $router): void {
 	$router->post('/cci/conversaciones/{id}/reply', 'CCIController@sendConversationReply');
 	$router->post('/cci/conversaciones/{id}/notas', 'CCIController@storeConversationNote');
 	$router->post('/cci/sync/whatsapp', 'CCIController@syncWhatsApp');
+	$router->get('/cci/freshchat-diagnostico', 'CCIController@freshchatDiagnostico');
 	$router->get('/api/cci/whatsapp/webhook', 'CCIController@whatsAppWebhook');
 	$router->post('/api/cci/whatsapp/webhook', 'CCIController@whatsAppWebhook');
 	$router->post('/cci/sync/whatchimp', 'CCIController@syncWhatchimp');
@@ -123,6 +124,9 @@ return static function (Router $router): void {
 	$router->post('/cci/respuestas-rapidas/{id}', 'CCIController@updateRespuestaRapida');
 	$router->post('/cci/respuestas-rapidas/{id}/delete', 'CCIController@deleteRespuestaRapida');
 	$router->get('/cci/asignaciones', 'CCIController@asignaciones');
+	$router->post('/cci/conversaciones/{id}/assign', 'CCIController@assignConversation');
+	$router->post('/cci/conversaciones/{id}/estado', 'CCIController@updateConversationEstado');
+	$router->post('/cci/asesores/{id}/usuario', 'CCIController@mapCciAdvisorUser');
 	$router->get('/cci/sla', 'CCIController@sla');
 	$router->get('/cci/automatizaciones', 'CCIController@automatizaciones');
 	$router->post('/cci/automatizaciones/test', 'CCIController@testAutomatizacion');
