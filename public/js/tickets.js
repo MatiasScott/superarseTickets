@@ -583,6 +583,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		const tabForward = document.getElementById('tab-forward');
 		const tabNote = document.getElementById('tab-note');
 		const replyForm = document.getElementById('ticket-reply-form');
+		const noteForm = document.querySelector('#compose-note form[data-editor-form="note-editor:note-body"]');
 		const forwardForm = document.getElementById('ticket-forward-form');
 		const forwardRecipientsInput = document.getElementById('forwardRecipientsInput');
 		const forwardRecipientsValue = document.getElementById('forwardRecipientsValue');
@@ -597,9 +598,13 @@ document.addEventListener('DOMContentLoaded', () => {
 		const uploadProgressText = document.getElementById('reply-upload-progress-text');
 		const replyRequestKeyInput = document.getElementById('reply-request-key');
 		const replySubmitButton = document.getElementById('reply-submit-button');
+		const noteRequestKeyInput = document.getElementById('note-request-key');
+		const noteSubmitButton = document.getElementById('note-submit-button');
 		let previewObjectUrls = [];
 		let replyUploadInFlight = false;
 		let pendingReplyPayload = false;
+		let noteUploadInFlight = false;
+		let pendingNotePayload = false;
 		const forwardRecipientsPicker = setupManualEmailChipInput(forwardRecipientsInput, forwardRecipientsChips, forwardRecipientsValue);
 		forwardRecipientsClear?.addEventListener('click', () => forwardRecipientsPicker.clear());
 
@@ -725,6 +730,66 @@ document.addEventListener('DOMContentLoaded', () => {
 		});
 
 		ensureReplyRequestKey();
+		if (noteRequestKeyInput && String(noteRequestKeyInput.value || '').trim() === '') {
+			noteRequestKeyInput.value = createReplyRequestKey();
+		}
+
+		const setNoteSubmittingState = (isSubmitting) => {
+			if (!noteSubmitButton) {
+				return;
+			}
+
+			noteSubmitButton.disabled = isSubmitting;
+			noteSubmitButton.textContent = isSubmitting ? 'Guardando...' : 'Guardar nota';
+		};
+
+		const sendNotePayload = (formData) => {
+			if (!noteForm || noteUploadInFlight) {
+				return;
+			}
+
+			noteUploadInFlight = true;
+			setNoteSubmittingState(true);
+			const xhr = new XMLHttpRequest();
+			xhr.open('POST', noteForm.action, true);
+			xhr.timeout = 180000;
+
+			xhr.addEventListener('load', () => {
+				noteUploadInFlight = false;
+				if (xhr.status >= 200 && xhr.status < 400) {
+					pendingNotePayload = false;
+					window.location.reload();
+					return;
+				}
+
+				setNoteSubmittingState(false);
+				showGlobalNotification('No se pudo guardar la nota. Puedes reintentar sin duplicarla.', 'danger');
+			});
+
+			const handleNoteNetworkFailure = () => {
+				noteUploadInFlight = false;
+				if (!navigator.onLine) {
+					showGlobalNotification('Conexion perdida. La nota quedo en espera y se guardara al reconectar.', 'warning');
+					return;
+				}
+
+				setNoteSubmittingState(false);
+				showGlobalNotification('No se pudo guardar la nota. Reintenta para continuar.', 'danger');
+			};
+
+			xhr.addEventListener('error', handleNoteNetworkFailure);
+			xhr.addEventListener('timeout', handleNoteNetworkFailure);
+			xhr.send(formData);
+		};
+
+		window.addEventListener('online', () => {
+			if (!pendingNotePayload || noteUploadInFlight || !noteForm) {
+				return;
+			}
+
+			showGlobalNotification('Internet restablecido. Guardando nota pendiente...', 'info');
+			sendNotePayload(new FormData(noteForm));
+		});
 
 		const formatFileSize = (bytes) => {
 			if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
@@ -1241,6 +1306,36 @@ document.addEventListener('DOMContentLoaded', () => {
 				}
 
 				sendReplyPayload(formData);
+			});
+		}
+
+		if (noteForm) {
+			noteForm.addEventListener('submit', (event) => {
+				if (event.defaultPrevented) {
+					return;
+				}
+
+				if (noteUploadInFlight || pendingNotePayload) {
+					event.preventDefault();
+					showGlobalNotification('La nota ya esta en proceso. Espera un momento.', 'info');
+					return;
+				}
+
+				if (noteRequestKeyInput && String(noteRequestKeyInput.value || '').trim() === '') {
+					noteRequestKeyInput.value = createReplyRequestKey();
+				}
+
+				event.preventDefault();
+				pendingNotePayload = true;
+				const formData = new FormData(noteForm);
+
+				if (!navigator.onLine) {
+					setNoteSubmittingState(true);
+					showGlobalNotification('Sin internet. La nota quedo en espera y se guardara al reconectar.', 'warning');
+					return;
+				}
+
+				sendNotePayload(formData);
 			});
 		}
 

@@ -1332,11 +1332,22 @@ class TicketController extends Controller
 			redirect($this->buildTicketShowRedirect($ticketId, $return));
 		}
 
+		$uid = Auth::user()['id'] ?? null;
+		$uidInt = (int) ($uid ?? 0);
+		$requestKey = $this->normalizeReplyRequestKey((string) ($_POST['request_key'] ?? ''));
+
 		try {
 			$db  = Database::getInstance()->connection();
-			$uid = Auth::user()['id'] ?? null;
 			$this->ensureReplyAttachmentsTable($db);
 			$this->ensureUserNotificationsTable($db);
+			if ($requestKey !== '') {
+				$this->ensureTicketReplyRequestsTable($db);
+				$requestGuard = $this->acquireTicketReplyRequest($db, $ticketId, $uidInt, $requestKey);
+				if (empty($requestGuard['acquired'])) {
+					set_flash('info', 'La nota ya fue procesada o se encuentra en proceso. No se creó un duplicado.');
+					redirect($this->buildTicketShowRedirect($ticketId, $return));
+				}
+			}
 
 			$stmt = $db->prepare("INSERT INTO ticket_mensajes
 				(tipo, mensaje, ticket_id, usuario_id, fecha)
@@ -1347,6 +1358,9 @@ class TicketController extends Controller
 				'uid' => $uid,
 			]);
 			$mensajeId = (int) $db->lastInsertId();
+			if ($requestKey !== '') {
+				$this->markTicketReplyRequest($db, $ticketId, $requestKey, 'processing', $mensajeId, null);
+			}
 			$uploadResult = $this->storeReplyAttachments($db, $ticketId, $mensajeId, $_FILES['adjuntos'] ?? null);
 
 			$mentionIds = $this->extractMentionUserIds(strip_tags($cuerpoHtml), $db, (int) ($uid ?? 0));
@@ -1361,12 +1375,22 @@ class TicketController extends Controller
 			}
 
 			$errors = (array) ($uploadResult['errors'] ?? []);
+			if ($requestKey !== '') {
+				$this->markTicketReplyRequest($db, $ticketId, $requestKey, 'succeeded', $mensajeId, 'note');
+			}
 			if (!empty($errors)) {
 				set_flash('success', 'Nota interna guardada. Algunos adjuntos no se cargaron: ' . implode(' | ', $errors));
 			} else {
 				set_flash('success', 'Nota interna guardada.');
 			}
 		} catch (Throwable $e) {
+			if ($requestKey !== '' && isset($db) && $db instanceof PDO) {
+				try {
+					$this->markTicketReplyRequest($db, $ticketId, $requestKey, 'failed', null, mb_substr($e->getMessage(), 0, 500));
+				} catch (Throwable $inner) {
+					// ignore secondary error while writing idempotency state
+				}
+			}
 			set_flash('error', 'Error al guardar la nota: ' . $e->getMessage());
 		}
 

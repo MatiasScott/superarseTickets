@@ -385,6 +385,7 @@ $phones = array_values(array_unique($phones));
                     <form method="POST" action="<?= e(base_url('tickets/' . $ticketId . '/note')) ?>" enctype="multipart/form-data" data-editor-form="note-editor:note-body">
                         <input type="hidden" name="_token" value="<?= csrf_token() ?>">
                         <input type="hidden" name="cuerpo_html" id="note-body">
+                        <input type="hidden" name="request_key" id="note-request-key" value="">
                            <input type="hidden" name="return" value="<?= e($ticketUrl) ?>">
 
                         <div class="compose-toolbar">
@@ -402,7 +403,7 @@ $phones = array_values(array_unique($phones));
                         <div class="compose-attachments-list" id="note-attachments-list" aria-live="polite"></div>
 
                         <div class="compose-actions">
-                            <button class="btn btn-warning btn-sm" type="submit">Guardar nota</button>
+                            <button class="btn btn-warning btn-sm" type="submit" id="note-submit-button">Guardar nota</button>
                         </div>
                     </form>
                 </div>
