@@ -3197,6 +3197,25 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 	}
 
+	const initialOpenCreateProspect = initialQueryParams.get('open_create_prospect') === '1';
+	if (initialOpenCreateProspect) {
+		activateProspectsTab();
+		const prefillNombre = initialQueryParams.get('prefill_nombre') || '';
+		const prefillCelular = initialQueryParams.get('prefill_celular') || '';
+		const nombresInput = document.getElementById('prospectNombres');
+		const celularInput = document.getElementById('prospectCelular');
+		if (nombresInput && prefillNombre) {
+			nombresInput.value = prefillNombre;
+		}
+		if (celularInput && prefillCelular && /^\+5939\d{8}$/.test(prefillCelular)) {
+			celularInput.value = prefillCelular;
+		}
+		const createModalEl = document.getElementById('createProspectModal');
+		if (createModalEl && window.bootstrap?.Modal) {
+			window.bootstrap.Modal.getOrCreateInstance(createModalEl).show();
+		}
+	}
+
 	const saveProspectBtn = document.getElementById('saveProspectBtn');
 	if (saveProspectBtn) {
 		saveProspectBtn.addEventListener('click', async () => {

@@ -13,6 +13,8 @@ class FreshchatService
 			'whatsapp_template' => trim((string) env('FRESHCHAT_WHATSAPP_TEMPLATE', '')),
 			'whatsapp_namespace' => trim((string) env('FRESHCHAT_WHATSAPP_NAMESPACE', '')),
 			'whatsapp_language' => trim((string) env('FRESHCHAT_WHATSAPP_LANGUAGE', 'es')),
+			'agent_id' => trim((string) env('FRESHCHAT_AGENT_ID', '')),
+			'agent_email' => trim((string) env('FRESHCHAT_AGENT_EMAIL', '')),
 			'sync_start' => trim((string) env('FRESHCHAT_SYNC_START', '')),
 		];
 	}
@@ -62,6 +64,154 @@ class FreshchatService
 		}
 
 		return $this->apiRequest('GET', '/reports/raw/' . rawurlencode($reportId));
+	}
+
+	public function getConversation(string $conversationId): array
+	{
+		if (trim($conversationId) === '') {
+			return ['ok' => false, 'error' => 'Falta el identificador de la conversación Freshchat.'];
+		}
+
+		return $this->apiRequest('GET', '/conversations/' . rawurlencode($conversationId));
+	}
+
+	public function getConversationMessages(string $conversationId): array
+	{
+		if (trim($conversationId) === '') {
+			return ['ok' => false, 'error' => 'Falta el identificador de la conversación Freshchat.'];
+		}
+
+		return $this->apiRequest('GET', '/conversations/' . rawurlencode($conversationId) . '/messages', null, [
+			'page' => 1,
+			'items_per_page' => 50,
+		]);
+	}
+
+	public function findAgentByEmail(string $email): ?array
+	{
+		$email = strtolower(trim($email));
+		if ($email === '') {
+			return null;
+		}
+
+		$result = $this->apiRequest('GET', '/agents', null, ['page' => 1, 'items_per_page' => 100]);
+		if (!($result['ok'] ?? false)) {
+			return null;
+		}
+		foreach ($result['data']['agents'] ?? [] as $agent) {
+			if (is_array($agent) && strtolower(trim((string) ($agent['email'] ?? ''))) === $email) {
+				return $agent;
+			}
+		}
+		return null;
+	}
+
+	public function sendConversationMessage(string $conversationId, string $agentId, string $userId, string $text): array
+	{
+		if (trim($conversationId) === '' || trim($agentId) === '' || trim($userId) === '' || trim($text) === '') {
+			return ['ok' => false, 'error' => 'Faltan datos para enviar la respuesta a Freshchat.'];
+		}
+
+		return $this->apiRequest('POST', '/conversations/' . rawurlencode($conversationId) . '/messages', [
+			'message_parts' => [
+				['text' => ['content' => $text]],
+			],
+			'message_type' => 'normal',
+			'actor_type' => 'agent',
+			'actor_id' => $agentId,
+			'user_id' => $userId,
+		]);
+	}
+
+	public function uploadImage(string $filePath, string $fileName): array
+	{
+		return $this->uploadMultipart('/images/upload', 'image', $filePath, $fileName);
+	}
+
+	public function uploadFile(string $filePath, string $fileName): array
+	{
+		return $this->uploadMultipart('/files/upload', 'file', $filePath, $fileName);
+	}
+
+	/**
+	 * Envía un mensaje con un adjunto (imagen, video o archivo) ya subido a Freshchat.
+	 * $mediaType: 'image' | 'video' | 'file'
+	 */
+	public function sendConversationMedia(string $conversationId, string $agentId, string $userId, string $mediaType, array $mediaPart, string $caption = ''): array
+	{
+		if (trim($conversationId) === '' || trim($agentId) === '' || trim($userId) === '') {
+			return ['ok' => false, 'error' => 'Faltan datos para enviar el adjunto a Freshchat.'];
+		}
+
+		$messageParts = [[$mediaType => $mediaPart]];
+		if (trim($caption) !== '') {
+			$messageParts[] = ['text' => ['content' => $caption]];
+		}
+
+		return $this->apiRequest('POST', '/conversations/' . rawurlencode($conversationId) . '/messages', [
+			'message_parts' => $messageParts,
+			'message_type' => 'normal',
+			'actor_type' => 'agent',
+			'actor_id' => $agentId,
+			'user_id' => $userId,
+		]);
+	}
+
+	private function uploadMultipart(string $path, string $fieldName, string $filePath, string $fileName): array
+	{
+		$config = $this->getConfig();
+		if ($config['api_token'] === '') {
+			return ['ok' => false, 'error' => 'Falta FRESHCHAT_API_TOKEN en el archivo .env local.'];
+		}
+		if (!function_exists('curl_init') || !class_exists('CURLFile')) {
+			return ['ok' => false, 'error' => 'La extensión cURL de PHP no está habilitada.'];
+		}
+		if (!is_file($filePath)) {
+			return ['ok' => false, 'error' => 'El archivo a subir no existe en el servidor.'];
+		}
+
+		$url = rtrim($config['base_url'], '/') . $path;
+		$curl = curl_init($url);
+		if ($curl === false) {
+			return ['ok' => false, 'error' => 'No se pudo inicializar cURL para Freshchat.'];
+		}
+
+		$mimeType = function_exists('mime_content_type') ? (mime_content_type($filePath) ?: 'application/octet-stream') : 'application/octet-stream';
+		curl_setopt_array($curl, [
+			CURLOPT_RETURNTRANSFER => true,
+			CURLOPT_POST => true,
+			CURLOPT_POSTFIELDS => [
+				$fieldName => new CURLFile($filePath, $mimeType, $fileName),
+			],
+			CURLOPT_HTTPHEADER => [
+				'Accept: application/json',
+				'Authorization: Bearer ' . $config['api_token'],
+			],
+			CURLOPT_CONNECTTIMEOUT => 10,
+			CURLOPT_TIMEOUT => 60,
+			CURLOPT_SSL_VERIFYPEER => true,
+			CURLOPT_SSL_VERIFYHOST => 2,
+		]);
+
+		$raw = curl_exec($curl);
+		$httpCode = (int) curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+		$error = curl_error($curl);
+		curl_close($curl);
+
+		if ($raw === false || $error !== '') {
+			return ['ok' => false, 'error' => 'Error de conexión con Freshchat: ' . $error];
+		}
+
+		$data = json_decode((string) $raw, true);
+		if (!is_array($data)) {
+			$data = [];
+		}
+		if ($httpCode < 200 || $httpCode >= 300) {
+			$details = trim((string) ($data['message'] ?? ($data['error'] ?? '')));
+			return ['ok' => false, 'http_code' => $httpCode, 'error' => 'Freshchat devolvió HTTP ' . $httpCode . ': ' . ($details !== '' ? $details : 'sin detalle')];
+		}
+
+		return ['ok' => true, 'data' => $data];
 	}
 
 	public function downloadCsv(string $url): array
@@ -159,23 +309,33 @@ class FreshchatService
 			return ['ok' => false, 'error' => 'No se pudo inicializar cURL para Freshchat.'];
 		}
 
+		$responseHeaders = [];
 		curl_setopt_array($curl, [
 			CURLOPT_RETURNTRANSFER => true,
 			CURLOPT_CUSTOMREQUEST => strtoupper($method),
 			CURLOPT_HTTPHEADER => [
 				'Accept: application/json',
+				'ASSUME-IDENTITY: false',
 				'Authorization: Bearer ' . $config['api_token'],
 			],
 			CURLOPT_CONNECTTIMEOUT => 10,
 			CURLOPT_TIMEOUT => 30,
 			CURLOPT_SSL_VERIFYPEER => true,
 			CURLOPT_SSL_VERIFYHOST => 2,
+			CURLOPT_HEADERFUNCTION => static function ($curl, string $header) use (&$responseHeaders): int {
+				$separator = strpos($header, ':');
+				if ($separator !== false) {
+					$responseHeaders[strtolower(trim(substr($header, 0, $separator)))] = trim(substr($header, $separator + 1));
+				}
+				return strlen($header);
+			},
 		]);
 		if ($body !== null) {
 			curl_setopt($curl, CURLOPT_POSTFIELDS, json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
 			curl_setopt($curl, CURLOPT_HTTPHEADER, [
 				'Accept: application/json',
 				'Content-Type: application/json',
+				'ASSUME-IDENTITY: false',
 				'Authorization: Bearer ' . $config['api_token'],
 			]);
 		}
@@ -195,7 +355,11 @@ class FreshchatService
 		}
 		if ($httpCode < 200 || $httpCode >= 300) {
 			$retryAfter = (int) ($responseHeaders['retry-after'] ?? ($responseHeaders['x-ratelimitreset'] ?? 0));
-			$error = 'Freshchat devolvió HTTP ' . $httpCode . ': ' . (string) ($data['message'] ?? 'sin detalle');
+			$details = trim((string) ($data['message'] ?? ($data['error_message'] ?? ($data['error'] ?? ($data['status'] ?? '')))));
+			if ($details === '' && is_string($raw)) {
+				$details = trim(mb_substr(strip_tags($raw), 0, 500));
+			}
+			$error = 'Freshchat devolvió HTTP ' . $httpCode . ': ' . ($details !== '' ? $details : 'sin detalle');
 			if ($httpCode === 429 && $retryAfter > 0) {
 				$error .= '. Intenta nuevamente en ' . max(1, (int) ceil($retryAfter / 60)) . ' minuto(s).';
 			}
@@ -203,6 +367,7 @@ class FreshchatService
 				'ok' => false,
 				'http_code' => $httpCode,
 				'retry_after' => $retryAfter,
+				'data' => $data,
 				'error' => $error,
 			];
 		}

@@ -540,9 +540,14 @@ class CRMController extends Controller
 
 			if ($celular !== '') {
 				$phoneOwnerContactId = $this->findActiveContactIdByPhone($db, $celular);
-				if ($phoneOwnerContactId !== null && ($contactId === null || $phoneOwnerContactId !== (int) $contactId)) {
-					$conflictSuffix = $this->buildConflictContactSuffix($db, $phoneOwnerContactId);
-					throw new RuntimeException('El número de celular ya existe en otro cliente potencial' . $conflictSuffix . '.');
+				if ($phoneOwnerContactId !== null) {
+					if ($contactId === null) {
+						// El teléfono ya pertenece a un contacto existente (ej. creado desde CCI): se reutiliza en vez de bloquear.
+						$contactId = $phoneOwnerContactId;
+					} elseif ($phoneOwnerContactId !== (int) $contactId) {
+						$conflictSuffix = $this->buildConflictContactSuffix($db, $phoneOwnerContactId);
+						throw new RuntimeException('El número de celular ya existe en otro cliente potencial' . $conflictSuffix . '.');
+					}
 				}
 			}
 

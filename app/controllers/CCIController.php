@@ -117,6 +117,39 @@ class CCIController extends Controller
 			// Sin permisos de ALTER se mantiene el comportamiento actual.
 		}
 
+		// En algunos entornos bot_mensajes no tiene columna tipo/fecha: sin ella, imágenes/audio/video se muestran como texto.
+		try {
+			$mensajesColumns = array_column($db->query('SHOW COLUMNS FROM bot_mensajes')->fetchAll(), 'Field');
+			if (!in_array('tipo', $mensajesColumns, true)) {
+				$db->exec("ALTER TABLE bot_mensajes ADD COLUMN tipo ENUM('texto','archivo') NOT NULL DEFAULT 'texto' AFTER mensaje");
+			}
+			if (!in_array('fecha', $mensajesColumns, true)) {
+				$db->exec("ALTER TABLE bot_mensajes ADD COLUMN fecha DATETIME NULL AFTER tipo");
+			}
+			if (!in_array('updated_at', $mensajesColumns, true)) {
+				$db->exec("ALTER TABLE bot_mensajes ADD COLUMN updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
+			}
+		} catch (Throwable $e) {
+			// Sin permisos de ALTER se mantiene el comportamiento actual.
+		}
+
+		$db->exec("CREATE TABLE IF NOT EXISTS cci_etiquetas (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			nombre VARCHAR(100) NOT NULL,
+			estado TINYINT DEFAULT 1,
+			fecha_creacion DATETIME DEFAULT CURRENT_TIMESTAMP
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+		try {
+			$conversacionesColumns = array_column($db->query('SHOW COLUMNS FROM bot_conversaciones')->fetchAll(), 'Field');
+			if (!in_array('etiqueta_id', $conversacionesColumns, true)) {
+				$db->exec('ALTER TABLE bot_conversaciones ADD COLUMN etiqueta_id INT NULL DEFAULT NULL');
+			}
+		} catch (Throwable $e) {
+			// Sin permisos de ALTER se mantiene el comportamiento actual.
+		}
+
+
 		$db->exec("CREATE TABLE IF NOT EXISTS cci_sync_diagnostics (
 			id BIGINT AUTO_INCREMENT PRIMARY KEY,
 			provider_code VARCHAR(50) NOT NULL,
@@ -709,10 +742,10 @@ class CCIController extends Controller
 			$timestamp = (string) (
 				$msg['timestamp']
 				?? ($msg['date']
-				?? ($msg['created_at']
-				?? ($msg['lastUpdated']
-				?? ($msg['updatedAt']
-				?? ($msg['last_message_time'] ?? '')))))
+					?? ($msg['created_at']
+						?? ($msg['lastUpdated']
+							?? ($msg['updatedAt']
+								?? ($msg['last_message_time'] ?? '')))))
 			);
 			$dateTime = '';
 			if ($timestamp !== '') {
@@ -923,27 +956,181 @@ class CCIController extends Controller
 	}
 
 	public function sendConversationReply(int $id): void
-{
+	{
 		Auth::requireAuth();
 		if (!verify_csrf($_POST['_token'] ?? null)) {
 			set_flash('error', 'Token CSRF inválido.');
 			redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
 		}
-		
+
 		$text = trim((string) ($_POST['reply_text'] ?? ''));
 		$attachments = $_FILES['attachments'] ?? [];
-		
+
 		if ($text === '' && (empty($attachments) || empty($attachments['name'] ?? []))) {
 			set_flash('error', 'Escribe un mensaje o adjunta archivos.');
 			redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
 		}
-		
+
 		$db = $this->db();
 		$this->ensureCciTables($db);
 		$conversationStmt = $db->prepare('SELECT canal FROM bot_conversaciones WHERE id = :id LIMIT 1');
 		$conversationStmt->execute(['id' => $id]);
 		if ((string) ($conversationStmt->fetchColumn() ?: '') === 'freshchat') {
-			set_flash('error', 'El envío desde CCI está deshabilitado para Freshchat hasta implementar su respuesta por API.');
+			$hasAttachments = !empty($attachments['name']) && is_array($attachments['name']) && count(array_filter($attachments['name'], static fn($n) => trim((string) $n) !== '')) > 0;
+			if ($text === '' && !$hasAttachments) {
+				set_flash('error', 'Escribe un mensaje o adjunta un archivo para responder por Freshchat.');
+				redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
+			}
+
+			$referenceStmt = $db->prepare('SELECT external_conversation_id
+				FROM cci_conversacion_refs
+				WHERE provider_code = "freshchat" AND conversacion_id = :id
+				LIMIT 1');
+			$referenceStmt->execute(['id' => $id]);
+			$externalConversationId = trim((string) ($referenceStmt->fetchColumn() ?: ''));
+			if ($externalConversationId === '') {
+				set_flash('error', 'La conversación no tiene un identificador externo de Freshchat.');
+				redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
+			}
+
+			$freshchat = new FreshchatService();
+			$conversation = $freshchat->getConversation($externalConversationId);
+			if (!($conversation['ok'] ?? false)) {
+				set_flash('error', 'No se pudo consultar la conversación en Freshchat: ' . (string) ($conversation['error'] ?? 'error desconocido'));
+				redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
+			}
+
+			$agentId = trim((string) ($conversation['data']['assigned_agent_id'] ?? ''));
+			if ($agentId === '') {
+				$currentUserEmail = trim((string) (Auth::user()['email'] ?? ''));
+				$matchedAgent = $freshchat->findAgentByEmail($currentUserEmail);
+				$agentId = trim((string) ($matchedAgent['id'] ?? ''));
+			}
+			if ($agentId === '') {
+				$freshchatConfig = $freshchat->getConfig();
+				$configuredAgent = $freshchat->findAgentByEmail((string) ($freshchatConfig['agent_email'] ?? ''));
+				$agentId = trim((string) ($configuredAgent['id'] ?? ''));
+				$configuredAgentId = trim((string) ($freshchatConfig['agent_id'] ?? ''));
+				if (preg_match('/^[a-f0-9-]{36}$/i', $configuredAgentId)) {
+					$agentId = $agentId !== '' ? $agentId : $configuredAgentId;
+				}
+			}
+			if ($agentId === '') {
+				set_flash('error', 'No se encontró un agente Freshchat válido. Asigna la conversación allí o configura FRESHCHAT_AGENT_EMAIL con el correo de un agente activo.');
+				redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
+			}
+
+			$messages = $freshchat->getConversationMessages($externalConversationId);
+			$userId = '';
+			foreach ($messages['data']['messages'] ?? [] as $freshchatMessage) {
+				if (!is_array($freshchatMessage) || strtolower((string) ($freshchatMessage['actor_type'] ?? '')) !== 'user') {
+					continue;
+				}
+				$userId = trim((string) ($freshchatMessage['user_id'] ?? ($freshchatMessage['actor_id'] ?? '')));
+				if ($userId !== '') {
+					break;
+				}
+			}
+			if ($userId === '') {
+				set_flash('error', 'No se pudo identificar al contacto de esta conversación en Freshchat.');
+				redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
+			}
+
+			$freshchatErrors = [];
+			$freshchatSentCount = 0;
+
+			if ($text !== '') {
+				$send = $freshchat->sendConversationMessage($externalConversationId, $agentId, $userId, mb_substr($text, 0, 10000));
+				if ($send['ok'] ?? false) {
+					$messageId = $this->insertBotMessage($db, $id, $text, true, (string) ($send['data']['created_time'] ?? date('c')), 'texto');
+					$externalMessageId = trim((string) ($send['data']['id'] ?? ''));
+					if ($messageId > 0 && $externalMessageId !== '') {
+						$this->saveMessageRef($db, 'freshchat', $externalMessageId, $id, $messageId, 'out');
+					}
+					AuditLogger::log('CREATE', 'bot_mensajes', $messageId > 0 ? $messageId : null, null, [
+						'conversacion_id' => $id,
+						'channel' => 'freshchat',
+						'external_message_id' => $externalMessageId,
+					]);
+					$freshchatSentCount++;
+				} else {
+					$freshchatErrors[] = (string) ($send['error'] ?? 'error desconocido al enviar el texto');
+				}
+			}
+
+			if ($hasAttachments) {
+				for ($i = 0; $i < count($attachments['name']); $i++) {
+					$fileName = (string) ($attachments['name'][$i] ?? '');
+					$error = (int) ($attachments['error'][$i] ?? 1);
+					$tmpPath = (string) ($attachments['tmp_name'][$i] ?? '');
+					if ($fileName === '' || $error === UPLOAD_ERR_NO_FILE) {
+						continue;
+					}
+					if ($error !== UPLOAD_ERR_OK || empty($tmpPath) || !is_file($tmpPath)) {
+						$freshchatErrors[] = e($fileName) . ': no se pudo procesar el archivo subido.';
+						continue;
+					}
+
+					$ext = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+					$mediaKind = $this->getMediaType($ext); // image | video | audio | document
+					$uploadKind = $mediaKind === 'image' ? 'image' : 'file';
+					$upload = $uploadKind === 'image'
+						? $freshchat->uploadImage($tmpPath, $fileName)
+						: $freshchat->uploadFile($tmpPath, $fileName);
+					if (!($upload['ok'] ?? false)) {
+						$freshchatErrors[] = e($fileName) . ': ' . (string) ($upload['error'] ?? 'no se pudo subir a Freshchat.');
+						continue;
+					}
+
+					if ($uploadKind === 'image') {
+						$mediaPart = ['url' => (string) ($upload['data']['url'] ?? '')];
+						$messagePartType = 'image';
+					} else {
+						$mediaPart = [
+							'name' => (string) ($upload['data']['file_name'] ?? $fileName),
+							'url' => (string) ($upload['data']['url'] ?? ''),
+							'fileSource' => 'FRESHCHAT',
+						];
+						$messagePartType = $mediaKind === 'video' ? 'video' : 'file';
+						if ($messagePartType === 'video') {
+							$mediaPart = ['url' => (string) ($upload['data']['url'] ?? '')];
+						}
+					}
+
+					$send = $freshchat->sendConversationMedia($externalConversationId, $agentId, $userId, $messagePartType, $mediaPart);
+					if (!($send['ok'] ?? false)) {
+						$freshchatErrors[] = e($fileName) . ': ' . (string) ($send['error'] ?? 'no se pudo enviar el adjunto.');
+						continue;
+					}
+
+					// Guardar copia local para mostrarla en el historial sin depender de la URL de Freshchat.
+					$saved = $this->saveConversationAttachment($tmpPath, $fileName, (int) $id, Auth::id());
+					$localName = $saved['name'] ?? $fileName;
+					$messageId = $this->insertBotMessage($db, $id, $localName, true, (string) ($send['data']['created_time'] ?? date('c')), 'archivo');
+					$externalMessageId = trim((string) ($send['data']['id'] ?? ''));
+					if ($messageId > 0 && $externalMessageId !== '') {
+						$this->saveMessageRef($db, 'freshchat', $externalMessageId, $id, $messageId, 'out');
+					}
+					AuditLogger::log('CREATE', 'bot_mensajes', $messageId > 0 ? $messageId : null, null, [
+						'conversacion_id' => $id,
+						'channel' => 'freshchat',
+						'archivo' => $localName,
+					]);
+					$freshchatSentCount++;
+				}
+			}
+
+			if ($freshchatSentCount === 0 && !empty($freshchatErrors)) {
+				$firstError = $freshchatErrors[0];
+				if (stripos($firstError, 'WhatsApp 24 hours window has crossed') !== false) {
+					$firstError = 'La ventana de respuesta de WhatsApp está cerrada. Solo puedes enviar texto libre durante las 24 horas posteriores al último mensaje del contacto. Para reabrir el chat debes enviar una plantilla aprobada desde Freshchat o esperar que el contacto escriba nuevamente.';
+				}
+				set_flash('error', $firstError);
+			} elseif (!empty($freshchatErrors)) {
+				set_flash('warning', 'Se envió parcialmente. Errores: ' . implode('; ', $freshchatErrors));
+			} else {
+				set_flash('success', 'Mensaje enviado por Freshchat.');
+			}
 			redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
 		}
 		$phone = $this->resolveConversationPhone($db, (int) $id);
@@ -951,7 +1138,7 @@ class CCIController extends Controller
 			set_flash('error', 'No se encontró un número para la conversación seleccionada.');
 			redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
 		}
-		
+
 		// Validar y procesar archivos
 		$attachmentPaths = [];
 		$uploadErrorMessages = [];
@@ -962,11 +1149,11 @@ class CCIController extends Controller
 				$tmpPath = (string) ($attachments['tmp_name'][$i] ?? '');
 				$fileName = (string) ($attachments['name'][$i] ?? '');
 				$fileSize = (int) ($attachments['size'][$i] ?? 0);
-				
+
 				if ($fileName === '' || $error === UPLOAD_ERR_NO_FILE) {
 					continue; // sin archivo, ignorar
 				}
-				
+
 				if ($error !== UPLOAD_ERR_OK) {
 					$phpUploadErrors = [
 						UPLOAD_ERR_INI_SIZE   => 'excede upload_max_filesize del servidor',
@@ -981,18 +1168,18 @@ class CCIController extends Controller
 					error_log("CCI upload error $error for $fileName");
 					continue;
 				}
-				
+
 				if ($fileSize > $maxFileSize) {
 					$uploadErrorMessages[] = e($fileName) . ': excede 100MB';
 					continue;
 				}
-				
+
 				if (empty($tmpPath) || !is_file($tmpPath)) {
 					$uploadErrorMessages[] = e($fileName) . ': archivo temporal no encontrado';
 					error_log("Temporary file not found: $tmpPath");
 					continue;
 				}
-				
+
 				$saved = $this->saveConversationAttachment($tmpPath, $fileName, (int) $id, Auth::id());
 				if ($saved) {
 					$attachmentPaths[] = [
@@ -1005,16 +1192,16 @@ class CCIController extends Controller
 				}
 			}
 		}
-		
+
 		// Si hubo errores de upload antes de procesar, reportarlos de inmediato
 		if (!empty($uploadErrorMessages) && empty($attachmentPaths) && $text === '') {
 			set_flash('error', 'Error al subir archivo(s): ' . implode('; ', $uploadErrorMessages));
 			redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
 		}
-		
+
 		$service = new WhatchimpService();
 		$send = [];
-		
+
 		// Enviar texto si existe
 		if ($text !== '') {
 			$send = $service->sendTextMessage($phone, $text, [
@@ -1034,7 +1221,7 @@ class CCIController extends Controller
 				]);
 			}
 		}
-		
+
 		// Enviar archivos si existen
 		$fileErrors = [];
 		if (!empty($attachmentPaths)) {
@@ -1042,20 +1229,20 @@ class CCIController extends Controller
 				$path = (string) ($file['path'] ?? '');
 				$name = (string) ($file['name'] ?? '');
 				$displayName = (string) preg_replace('/^\d{14}_[a-f0-9]{8}_/', '', $name) ?: $name;
-				
+
 				$ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
 				$mediaType = $this->getMediaType($ext);
-				
+
 				// Guardar en DB siempre (así aparece en el chat aunque WhatsApp falle)
 				$msgId = $this->insertBotMessage($db, (int) $id, $name, true, date('Y-m-d H:i:s'), 'archivo');
-				
+
 				// Intentar enviar a WhatsApp
 				$sendMedia = $service->sendMediaMessage($phone, $path, $mediaType, [
 					'conversation_id' => (int) $id,
 					'user_id' => Auth::id(),
 					'file_name' => $name,
 				]);
-				
+
 				if ($sendMedia['ok'] ?? false) {
 					if ($msgId > 0) {
 						$extId = trim((string) ($sendMedia['message_id'] ?? ''));
@@ -1076,7 +1263,7 @@ class CCIController extends Controller
 				}
 			}
 		}
-		
+
 		// Mensaje de feedback
 		$allErrors = array_merge($uploadErrorMessages, $fileErrors);
 		if (!($send['ok'] ?? false) && $text !== '') {
@@ -1099,9 +1286,9 @@ class CCIController extends Controller
 			}
 			set_flash('success', $feedbackMsg);
 		}
-		
+
 		redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
-}
+	}
 
 	private function getMediaType(string $ext): string
 	{
@@ -1109,14 +1296,14 @@ class CCIController extends Controller
 		$imageExts = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'];
 		$videoExts = ['mp4', 'avi', 'mov', 'mkv', 'flv', 'wmv'];
 		$audioExts = ['mp3', 'wav', 'aac', 'm4a', 'flac', 'ogg'];
-		
+
 		if (in_array($ext, $imageExts)) return 'image';
 		if (in_array($ext, $videoExts)) return 'video';
 		if (in_array($ext, $audioExts)) return 'audio';
 		return 'document';
 	}
-	
-	
+
+
 	private function saveConversationAttachment(string $tmpPath, string $filename, int $convId, int $userId): ?array
 	{
 		if (!is_file($tmpPath)) return null;
@@ -1127,18 +1314,19 @@ class CCIController extends Controller
 		$destPath = $uploadDir . '/' . $unique;
 		if (!move_uploaded_file($tmpPath, $destPath)) return null;
 		chmod($destPath, 0644);
-		
+
 		// Copiar también al directorio público para que sea accesible desde web
 		$publicDir = PUBLIC_PATH . '/cci-attachments';
 		if (!is_dir($publicDir)) @mkdir($publicDir, 0755, true);
 		@copy($destPath, $publicDir . '/' . $unique);
 		@chmod($publicDir . '/' . $unique, 0644);
-		
+
 		return [
 			'path' => $destPath,
 			'name' => $unique,
 		];
-	}public function whatsAppWebhook(): void
+	}
+	public function whatsAppWebhook(): void
 	{
 		$this->whatchimpWebhook();
 	}
@@ -1341,6 +1529,27 @@ class CCIController extends Controller
 		return $updated;
 	}
 
+	/**
+	 * Corrige mensajes ya cacheados localmente (ej. freshchat_<hash>.ogg) que quedaron marcados como texto.
+	 */
+	private function normalizeCachedFreshchatFilenames(PDO $db): int
+	{
+		$columns = $this->getTableColumnsSafe($db, 'bot_mensajes');
+		if (!in_array('tipo', $columns, true)) {
+			return 0;
+		}
+		$setUpdatedAt = in_array('updated_at', $columns, true) ? ', bm.updated_at = NOW()' : '';
+		$mediaExtPattern = '\\.(jpe?g|png|gif|webp|bmp|mp4|avi|mov|mkv|flv|wmv|mp3|wav|aac|m4a|flac|ogg|opus|pdf|docx?|xlsx?|zip)$';
+		$stmt = $db->prepare('UPDATE bot_mensajes bm
+			INNER JOIN bot_conversaciones bc ON bc.id = bm.conversacion_id
+			SET bm.tipo = "archivo"' . $setUpdatedAt . '
+			WHERE bc.canal = "freshchat" AND bm.tipo = "texto"
+			AND bm.mensaje NOT LIKE "% %"
+			AND bm.mensaje REGEXP :pattern');
+		$stmt->execute(['pattern' => $mediaExtPattern]);
+		return $stmt->rowCount();
+	}
+
 	private function ensureFreshchatConversation(PDO $db, int $contactId, string $externalConversationId): ?int
 	{
 		$lookup = $db->prepare('SELECT conversacion_id FROM cci_conversacion_refs WHERE provider_code = "freshchat" AND external_conversation_id = :external_id LIMIT 1');
@@ -1535,6 +1744,20 @@ class CCIController extends Controller
 		$stateStmt->execute();
 		$state = $stateStmt->fetch() ?: [];
 		$pending = json_decode((string) ($state['last_cursor'] ?? ''), true);
+		$checkpointStmt = $db->query('SELECT MAX(window_end) FROM cci_sync_diagnostics WHERE provider_code = "freshchat"');
+		$latestCheckpoint = trim((string) ($checkpointStmt ? ($checkpointStmt->fetchColumn() ?: '') : ''));
+		$pendingWindowEnd = is_array($pending) ? trim((string) ($pending['window_end'] ?? '')) : '';
+		if (
+			is_array($pending)
+			&& !empty($pending['report_id'])
+			&& $latestCheckpoint !== ''
+			&& $pendingWindowEnd !== ''
+			&& strtotime($pendingWindowEnd) <= strtotime($latestCheckpoint)
+		) {
+			$pending = ['next_start' => $latestCheckpoint];
+			$db->prepare('UPDATE cci_sync_state SET last_cursor = :cursor, updated_at = NOW() WHERE provider_code = "freshchat"')
+				->execute(['cursor' => json_encode($pending, JSON_UNESCAPED_SLASHES)]);
+		}
 
 		if (is_array($pending) && !empty($pending['report_id'])) {
 			$report = $service->getReport((string) $pending['report_id']);
@@ -1553,13 +1776,18 @@ class CCIController extends Controller
 			$result = $this->importFreshchatTranscript($db, (string) $download['csv']);
 			$result['normalized_media'] = $this->normalizeImportedFreshchatMedia($db);
 			$result['normalized_media_urls'] = $this->normalizeFreshchatMediaUrls($db);
+			$result['normalized_cached_filenames'] = $this->normalizeCachedFreshchatFilenames($db);
 			$this->saveFreshchatDiagnostic($db, $result, $pending);
 
 			$windowEnd = trim((string) ($pending['window_end'] ?? ''));
 			$overallEnd = trim((string) ($pending['overall_end'] ?? ''));
 			$nextCursor = '';
-			if ($windowEnd !== '' && $overallEnd !== '' && strtotime($windowEnd) < strtotime($overallEnd)) {
-				$nextCursor = json_encode(['next_start' => $windowEnd, 'overall_end' => $overallEnd], JSON_UNESCAPED_SLASHES);
+			if ($windowEnd !== '') {
+				$nextState = ['next_start' => $windowEnd];
+				if ($overallEnd !== '' && strtotime($windowEnd) < strtotime($overallEnd)) {
+					$nextState['overall_end'] = $overallEnd;
+				}
+				$nextCursor = json_encode($nextState, JSON_UNESCAPED_SLASHES);
 			}
 			$saveState = $db->prepare('INSERT INTO cci_sync_state (provider_code, last_cursor, last_sync_at, updated_at) VALUES ("freshchat", :cursor, NOW(), NOW()) ON DUPLICATE KEY UPDATE last_cursor = VALUES(last_cursor), last_sync_at = NOW(), updated_at = NOW()');
 			$saveState->execute(['cursor' => $nextCursor]);
@@ -1577,7 +1805,13 @@ class CCIController extends Controller
 		}
 
 		$overallEnd = new DateTimeImmutable('now', new DateTimeZone('UTC'));
-		$startRaw = is_array($pending) ? trim((string) ($pending['next_start'] ?? '')) : trim((string) ($config['sync_start'] ?? ''));
+		$startRaw = is_array($pending) ? trim((string) ($pending['next_start'] ?? '')) : '';
+		if ($startRaw === '') {
+			$startRaw = $latestCheckpoint;
+		}
+		if ($startRaw === '') {
+			$startRaw = trim((string) ($config['sync_start'] ?? ''));
+		}
 		try {
 			$start = $startRaw !== ''
 				? new DateTimeImmutable($startRaw, new DateTimeZone('UTC'))
@@ -2010,129 +2244,6 @@ class CCIController extends Controller
 
 		$this->view('cci/reportes', compact('filters', 'kpis', 'campanas', 'providers', 'seriesDiarias', 'topCampanas', 'erroresTop', 'porProveedor', 'automations'), [
 			'title' => 'Centro de Comunicaciones - Reportes',
-		]);
-	}
-
-	public function conversaciones(): void
-	{
-		Auth::requireAuth();
-		$db = $this->db();
-		$this->ensureCciTables($db);
-		$this->ensureProspectByInteraction($db);
-
-		$selectedId = (int) ($_GET['selected_id'] ?? 0);
-		$estadoFilter = strtolower(trim((string) ($_GET['estado'] ?? 'activo')));
-		if (!in_array($estadoFilter, ['activo', 'cerrado', 'todos'], true)) {
-			$estadoFilter = 'activo';
-		}
-		$asesorFilter = (int) ($_GET['asesor'] ?? 0);
-
-		$total = 0;
-		$items = [];
-		$thread = [];
-		$notes = [];
-		$selected = null;
-		$advisors = $this->fetchCciAdvisorOptions($db);
-
-		try {
-			$where = ["bc.canal = 'freshchat'"];
-			$params = [];
-			if ($estadoFilter !== 'todos') {
-				$where[] = 'bc.estado = :estado';
-				$params['estado'] = $estadoFilter;
-			}
-			if ($asesorFilter > 0) {
-				$where[] = 'bc.asignado_a = :asesor';
-				$params['asesor'] = $asesorFilter;
-			}
-			$whereSql = implode(' AND ', $where);
-
-			$countStmt = $db->prepare('SELECT COUNT(*) FROM bot_conversaciones bc WHERE ' . $whereSql);
-			$countStmt->execute($params);
-			$total = (int) $countStmt->fetchColumn();
-
-			$sql = "SELECT bc.id, bc.contacto_id, bc.canal, bc.estado, bc.asignado_a,
-				COALESCE(bc.fecha_inicio, bc.created_at) AS fecha_inicio,
-				COALESCE(c.nombre, '') AS nombre,
-				COALESCE(c.apellido, '') AS apellido,
-				COALESCE(tc.telefono, '') AS telefono,
-				COALESCE(u.nombre, 'Sin asignar') AS asesor,
-				MAX(COALESCE(bm.fecha, bm.created_at)) AS ultimo_mensaje_fecha,
-				SUBSTRING_INDEX(GROUP_CONCAT(COALESCE(bm.mensaje, '') ORDER BY COALESCE(bm.fecha, bm.created_at) DESC SEPARATOR '||'), '||', 1) AS ultimo_mensaje
-			FROM bot_conversaciones bc
-			LEFT JOIN contactos c ON c.id = bc.contacto_id
-			LEFT JOIN usuarios u ON u.id = bc.asignado_a
-			LEFT JOIN bot_mensajes bm ON bm.conversacion_id = bc.id
-			LEFT JOIN (
-				SELECT x.contacto_id, x.telefono
-				FROM telefonos_contacto x
-				INNER JOIN (
-					SELECT contacto_id, MIN(id) AS first_id
-					FROM telefonos_contacto
-					WHERE estado = 'activo'
-					GROUP BY contacto_id
-				) y ON y.first_id = x.id
-			) tc ON tc.contacto_id = bc.contacto_id
-			WHERE {$whereSql}
-			GROUP BY bc.id, bc.contacto_id, bc.canal, bc.estado, bc.asignado_a, bc.fecha_inicio, bc.created_at, c.nombre, c.apellido, tc.telefono, u.nombre
-			ORDER BY COALESCE(MAX(COALESCE(bm.fecha, bm.created_at)), bc.fecha_inicio, bc.created_at) DESC";
-			$stmt = $db->prepare($sql);
-			$stmt->execute($params);
-			$items = $stmt->fetchAll() ?: [];
-
-			if ($selectedId <= 0 && !empty($items)) {
-				$selectedId = (int) ($items[0]['id'] ?? 0);
-			}
-
-			if ($selectedId > 0) {
-				$selStmt = $db->prepare('SELECT bc.*, COALESCE(u.nombre, "Sin asignar") AS asesor
-					FROM bot_conversaciones bc
-					LEFT JOIN usuarios u ON u.id = bc.asignado_a
-					WHERE bc.id = :id AND bc.canal = "freshchat" LIMIT 1');
-				$selStmt->execute(['id' => $selectedId]);
-				$selected = $selStmt->fetch() ?: null;
-
-				// En algunos entornos bot_mensajes no tiene columna tipo/fecha: seleccionar solo lo disponible.
-				$msgColumns = $this->getTableColumnsSafe($db, 'bot_mensajes');
-				$selectParts = ['id', 'mensaje', 'es_bot', 'created_at'];
-				$selectParts[] = in_array('tipo', $msgColumns, true) ? 'tipo' : "'texto' AS tipo";
-				$selectParts[] = in_array('fecha', $msgColumns, true) ? 'fecha' : 'created_at AS fecha';
-				$threadStmt = $db->prepare('SELECT ' . implode(', ', $selectParts) . '
-					FROM bot_mensajes
-					WHERE conversacion_id = :id
-					ORDER BY COALESCE(' . (in_array('fecha', $msgColumns, true) ? 'fecha' : 'created_at') . ', created_at) ASC, id ASC');
-				$threadStmt->execute(['id' => $selectedId]);
-				$thread = $threadStmt->fetchAll() ?: [];
-
-				$notes = (new CciConversationNote())->byConversation($selectedId);
-			}
-
-		} catch (Throwable $e) {
-			error_log('CCI conversaciones() error: ' . $e->getMessage());
-			$items = [];
-		}
-
-		// Endpoint JSON para auto-refresh de mensajes desde el frontend
-		if (isset($_GET['json_thread']) && $selectedId > 0) {
-			header('Content-Type: application/json; charset=utf-8');
-			echo json_encode([
-				'ok'       => true,
-				'messages' => array_values(array_map(static function (array $m): array {
-					return [
-						'id'     => (int) ($m['id'] ?? 0),
-						'texto'  => (string) ($m['mensaje'] ?? ''),
-						'tipo'   => (string) ($m['tipo'] ?? 'texto'),
-						'es_bot' => (int) ($m['es_bot'] ?? 0),
-						'fecha'  => (string) ($m['fecha'] ?? ($m['created_at'] ?? '')),
-					];
-				}, $thread)),
-			], JSON_UNESCAPED_UNICODE);
-			exit;
-		}
-
-		$this->view('cci/conversaciones', compact('items', 'total', 'selectedId', 'selected', 'thread', 'notes', 'advisors', 'estadoFilter', 'asesorFilter'), [
-			'title' => 'Centro de Comunicaciones - Conversaciones',
-			'styles' => ['cci.css'],
 		]);
 	}
 
@@ -3287,11 +3398,11 @@ class CCIController extends Controller
 			->execute(['user_id' => $userId, 'id' => $id]);
 		$db->prepare('INSERT INTO user_notifications (user_id, title, message, url, type, is_read, created_at)
 			VALUES (:user_id, :title, :message, :url, "cci_assignment", 0, NOW())')->execute([
-				'user_id' => $userId,
-				'title' => 'Chat Freshchat asignado',
-				'message' => 'Tienes una conversación Freshchat asignada como ' . (string) $advisor['asesor_nombre'] . '.',
-				'url' => base_url('cci/conversaciones?selected_id=' . $id),
-			]);
+			'user_id' => $userId,
+			'title' => 'Chat Freshchat asignado',
+			'message' => 'Tienes una conversación Freshchat asignada como ' . (string) $advisor['asesor_nombre'] . '.',
+			'url' => base_url('cci/conversaciones?selected_id=' . $id),
+		]);
 		AuditLogger::log('UPDATE', 'cci_conversacion_asignacion', $id, ['asignado_a' => $row['asignado_a']], ['asignado_a' => $userId, 'crm_asesor_id' => $advisorId]);
 		set_flash('success', 'Conversación asignada a ' . (string) $advisor['asesor_nombre'] . '. Se notificó a ' . (string) $advisor['usuario_nombre'] . '.');
 		redirect('cci/conversaciones?selected_id=' . $id);
@@ -3409,7 +3520,7 @@ class CCIController extends Controller
 		$payload = [
 			'initiated_by' => Auth::id(),
 			'timestamp' => date('c'),
-			'note' => trim((string) ($_POST['note'] ?? 'Prueba manual desde módulo CCI')), 
+			'note' => trim((string) ($_POST['note'] ?? 'Prueba manual desde módulo CCI')),
 		];
 
 		$result = (new CciAutomationService())->dispatch($eventName, $payload, [
@@ -3514,6 +3625,289 @@ class CCIController extends Controller
 
 		$this->view('cci/auditoria', compact('logs'), [
 			'title' => 'Centro de Comunicaciones - Auditoría',
+		]);
+	}
+
+	public function guardarEtiqueta(int $id): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			set_flash('error', 'Token CSRF inválido.');
+			redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
+		}
+
+		$etiquetaId = (int) ($_POST['etiqueta_id'] ?? 0);
+		$db = $this->db();
+		$this->ensureCciTables($db);
+
+		if ($id > 0 && $etiquetaId > 0) {
+			$stmt = $db->prepare("UPDATE bot_conversaciones SET etiqueta_id = :etiqueta_id, estado = 'cerrado', updated_at = NOW() WHERE id = :id");
+			$stmt->execute([
+				'etiqueta_id' => $etiquetaId,
+				'id'          => $id,
+			]);
+			AuditLogger::log('UPDATE', 'bot_conversaciones', $id, null, [
+				'etiqueta_id' => $etiquetaId,
+				'estado' => 'cerrado',
+			]);
+			set_flash('success', 'Etiqueta asignada y conversación cerrada.');
+		}
+
+		redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
+	}
+
+	public function crearEtiqueta(): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			set_flash('error', 'Token CSRF inválido.');
+			redirect('cci/conversaciones');
+		}
+
+		$nombre = trim((string) ($_POST['nombre_etiqueta'] ?? ''));
+		$selectedId = (int) ($_POST['selected_id'] ?? 0);
+		$db = $this->db();
+		$this->ensureCciTables($db);
+
+		if ($nombre !== '') {
+			$stmt = $db->prepare('INSERT INTO cci_etiquetas (nombre, estado, fecha_creacion) VALUES (:nombre, 1, NOW())');
+			$stmt->execute(['nombre' => mb_substr($nombre, 0, 100)]);
+			AuditLogger::log('CREATE', 'cci_etiquetas', (int) $db->lastInsertId(), null, ['nombre' => $nombre]);
+			set_flash('success', 'Etiqueta creada correctamente.');
+		} else {
+			set_flash('error', 'El nombre de la etiqueta es obligatorio.');
+		}
+
+		redirect('cci/conversaciones' . ($selectedId > 0 ? '?selected_id=' . $selectedId : ''));
+	}
+
+	public function toggleEstadoEtiqueta(int $id): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			set_flash('error', 'Token CSRF inválido.');
+			redirect('cci/conversaciones');
+		}
+
+		$selectedId = (int) ($_POST['selected_id'] ?? 0);
+		$db = $this->db();
+		$this->ensureCciTables($db);
+
+		if ($id > 0) {
+			$db->prepare('UPDATE cci_etiquetas SET estado = IF(estado = 1, 0, 1) WHERE id = :id')->execute(['id' => $id]);
+			AuditLogger::log('UPDATE', 'cci_etiquetas', $id, null, ['toggle' => true]);
+		}
+
+		redirect('cci/conversaciones' . ($selectedId > 0 ? '?selected_id=' . $selectedId : ''));
+	}
+
+	public function convertirClientePotencial(int $id): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			set_flash('error', 'Token CSRF inválido.');
+			redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
+		}
+
+		$db = $this->db();
+		$this->ensureCciTables($db);
+
+		$stmt = $db->prepare('SELECT contacto_id FROM bot_conversaciones WHERE id = :id LIMIT 1');
+		$stmt->execute(['id' => $id]);
+		$contactId = (int) ($stmt->fetchColumn() ?: 0);
+		if ($contactId <= 0) {
+			set_flash('error', 'La conversación no tiene un contacto asociado.');
+			redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
+		}
+
+		$existing = $db->prepare('SELECT id FROM interesados WHERE contacto_id = :contacto_id LIMIT 1');
+		$existing->execute(['contacto_id' => $contactId]);
+		if ((int) ($existing->fetchColumn() ?: 0) > 0) {
+			set_flash('success', 'Este contacto ya es un cliente potencial.');
+			redirect('crm/interesados?tab=prospects&open_contact_id=' . $contactId);
+		}
+
+		$estadoInicial = $this->resolveInitialProspectStateId($db);
+		$creadoPor = trim((string) (Auth::user()['nombre'] ?? 'CCI'));
+		$insert = $db->prepare('INSERT INTO interesados (contacto_id, estado_id, origen, creado_por, convertido, estado, created_at, updated_at)
+			VALUES (:contacto_id, :estado_id, "CCI", :creado_por, 0, "activo", NOW(), NOW())');
+		$insert->execute([
+			'contacto_id' => $contactId,
+			'estado_id' => $estadoInicial,
+			'creado_por' => $creadoPor !== '' ? mb_substr($creadoPor, 0, 255) : 'CCI',
+		]);
+		AuditLogger::log('CREATE', 'interesados', (int) $db->lastInsertId(), null, [
+			'contacto_id' => $contactId,
+			'origen' => 'CCI',
+		]);
+
+		set_flash('success', 'Contacto convertido en cliente potencial.');
+		redirect('crm/interesados?tab=prospects&open_contact_id=' . $contactId);
+	}
+
+	public function conversaciones(): void
+	{
+		Auth::requireAuth();
+		$db = $this->db();
+		$this->ensureCciTables($db);
+		$this->ensureProspectByInteraction($db);
+		try {
+			$this->normalizeCachedFreshchatFilenames($db);
+		} catch (Throwable $e) {
+			// No bloquear la carga de la vista si la reparación de medios falla.
+		}
+
+		$selectedId = (int) ($_GET['selected_id'] ?? 0);
+		$estadoFilter = strtolower(trim((string) ($_GET['estado'] ?? 'activo')));
+		if (!in_array($estadoFilter, ['activo', 'cerrado', 'todos'], true)) {
+			$estadoFilter = 'activo';
+		}
+		$asesorFilter = (int) ($_GET['asesor'] ?? 0);
+		$etiquetaFilter = (int) ($_GET['etiqueta'] ?? 0);
+
+		$total = 0;
+		$items = [];
+		$thread = [];
+		$notes = [];
+		$selected = null;
+		$freshchatReplyWindowOpen = true;
+		$freshchatLastInboundAt = '';
+		$advisors = $this->fetchCciAdvisorOptions($db);
+		$etiquetasActivas = $db->query("SELECT * FROM cci_etiquetas WHERE estado = 1 ORDER BY nombre ASC")->fetchAll() ?: [];
+		$todasLasEtiquetas = $db->query("SELECT * FROM cci_etiquetas ORDER BY nombre ASC")->fetchAll() ?: [];
+
+		try {
+			$where = ["bc.canal = 'freshchat'"];
+			$params = [];
+			if ($estadoFilter !== 'todos') {
+				$where[] = 'bc.estado = :estado';
+				$params['estado'] = $estadoFilter;
+			}
+			if ($asesorFilter > 0) {
+				$where[] = 'bc.asignado_a = :asesor';
+				$params['asesor'] = $asesorFilter;
+			}
+			if ($etiquetaFilter > 0) {
+				$where[] = 'bc.etiqueta_id = :etiqueta';
+				$params['etiqueta'] = $etiquetaFilter;
+			}
+			$whereSql = implode(' AND ', $where);
+
+			$countStmt = $db->prepare('SELECT COUNT(*) FROM bot_conversaciones bc WHERE ' . $whereSql);
+			$countStmt->execute($params);
+			$total = (int) $countStmt->fetchColumn();
+
+			$sql = "SELECT bc.id, bc.contacto_id, bc.canal, bc.estado, bc.asignado_a, bc.etiqueta_id,
+				COALESCE(et.nombre, '') AS etiqueta_nombre,
+				COALESCE(bc.fecha_inicio, bc.created_at) AS fecha_inicio,
+				COALESCE(c.nombre, '') AS nombre,
+				COALESCE(c.apellido, '') AS apellido,
+				COALESCE(tc.telefono, '') AS telefono,
+				COALESCE(u.nombre, 'Sin asignar') AS asesor,
+				MAX(COALESCE(bm.fecha, bm.created_at)) AS ultimo_mensaje_fecha,
+				SUBSTRING_INDEX(GROUP_CONCAT(COALESCE(bm.mensaje, '') ORDER BY COALESCE(bm.fecha, bm.created_at) DESC SEPARATOR '||'), '||', 1) AS ultimo_mensaje
+			FROM bot_conversaciones bc
+			LEFT JOIN contactos c ON c.id = bc.contacto_id
+			LEFT JOIN usuarios u ON u.id = bc.asignado_a
+			LEFT JOIN cci_etiquetas et ON et.id = bc.etiqueta_id
+			LEFT JOIN bot_mensajes bm ON bm.conversacion_id = bc.id
+			LEFT JOIN (
+				SELECT x.contacto_id, x.telefono
+				FROM telefonos_contacto x
+				INNER JOIN (
+					SELECT contacto_id, MIN(id) AS first_id
+					FROM telefonos_contacto
+					WHERE estado = 'activo'
+					GROUP BY contacto_id
+				) y ON y.first_id = x.id
+			) tc ON tc.contacto_id = bc.contacto_id
+			WHERE {$whereSql}
+			GROUP BY bc.id, bc.contacto_id, bc.canal, bc.estado, bc.asignado_a, bc.etiqueta_id, et.nombre, bc.fecha_inicio, bc.created_at, c.nombre, c.apellido, tc.telefono, u.nombre
+			ORDER BY COALESCE(MAX(COALESCE(bm.fecha, bm.created_at)), bc.fecha_inicio, bc.created_at) DESC";
+			$stmt = $db->prepare($sql);
+			$stmt->execute($params);
+			$items = $stmt->fetchAll() ?: [];
+
+			if ($selectedId <= 0 && !empty($items)) {
+				$selectedId = (int) ($items[0]['id'] ?? 0);
+			}
+
+			if ($selectedId > 0) {
+				$selStmt = $db->prepare('SELECT bc.*, COALESCE(u.nombre, "Sin asignar") AS asesor
+					FROM bot_conversaciones bc
+					LEFT JOIN usuarios u ON u.id = bc.asignado_a
+					WHERE bc.id = :id AND bc.canal = "freshchat" LIMIT 1');
+				$selStmt->execute(['id' => $selectedId]);
+				$selected = $selStmt->fetch() ?: null;
+
+				// En algunos entornos bot_mensajes no tiene columna tipo/fecha: seleccionar solo lo disponible.
+				$msgColumns = $this->getTableColumnsSafe($db, 'bot_mensajes');
+				$selectParts = ['id', 'mensaje', 'es_bot', 'created_at'];
+				$selectParts[] = in_array('tipo', $msgColumns, true) ? 'tipo' : "'texto' AS tipo";
+				$selectParts[] = in_array('fecha', $msgColumns, true) ? 'fecha' : 'created_at AS fecha';
+				$threadStmt = $db->prepare('SELECT ' . implode(', ', $selectParts) . '
+					FROM bot_mensajes
+					WHERE conversacion_id = :id
+					ORDER BY COALESCE(' . (in_array('fecha', $msgColumns, true) ? 'fecha' : 'created_at') . ', created_at) ASC, id ASC');
+				$threadStmt->execute(['id' => $selectedId]);
+				$thread = $threadStmt->fetchAll() ?: [];
+				if ((string) ($selected['canal'] ?? '') === 'freshchat') {
+					$freshchatReplyWindowOpen = false;
+					for ($index = count($thread) - 1; $index >= 0; $index--) {
+						$message = $thread[$index];
+						if ((int) ($message['es_bot'] ?? 0) !== 0) {
+							continue;
+						}
+						$freshchatLastInboundAt = (string) ($message['fecha'] ?? ($message['created_at'] ?? ''));
+						$lastInboundTimestamp = strtotime($freshchatLastInboundAt);
+						$freshchatReplyWindowOpen = $lastInboundTimestamp !== false && $lastInboundTimestamp >= time() - 86400;
+						break;
+					}
+				}
+
+				$notes = (new CciConversationNote())->byConversation($selectedId);
+			}
+		} catch (Throwable $e) {
+			error_log('CCI conversaciones() error: ' . $e->getMessage());
+			$items = [];
+		}
+
+		// Endpoint JSON para auto-refresh de mensajes desde el frontend
+		if (isset($_GET['json_thread']) && $selectedId > 0) {
+			header('Content-Type: application/json; charset=utf-8');
+			echo json_encode([
+				'ok'       => true,
+				'messages' => array_values(array_map(static function (array $m): array {
+					return [
+						'id'     => (int) ($m['id'] ?? 0),
+						'texto'  => (string) ($m['mensaje'] ?? ''),
+						'tipo'   => (string) ($m['tipo'] ?? 'texto'),
+						'es_bot' => (int) ($m['es_bot'] ?? 0),
+						'fecha'  => (string) ($m['fecha'] ?? ($m['created_at'] ?? '')),
+					];
+				}, $thread)),
+			], JSON_UNESCAPED_UNICODE);
+			exit;
+		}
+
+		$this->view('cci/conversaciones', compact(
+			'items',
+			'total',
+			'selected',
+			'selectedId',
+			'thread',
+			'notes',
+			'advisors',
+			'estadoFilter',
+			'asesorFilter',
+			'etiquetaFilter',
+			'etiquetasActivas',
+			'todasLasEtiquetas',
+			'freshchatReplyWindowOpen',
+			'freshchatLastInboundAt'
+		), [
+			'title' => 'Centro de Comunicaciones - Conversaciones',
+			'styles' => ['cci.css'],
 		]);
 	}
 }

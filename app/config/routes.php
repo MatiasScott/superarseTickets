@@ -99,6 +99,10 @@ return static function (Router $router): void {
 	$router->get('/cci/conversaciones', 'CCIController@conversaciones');
 	$router->post('/cci/conversaciones/{id}/reply', 'CCIController@sendConversationReply');
 	$router->post('/cci/conversaciones/{id}/notas', 'CCIController@storeConversationNote');
+	$router->post('/cci/conversaciones/{id}/etiqueta', 'CCIController@guardarEtiqueta');
+	$router->post('/cci/conversaciones/{id}/convertir-potencial', 'CCIController@convertirClientePotencial');
+	$router->post('/cci/etiquetas/guardar', 'CCIController@crearEtiqueta');
+	$router->post('/cci/etiquetas/toggle-estado/{id}', 'CCIController@toggleEstadoEtiqueta');
 	$router->post('/cci/sync/whatsapp', 'CCIController@syncWhatsApp');
 	$router->get('/cci/freshchat-diagnostico', 'CCIController@freshchatDiagnostico');
 	$router->get('/api/cci/whatsapp/webhook', 'CCIController@whatsAppWebhook');
