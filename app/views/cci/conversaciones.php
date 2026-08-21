@@ -5,14 +5,25 @@ $selectedId = (int) ($selectedId ?? 0);
 $selected = $selected ?? null;
 $thread = $thread ?? [];
 $notes = $notes ?? [];
+$numeroContacto = $numeroContacto ?? '';
+$nombreContacto = $nombreContacto ?? '';
 $advisors = $advisors ?? [];
 $estadoFilter = (string) ($estadoFilter ?? 'activo');
 $asesorFilter = (int) ($asesorFilter ?? 0);
 $etiquetaFilter = (int) ($etiquetaFilter ?? 0);
+$fechaInicio = (string) ($fechaInicio ?? '');
+$fechaFin = (string) ($fechaFin ?? '');
+$phoneSearch = trim((string) ($_GET['phone_search'] ?? ''));
 $isFreshchatConversation = (string) ($selected['canal'] ?? '') === 'freshchat';
 $freshchatReplyWindowOpen = (bool) ($freshchatReplyWindowOpen ?? true);
 $freshchatLastInboundAt = (string) ($freshchatLastInboundAt ?? '');
 $filterQuery = 'estado=' . rawurlencode($estadoFilter) . '&asesor=' . $asesorFilter . '&etiqueta=' . $etiquetaFilter;
+if ($fechaInicio !== '') {
+	$filterQuery .= '&fecha_inicio=' . rawurlencode($fechaInicio);
+}
+if ($fechaFin !== '') {
+	$filterQuery .= '&fecha_fin=' . rawurlencode($fechaFin);
+}
 // Garantizar que las variables de etiquetas existan y no generen "Undefined variable"
 if (!isset($etiquetasActivas) || !is_array($etiquetasActivas)) {
 	$etiquetasActivas = [];
@@ -30,7 +41,8 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 				<h1 class="h4 mb-0"><i class="bi bi-chat-square-text"></i> Conversaciones</h1>
 			</div>
 			<div class="d-flex align-items-center gap-2">
-				<form method="GET" class="d-flex align-items-center gap-2">
+				<form method="GET" class="d-flex align-items-center gap-2 flex-wrap">
+					<input type="text" class="form-control form-control-sm" id="cci-phone-search" name="phone_search" value="<?= e($phoneSearch) ?>" placeholder="Buscar por teléfono..." style="width: 180px;">
 					<label class="form-label mb-0" style="font-size: 0.9rem;"><i class="bi bi-funnel"></i> Estado</label>
 					<select class="form-select" style="width:130px; font-size: 0.9rem;" name="estado" onchange="this.form.submit()">
 						<?php foreach (['activo' => 'Activas', 'cerrado' => 'Cerradas', 'todos' => 'Todas'] as $value => $label): ?>
@@ -51,6 +63,11 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 							<option value="<?= (int) ($etFiltro['id'] ?? 0) ?>" <?= $etiquetaFilter === (int) ($etFiltro['id'] ?? 0) ? 'selected' : '' ?>>🏷️ <?= e((string) ($etFiltro['nombre'] ?? '')) ?></option>
 						<?php endforeach; ?>
 					</select>
+					<label class="form-label mb-0" style="font-size: 0.9rem;"><i class="bi bi-calendar-range"></i></label>
+					<input type="date" class="form-control form-control-sm" name="fecha_inicio" value="<?= e($fechaInicio) ?>" style="width: 145px;" title="Fecha inicio">
+					<input type="date" class="form-control form-control-sm" name="fecha_fin" value="<?= e($fechaFin) ?>" style="width: 145px;" title="Fecha fin">
+					<button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-search"></i></button>
+					<a href="<?= e(base_url('cci/conversaciones')) ?>" class="btn btn-sm btn-outline-secondary"><i class="bi bi-x-lg"></i></a>
 				</form>
 			</div>
 		</div>
@@ -70,6 +87,20 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 				<strong style="font-size: 0.95rem;">Conversaciones</strong>
 				<span class="badge text-bg-secondary" style="font-size: 0.8rem;"><?= e((string) $total) ?></span>
 			</div>
+			<div id="cci-bulk-actions" class="px-2 py-2" style="display:none; border-bottom: 1px solid #e9ecef; background: #f8fbff;">
+				<div class="d-flex align-items-center gap-2 flex-wrap">
+					<span class="badge text-bg-primary" id="cci-selected-count">0 seleccionadas</span>
+					<button type="button" class="btn btn-sm btn-outline-primary" id="cci-btn-bulk-message">
+						<i class="bi bi-send"></i> Mensaje
+					</button>
+					<button type="button" class="btn btn-sm btn-outline-danger" id="cci-btn-bulk-close">
+						<i class="bi bi-lock"></i> Cerrar
+					</button>
+					<button type="button" class="btn btn-sm btn-outline-secondary" id="cci-btn-bulk-clear">
+						<i class="bi bi-x-circle"></i> Limpiar
+					</button>
+				</div>
+			</div>
 			<div class="cci-chat-list-body">
 				<?php foreach ($items as $row): ?>
 					<?php
@@ -86,10 +117,13 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 					$asesor = (string) ($row['asesor'] ?? 'Sin asignar');
 					$hayNuevos = $active ? false : (bool) ($row['hay_nuevos'] ?? false);
 					?>
-					<a class="cci-thread-item<?= $active ? ' active' : '' ?>" href="<?= e(base_url('cci/conversaciones?' . $filterQuery . '&selected_id=' . $id)) ?>" style="position: relative;">
+					<a class="cci-thread-item<?= $active ? ' active' : '' ?>" href="<?= e(base_url('cci/conversaciones?' . $filterQuery . '&selected_id=' . $id)) ?>" style="position: relative;" data-phone="<?= e($numero) ?>">
 						<?php if ($hayNuevos): ?>
 							<span class="cci-badge-unread">•</span>
 						<?php endif; ?>
+						<div style="position: absolute; left: 8px; top: 8px; z-index: 2;">
+							<input type="checkbox" class="form-check-input cci-conv-checkbox" value="<?= e((string) $id) ?>" onclick="event.stopPropagation();" onchange="event.stopPropagation();">
+						</div>
 						<div class="cci-avatar"><?= e(strtoupper(substr($nombre, 0, 1))) ?></div>
 						<div class="cci-thread-main">
 							<div class="cci-thread-top">
@@ -370,12 +404,17 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 									<i class="bi bi-send-fill"></i> Enviar
 								</button>
 							</div>
+
+							<div id="cci-file-gallery" class="mt-2" style="display:none;">
+								<div style="font-size: 0.78rem; color:#6c757d; margin-bottom:6px;">Adjuntos seleccionados (puedes eliminar antes de enviar):</div>
+								<div id="cci-file-items" style="display:flex; gap:8px; flex-wrap:wrap;"></div>
+							</div>
 						</form>
 					</div>
 
 					<!-- Bandeja de emojis: fuera del contenedor con scroll para no quedar recortada -->
-					<div id="cci-emoji-panel" style="display: none; position: fixed; z-index: 2000; background: #fff; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,.2); padding: 8px; max-width: 260px; flex-wrap: wrap;">
-						<?php foreach (['😀','😁','😂','🤣','😊','😍','😘','😉','😎','🤔','😢','😭','😡','👍','👎','🙏','👋','💪','🎉','🔥','❤️','💙','✅','❌','⏰','📌','📎','🎁','😴','🙌'] as $cciEmoji): ?>
+					<div id="cci-emoji-panel" style="display: none; position: fixed; z-index: 2000; background: #fff; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,.2); padding: 8px; max-width: 320px; max-height: 260px; overflow-y: auto; flex-wrap: wrap; gap: 4px;">
+						<?php foreach (['😀','😁','😂','🤣','😊','😍','😘','😉','😎','🤔','😢','😭','😡','👍','👎','🙏','👋','💪','🎉','🔥','❤️','💙','✅','❌','⏰','📌','📎','🎁','😴','🙌','😃','😄','😅','😆','🙂','🙃','😇','🥰','🤩','😗','😚','😙','😋','😛','😜','🤪','😌','😔','😐','😶','🤐','🤨','🤫','😒','😏','😬','😪','🤤','😷','🤒','🤕','🤢','🤮','🤧','🤬','💀','👻','🤖','😺','😸','😹','😻','🧡','💛','💚','💜','🖤','🤍','🤎','💔','💕','💞','💓','💗','💖','💘','💝','💟','🤚','🖐️','✋','🖖','👌','🤌','🤏','✌️','🤞','🫰','🤟'] as $cciEmoji): ?>
 							<button type="button" class="btn btn-sm" style="font-size: 1.1rem; padding: 2px 6px;" onclick="insertEmoji('<?= e($cciEmoji) ?>')"><?= e($cciEmoji) ?></button>
 						<?php endforeach; ?>
 					</div>
@@ -461,7 +500,7 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 
 		<!-- MODAL: CREAR CLIENTE POTENCIAL (sin salir de conversaciones) -->
 		<div class="modal fade" id="modalCrearPotencial" tabindex="-1" aria-labelledby="modalCrearPotencialLabel" aria-hidden="true">
-			<div class="modal-dialog modal-dialog-centered">
+			<div class="modal-dialog modal-lg modal-dialog-centered">
 				<div class="modal-content">
 					<div class="modal-header">
 						<h5 class="modal-title" id="modalCrearPotencialLabel"><i class="bi bi-person-plus-fill"></i> Crear cliente potencial</h5>
@@ -471,25 +510,91 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 						<div id="cci-potencial-status"></div>
 						<form id="cci-form-potencial">
 							<?= csrf_field() ?>
-							<input type="hidden" name="origen" value="CCI">
-							<div class="mb-2">
+							<div class="row g-3">
+								<div class="col-md-6">
 								<label class="form-label">Nombres</label>
 								<input type="text" name="nombres" id="cci-potencial-nombres" class="form-control form-control-sm" required maxlength="150" value="<?= e($nombreContacto ?? '') ?>">
-							</div>
-							<div class="mb-2">
+								</div>
+								<div class="col-md-6">
 								<label class="form-label">Apellidos</label>
 								<input type="text" name="apellidos" class="form-control form-control-sm" maxlength="150">
-							</div>
-							<div class="mb-2">
+								</div>
+								<div class="col-md-4">
+									<label class="form-label">Identificacion / Cedula / Pasaporte</label>
+									<input type="text" name="identificacion" class="form-control form-control-sm" maxlength="30" placeholder="Opcional">
+								</div>
+								<div class="col-md-4">
 								<label class="form-label">Celular</label>
-								<input type="text" name="celular" id="cci-potencial-celular" class="form-control form-control-sm" placeholder="Ej: +593987654321" value="<?= e(preg_match('/^\+5939\d{8}$/', (string) ($numeroContacto ?? '')) ? $numeroContacto : '') ?>">
+								<input type="text" name="celular" id="cci-potencial-celular" class="form-control form-control-sm" placeholder="Ej: +593987654321" maxlength="30" inputmode="tel" pattern="^\+5939[0-9]{8}$" title="Usa el formato +593987654321" value="<?= e(preg_match('/^\+5939\d{8}$/', (string) ($numeroContacto ?? '')) ? $numeroContacto : '') ?>">
+								<div class="form-text">Se completa automáticamente el prefijo +593 cuando es posible.</div>
+								</div>
+								<div class="col-md-4">
+									<label class="form-label">Asesor</label>
+									<select id="cci-potencial-origen" name="origen" class="form-select form-select-sm" required>
+										<option value="">Seleccione asesor</option>
+										<?php foreach (($asesoresCrm ?? []) as $asesorCrm): ?>
+											<?php $asesorNombre = trim((string) ($asesorCrm['nombre'] ?? '')); ?>
+											<?php if ($asesorNombre === '') continue; ?>
+											<option value="<?= e($asesorNombre) ?>"><?= e($asesorNombre) ?></option>
+										<?php endforeach; ?>
+									</select>
+								</div>
+								<div class="col-md-6">
+									<label class="form-label">Creado por <small class="text-muted">(Automático)</small></label>
+									<input type="text" id="cci-potencial-creado-por" name="creado_por" class="form-control form-control-sm" readonly placeholder="Se completa automáticamente según el asesor">
+								</div>
+								<div class="col-md-6">
+									<label class="form-label">Carrera</label>
+									<select id="cci-potencial-carrera" name="carrera" class="form-select form-select-sm">
+										<option value="">Seleccione carrera</option>
+										<?php foreach (($carreras ?? []) as $carreraItem): ?>
+											<?php $carreraNombre = trim((string) ($carreraItem['nombre'] ?? '')); ?>
+											<?php if ($carreraNombre === '') continue; ?>
+											<option value="<?= e($carreraNombre) ?>"><?= e($carreraNombre) ?></option>
+										<?php endforeach; ?>
+									</select>
+								</div>
+								<div class="col-md-6">
+									<label class="form-label">Modalidad</label>
+									<select id="cci-potencial-modalidad" name="modalidad" class="form-select form-select-sm">
+										<option value="">Seleccione modalidad</option>
+									</select>
+								</div>
+								<div class="col-md-6">
+									<label class="form-label">Provincia</label>
+									<input type="text" id="cci-potencial-provincia" name="provincia" class="form-control form-control-sm" maxlength="120" placeholder="Ej: Pichincha">
+								</div>
+								<div class="col-md-6">
+									<label class="form-label">Ciudad</label>
+									<input type="text" id="cci-potencial-ciudad" name="ciudad" class="form-control form-control-sm" maxlength="120" placeholder="Ej: Quito">
+								</div>
 							</div>
-							<div class="mb-2">
-								<label class="form-label">Correo (opcional)</label>
-								<input type="email" name="correo_personal" class="form-control form-control-sm" maxlength="255">
-							</div>
-							<button type="submit" class="btn btn-success btn-sm w-100"><i class="bi bi-check-circle"></i> Crear cliente potencial</button>
+							<button type="submit" class="btn btn-success btn-sm w-100 mt-3"><i class="bi bi-check-circle"></i> Crear cliente potencial</button>
 						</form>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<div class="modal fade" id="modalBulkMessage" tabindex="-1" aria-labelledby="modalBulkMessageLabel" aria-hidden="true">
+			<div class="modal-dialog modal-dialog-centered">
+				<div class="modal-content">
+					<div class="modal-header">
+						<h5 class="modal-title" id="modalBulkMessageLabel"><i class="bi bi-send"></i> Enviar mensaje masivo</h5>
+						<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+					</div>
+					<div class="modal-body">
+						<div id="cci-bulk-status"></div>
+						<div class="mb-2 small text-muted">Se enviará a <strong id="cci-bulk-total">0</strong> conversación(es).</div>
+						<textarea id="cci-bulk-message-text" class="form-control" rows="4" maxlength="1000" placeholder="Escribe el mensaje masivo..."></textarea>
+						<div class="form-check mt-2">
+							<input class="form-check-input" type="checkbox" id="cci-bulk-note">
+							<label class="form-check-label" for="cci-bulk-note">Agregar nota de sistema</label>
+						</div>
+					</div>
+					<div class="modal-footer">
+						<button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+						<button type="button" class="btn btn-primary btn-sm" id="cci-btn-bulk-send-now">Enviar masivo</button>
 					</div>
 				</div>
 			</div>
@@ -655,18 +760,114 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 					});
 			}
 
-			if (fileInput) {
-				fileInput.addEventListener('change', function() {
-					var count = this.files.length;
-					var fileCountEl = document.getElementById('cci-file-count');
-					var fileNumEl = document.getElementById('cci-file-num');
-					if (count > 0 && fileCountEl && fileNumEl) {
-						fileNumEl.textContent = count;
+			var removedFileIndices = [];
+			var MAX_FILES = 12;
+
+			function updateFileGallery() {
+				if (!fileInput) return;
+				var files = fileInput.files || [];
+				var fileCountEl = document.getElementById('cci-file-count');
+				var fileNumEl = document.getElementById('cci-file-num');
+				var galleryEl = document.getElementById('cci-file-gallery');
+				var itemsEl = document.getElementById('cci-file-items');
+				if (!itemsEl || !galleryEl) return;
+
+				itemsEl.innerHTML = '';
+				var activeCount = 0;
+
+				for (var i = 0; i < files.length; i++) {
+					if (removedFileIndices.indexOf(i) !== -1) {
+						continue;
+					}
+					if (activeCount >= MAX_FILES) break;
+					activeCount++;
+
+					(function(idx, f) {
+						var item = document.createElement('div');
+						item.style.cssText = 'position:relative;width:80px;height:80px;border-radius:6px;background:#e9ecef;display:flex;align-items:center;justify-content:center;border:1px solid #dee2e6;overflow:hidden;';
+						item.setAttribute('data-file-idx', idx);
+
+						var ext = (f.name.split('.').pop() || '').toLowerCase();
+						if (/^image\//.test(f.type)) {
+							var reader = new FileReader();
+							reader.onload = function(e) {
+								var img = document.createElement('img');
+								img.src = e.target.result;
+								img.style.cssText = 'width:100%;height:100%;object-fit:cover;';
+								item.appendChild(img);
+							};
+							reader.readAsDataURL(f);
+						} else {
+							var icon = document.createElement('i');
+							if (/^video\//.test(f.type)) icon.className = 'bi bi-film';
+							else if (/^audio\//.test(f.type)) icon.className = 'bi bi-music-note-beamed';
+							else if (ext === 'pdf') icon.className = 'bi bi-file-earmark-pdf';
+							else icon.className = 'bi bi-file-earmark';
+							icon.style.cssText = 'font-size:1.5rem;color:#6c757d;';
+							item.appendChild(icon);
+						}
+
+						var removeBtn = document.createElement('button');
+						removeBtn.type = 'button';
+						removeBtn.innerHTML = '×';
+						removeBtn.title = 'Eliminar';
+						removeBtn.style.cssText = 'position:absolute;top:2px;right:2px;width:20px;height:20px;border:none;border-radius:50%;background:#dc3545;color:#fff;font-size:14px;line-height:1;';
+						removeBtn.addEventListener('click', function(ev) {
+							ev.preventDefault();
+							ev.stopPropagation();
+							if (removedFileIndices.indexOf(idx) === -1) {
+								removedFileIndices.push(idx);
+							}
+							updateFileGallery();
+						});
+						item.appendChild(removeBtn);
+
+						var name = document.createElement('div');
+						name.textContent = f.name;
+						name.style.cssText = 'position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.55);color:#fff;font-size:9px;padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+						item.appendChild(name);
+						itemsEl.appendChild(item);
+					})(i, files[i]);
+				}
+
+				if (fileCountEl && fileNumEl) {
+					if (activeCount > 0) {
+						fileNumEl.textContent = activeCount + ' / ' + MAX_FILES;
 						fileCountEl.style.display = 'inline-flex';
-					} else if (fileCountEl) {
+					} else {
 						fileCountEl.style.display = 'none';
 					}
+				}
+				galleryEl.style.display = activeCount > 0 ? '' : 'none';
+			}
+
+			if (fileInput) {
+				fileInput.addEventListener('change', function() {
+					removedFileIndices = [];
+					if (fileInput.files && fileInput.files.length > MAX_FILES) {
+						alert('Solo puedes adjuntar hasta ' + MAX_FILES + ' archivos por mensaje.');
+						var dtLimit = new DataTransfer();
+						for (var i = 0; i < MAX_FILES; i++) {
+							dtLimit.items.add(fileInput.files[i]);
+						}
+						fileInput.files = dtLimit.files;
+					}
+					updateFileGallery();
 				});
+
+				var form = fileInput.closest('form');
+				if (form) {
+					form.addEventListener('submit', function() {
+						var dt = new DataTransfer();
+						var files = fileInput.files;
+						for (var j = 0; j < files.length; j++) {
+							if (removedFileIndices.indexOf(j) === -1) {
+								dt.items.add(files[j]);
+							}
+						}
+						fileInput.files = dt.files;
+					});
+				}
 			}
 
 			scrollToBottom();
@@ -695,13 +896,14 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 					var dt = e.dataTransfer;
 					var files = dt.files;
 					if (files.length > 0) {
-						fileInput.files = files;
-						var fileCountEl = document.getElementById('cci-file-count');
-						var fileNumEl = document.getElementById('cci-file-num');
-						if (fileCountEl && fileNumEl) {
-							fileNumEl.textContent = files.length;
-							fileCountEl.style.display = 'inline-flex';
+						var dtDrop = new DataTransfer();
+						var max = Math.min(files.length, MAX_FILES);
+						for (var d = 0; d < max; d++) {
+							dtDrop.items.add(files[d]);
 						}
+						fileInput.files = dtDrop.files;
+						removedFileIndices = [];
+						updateFileGallery();
 					}
 				});
 			}
@@ -776,19 +978,21 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 				});
 			}
 
-			function insertEmoji(emoji) {
-				var textarea = document.getElementById('cci-reply-text');
-				if (textarea) {
-					var start = textarea.selectionStart;
-					var end = textarea.selectionEnd;
-					var text = textarea.value;
-					textarea.value = text.substring(0, start) + emoji + text.substring(end);
-					textarea.selectionStart = textarea.selectionEnd = start + emoji.length;
-					textarea.focus();
-				}
-			}
+
 		})();
 
+		// Funciones globales de emoji (Req 7)
+		function insertEmoji(emoji) {
+			var textarea = document.getElementById('cci-reply-text');
+			if (textarea) {
+				var start = textarea.selectionStart;
+				var end = textarea.selectionEnd;
+				var text = textarea.value;
+				textarea.value = text.substring(0, start) + emoji + text.substring(end);
+				textarea.selectionStart = textarea.selectionEnd = start + emoji.length;
+				textarea.focus();
+			}
+		}
 		function toggleEmojiPanel() {
 			var panel = document.getElementById('cci-emoji-panel');
 			var btn = document.getElementById('cci-btn-emoji');
@@ -810,6 +1014,122 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 			if (panel.contains(evt.target) || (btn && btn.contains(evt.target))) return;
 			panel.style.display = 'none';
 		});
+
+		(function() {
+			var searchInput = document.getElementById('cci-phone-search');
+			if (searchInput) {
+				searchInput.addEventListener('input', function() {
+					var q = (this.value || '').replace(/\s+/g, '').toLowerCase();
+					document.querySelectorAll('.cci-thread-item[data-phone]').forEach(function(item) {
+						var phone = (item.getAttribute('data-phone') || '').replace(/\s+/g, '').toLowerCase();
+						item.style.display = q === '' || phone.indexOf(q) !== -1 ? '' : 'none';
+					});
+				});
+			}
+
+			var checkboxEls = Array.prototype.slice.call(document.querySelectorAll('.cci-conv-checkbox'));
+			var bulkBar = document.getElementById('cci-bulk-actions');
+			var selectedCountEl = document.getElementById('cci-selected-count');
+			var btnBulkMessage = document.getElementById('cci-btn-bulk-message');
+			var btnBulkClose = document.getElementById('cci-btn-bulk-close');
+			var btnBulkClear = document.getElementById('cci-btn-bulk-clear');
+			var selectedIds = [];
+
+			function updateBulkUi() {
+				selectedIds = checkboxEls.filter(function(c) { return c.checked; }).map(function(c) { return parseInt(c.value, 10); });
+				if (bulkBar) {
+					bulkBar.style.display = selectedIds.length > 0 ? '' : 'none';
+				}
+				if (selectedCountEl) {
+					selectedCountEl.textContent = selectedIds.length + ' seleccionadas';
+				}
+				var totalEl = document.getElementById('cci-bulk-total');
+				if (totalEl) totalEl.textContent = selectedIds.length;
+			}
+
+			checkboxEls.forEach(function(cb) {
+				cb.addEventListener('change', updateBulkUi);
+			});
+
+			if (btnBulkClear) {
+				btnBulkClear.addEventListener('click', function() {
+					checkboxEls.forEach(function(cb) { cb.checked = false; });
+					updateBulkUi();
+				});
+			}
+
+			if (btnBulkMessage) {
+				btnBulkMessage.addEventListener('click', function() {
+					if (selectedIds.length === 0) return;
+					var modalEl = document.getElementById('modalBulkMessage');
+					if (modalEl && window.bootstrap && window.bootstrap.Modal) {
+						window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
+					}
+				});
+			}
+
+			var btnBulkSendNow = document.getElementById('cci-btn-bulk-send-now');
+			if (btnBulkSendNow) {
+				btnBulkSendNow.addEventListener('click', function() {
+					var text = (document.getElementById('cci-bulk-message-text') || {}).value || '';
+					var addNote = !!((document.getElementById('cci-bulk-note') || {}).checked);
+					var status = document.getElementById('cci-bulk-status');
+					if (text.trim() === '') {
+						if (status) status.innerHTML = '<div class="alert alert-warning py-2 mb-2">Escribe un mensaje.</div>';
+						return;
+					}
+					fetch('<?= e(base_url('cci/conversaciones/enviar-masivo')) ?>', {
+						method: 'POST',
+						credentials: 'same-origin',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							ids: selectedIds,
+							mensaje: text,
+							agregar_nota: addNote,
+							_token: '<?= e(csrf_token()) ?>'
+						})
+					}).then(function(r) {
+						return r.json();
+					}).then(function(data) {
+						if (!data || !data.ok) {
+							if (status) status.innerHTML = '<div class="alert alert-danger py-2 mb-2">' + ((data && data.error) ? data.error : 'Error al enviar') + '</div>';
+							return;
+						}
+						window.location.reload();
+					}).catch(function() {
+						if (status) status.innerHTML = '<div class="alert alert-danger py-2 mb-2">No se pudo enviar el mensaje masivo.</div>';
+					});
+				});
+			}
+
+			if (btnBulkClose) {
+				btnBulkClose.addEventListener('click', function() {
+					if (selectedIds.length === 0) return;
+					if (!confirm('Se cerrarán ' + selectedIds.length + ' conversaciones. ¿Continuar?')) return;
+					fetch('<?= e(base_url('cci/conversaciones/cerrar-lote')) ?>', {
+						method: 'POST',
+						credentials: 'same-origin',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							ids: selectedIds,
+							_token: '<?= e(csrf_token()) ?>'
+						})
+					}).then(function(r) {
+						return r.json();
+					}).then(function(data) {
+						if (!data || !data.ok) {
+							alert((data && data.error) ? data.error : 'No se pudo cerrar en lote');
+							return;
+						}
+						window.location.reload();
+					}).catch(function() {
+						alert('No se pudo cerrar en lote.');
+					});
+				});
+			}
+
+			updateBulkUi();
+		})();
 
 		function confirmarYEnviarEtiqueta(select) {
 			if (select.value !== "") {
@@ -850,20 +1170,115 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 		var form = document.getElementById('cci-form-potencial');
 		if (!form) return;
 		var statusBox = document.getElementById('cci-potencial-status');
+		var asesorSelect = document.getElementById('cci-potencial-origen');
+		var creadoPorInput = document.getElementById('cci-potencial-creado-por');
+		var modalidadSelect = document.getElementById('cci-potencial-modalidad');
+		var celularInput = document.getElementById('cci-potencial-celular');
+		var modalEl = document.getElementById('modalCrearPotencial');
+
+		function mapAsesorToCreador(asesor) {
+			var clean = (asesor || '').trim();
+			if (clean === '') return '';
+
+			var equipoManana = ['Lizbeth Ochoa', 'Jennifer Betancourt', 'Melany Artieda'];
+			if (equipoManana.indexOf(clean) !== -1) return 'EQUIPO MAÑANA';
+			if (clean === 'Melany Vásquez') return 'EQUIPO NOCHE';
+
+			var equipoPropio = ['Luis Granja', 'Mayra Segarra', 'Noemi Toro'];
+			if (equipoPropio.indexOf(clean) !== -1) return clean;
+
+			return '';
+		}
+
+		function refreshCreadoPor() {
+			if (!asesorSelect || !creadoPorInput) return;
+			creadoPorInput.value = mapAsesorToCreador(asesorSelect.value);
+		}
+
+		function normalizePhoneValue(raw) {
+			var digits = String(raw || '').replace(/\D+/g, '');
+			if (digits === '') return '';
+			if (digits.indexOf('593') === 0) {
+				var rest = digits.slice(3);
+				if (rest.length === 9 && rest.charAt(0) === '9') return '+593' + rest;
+			}
+			if (digits.length === 10 && digits.charAt(0) === '0' && digits.charAt(1) === '9') {
+				return '+593' + digits.slice(1);
+			}
+			if (digits.length === 9 && digits.charAt(0) === '9') {
+				return '+593' + digits;
+			}
+			if (digits.length === 12 && digits.indexOf('593') === 0 && digits.charAt(3) === '9') {
+				return '+' + digits;
+			}
+			return raw;
+		}
+
+		function loadModalidades() {
+			if (!modalidadSelect) return;
+			fetch('<?= e(base_url('crm/getModalidades')) ?>', {
+				method: 'GET',
+				credentials: 'same-origin',
+				headers: { 'X-Requested-With': 'XMLHttpRequest' }
+			}).then(function(r) {
+				return r.ok ? r.json() : null;
+			}).then(function(data) {
+				if (!data || !data.success || !Array.isArray(data.data)) return;
+				var current = modalidadSelect.value;
+				modalidadSelect.innerHTML = '<option value="">Seleccione modalidad</option>';
+				data.data.forEach(function(item) {
+					var nombre = item && item.nombre ? String(item.nombre).trim() : '';
+					if (nombre === '') return;
+					var opt = document.createElement('option');
+					opt.value = nombre;
+					opt.textContent = nombre;
+					modalidadSelect.appendChild(opt);
+				});
+				if (current !== '') modalidadSelect.value = current;
+			}).catch(function() {
+				// Silencioso: mantiene fallback con opción vacía
+			});
+		}
+
+		if (asesorSelect) {
+			asesorSelect.addEventListener('change', refreshCreadoPor);
+		}
+
+		if (celularInput) {
+			celularInput.addEventListener('blur', function() {
+				var normalized = normalizePhoneValue(celularInput.value);
+				if (normalized !== '') {
+					celularInput.value = normalized;
+				}
+			});
+		}
+
+		if (modalEl) {
+			modalEl.addEventListener('shown.bs.modal', function() {
+				loadModalidades();
+				refreshCreadoPor();
+			});
+		}
 
 		form.addEventListener('submit', function(evt) {
 			evt.preventDefault();
 			statusBox.innerHTML = '';
+			refreshCreadoPor();
+			if (celularInput) {
+				celularInput.value = normalizePhoneValue(celularInput.value);
+			}
 
 			fetch('<?= e(base_url('crm/prospectos')) ?>', {
 				method: 'POST',
 				body: new FormData(form),
 				headers: { 'X-Requested-With': 'XMLHttpRequest' },
-			}).then(function() {
+			}).then(function(response) {
+				if (!response.ok) {
+					throw new Error('No se pudo crear el cliente potencial');
+				}
 				statusBox.innerHTML = '<div class="alert alert-success py-2 mb-2">Cliente potencial creado correctamente.</div>';
 				setTimeout(function() {
-					var modalEl = document.getElementById('modalCrearPotencial');
-					if (modalEl && window.bootstrap?.Modal) {
+					if (modalEl && window.bootstrap && window.bootstrap.Modal) {
 						window.bootstrap.Modal.getOrCreateInstance(modalEl).hide();
 					}
 				}, 1200);

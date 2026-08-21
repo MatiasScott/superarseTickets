@@ -101,8 +101,15 @@ return static function (Router $router): void {
 	$router->post('/cci/conversaciones/{id}/notas', 'CCIController@storeConversationNote');
 	$router->post('/cci/conversaciones/{id}/etiqueta', 'CCIController@guardarEtiqueta');
 	$router->post('/cci/conversaciones/{id}/convertir-potencial', 'CCIController@convertirClientePotencial');
+	$router->post('/cci/conversaciones/cerrar-lote', 'CCIController@cerrarLote');
+	$router->post('/cci/conversaciones/enviar-masivo', 'CCIController@enviarMasivo');
+	$router->get('/cci/conversaciones/{id}/mensajes-anteriores', 'CCIController@obtenerMensajesAnteriores');
 	$router->post('/cci/etiquetas/guardar', 'CCIController@crearEtiqueta');
 	$router->post('/cci/etiquetas/toggle-estado/{id}', 'CCIController@toggleEstadoEtiqueta');
+	// Rutas de subetiquetas (Req 1)
+	$router->get('/cci/subetiquetas/{etiquetaId}', 'CCIController@obtenerSubetiquetas');
+	$router->post('/cci/subetiquetas/guardar', 'CCIController@crearSubetiqueta');
+	$router->post('/cci/subetiquetas/toggle-estado/{id}', 'CCIController@toggleEstadoSubetiqueta');
 	$router->post('/cci/sync/whatsapp', 'CCIController@syncWhatsApp');
 	$router->get('/cci/freshchat-diagnostico', 'CCIController@freshchatDiagnostico');
 	$router->get('/api/cci/whatsapp/webhook', 'CCIController@whatsAppWebhook');

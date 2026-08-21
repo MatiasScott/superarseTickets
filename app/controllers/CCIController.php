@@ -7,6 +7,94 @@ class CCIController extends Controller
 		return Database::getInstance()->connection();
 	}
 
+	private function connectSuperarseDatabase(): ?PDO
+	{
+		$host = trim((string) env('SUPERARSE_DB_HOST', ''));
+		$port = trim((string) env('SUPERARSE_DB_PORT', '3306'));
+		$database = trim((string) env('SUPERARSE_DB_DATABASE', ''));
+		$username = trim((string) env('SUPERARSE_DB_USERNAME', ''));
+		$password = (string) env('SUPERARSE_DB_PASSWORD', '');
+		$charset = trim((string) env('SUPERARSE_DB_CHARSET', 'utf8mb4'));
+
+		if ($host !== '' && $database !== '' && $username !== '') {
+			$dsn = 'mysql:host=' . $host . ';port=' . $port . ';dbname=' . $database . ';charset=' . $charset;
+			return new PDO($dsn, $username, $password, [
+				PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+				PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+			]);
+		}
+
+		// Fallback explícito solicitado: BD superarse1_conectados.
+		$host = trim((string) env('DB_HOST', 'localhost'));
+		$port = trim((string) env('DB_PORT', '3306'));
+		$username = trim((string) env('DB_USERNAME', env('DB_USER', 'root')));
+		$password = (string) env('DB_PASSWORD', '');
+		$charset = trim((string) env('DB_CHARSET', 'utf8mb4'));
+		$database = 'superarse1_conectados';
+
+		if ($host === '' || $username === '') {
+			return null;
+		}
+
+		try {
+			$dsn = 'mysql:host=' . $host . ';port=' . $port . ';dbname=' . $database . ';charset=' . $charset;
+			return new PDO($dsn, $username, $password, [
+				PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+				PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+			]);
+		} catch (Throwable $e) {
+			return null;
+		}
+	}
+
+	private function fetchCciCareerOptions(PDO $localDb): array
+	{
+		// 1) Intentar igual que CRM: users.programa desde BD Superarse.
+		try {
+			$remote = $this->connectSuperarseDatabase();
+			if ($remote instanceof PDO) {
+				$rows = $remote->query("SELECT DISTINCT TRIM(COALESCE(programa, '')) AS programa
+					FROM users
+					WHERE programa IS NOT NULL AND TRIM(programa) <> ''
+					ORDER BY programa ASC")->fetchAll() ?: [];
+				$carreras = [];
+				foreach ($rows as $row) {
+					$nombre = trim((string) ($row['programa'] ?? ''));
+					if ($nombre !== '') {
+						$carreras[] = ['id' => 0, 'nombre' => $nombre];
+					}
+				}
+				if (!empty($carreras)) {
+					return $carreras;
+				}
+			}
+		} catch (Throwable $e) {
+			// continuar con fallback local
+		}
+
+		// 2) Fallback local (tabla carreras)
+		$carreras = $localDb->query("SELECT id, nombre
+			FROM carreras
+			WHERE TRIM(COALESCE(nombre, '')) <> ''
+			  AND (
+				LOWER(TRIM(COALESCE(estado, ''))) = 'activo'
+				OR estado = '1'
+				OR estado = 1
+				OR estado IS NULL
+			  )
+			ORDER BY nombre ASC
+			LIMIT 200")->fetchAll() ?: [];
+		if (!empty($carreras)) {
+			return $carreras;
+		}
+
+		return $localDb->query("SELECT id, nombre
+			FROM carreras
+			WHERE TRIM(COALESCE(nombre, '')) <> ''
+			ORDER BY nombre ASC
+			LIMIT 200")->fetchAll() ?: [];
+	}
+
 	private function ensureCciTables(PDO $db): void
 	{
 		$db->exec("CREATE TABLE IF NOT EXISTS cci_proveedores (
@@ -140,10 +228,24 @@ class CCIController extends Controller
 			fecha_creacion DATETIME DEFAULT CURRENT_TIMESTAMP
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
+		// Tabla de subetiquetas (Req 1)
+		$db->exec("CREATE TABLE IF NOT EXISTS cci_subetiquetas (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			etiqueta_id INT NOT NULL,
+			nombre VARCHAR(100) NOT NULL,
+			estado TINYINT DEFAULT 1,
+			fecha_creacion DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (etiqueta_id) REFERENCES cci_etiquetas(id) ON DELETE CASCADE,
+			INDEX idx_cci_subetiqueta_etiqueta (etiqueta_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
 		try {
 			$conversacionesColumns = array_column($db->query('SHOW COLUMNS FROM bot_conversaciones')->fetchAll(), 'Field');
 			if (!in_array('etiqueta_id', $conversacionesColumns, true)) {
 				$db->exec('ALTER TABLE bot_conversaciones ADD COLUMN etiqueta_id INT NULL DEFAULT NULL');
+			}
+			if (!in_array('subetiqueta_id', $conversacionesColumns, true)) {
+				$db->exec('ALTER TABLE bot_conversaciones ADD COLUMN subetiqueta_id INT NULL DEFAULT NULL');
 			}
 		} catch (Throwable $e) {
 			// Sin permisos de ALTER se mantiene el comportamiento actual.
@@ -3701,6 +3803,178 @@ class CCIController extends Controller
 		redirect('cci/conversaciones' . ($selectedId > 0 ? '?selected_id=' . $selectedId : ''));
 	}
 
+	/**
+	 * Helper: Crear mensaje de sistema en timeline (Req 11)
+	 * Inserta un mensaje de tipo 'sistema' con icono y color
+	 */
+	private function crearMensajeSistema(PDO $db, int $conversacionId, string $texto, string $tipo = 'info'): void
+	{
+		if ($conversacionId <= 0 || empty($texto)) {
+			return;
+		}
+
+		try {
+			$stmt = $db->prepare('
+				INSERT INTO bot_mensajes (conversacion_id, usuario_id, usuario_nombre, contenido, tipo, es_bot, fecha, created_at, sistema_tipo)
+				VALUES (:conversacion_id, 0, "Sistema", :contenido, "sistema", 1, NOW(), NOW(), :sistema_tipo)
+			');
+			$stmt->execute([
+				'conversacion_id' => $conversacionId,
+				'contenido' => mb_substr($texto, 0, 1000),
+				'sistema_tipo' => $tipo,
+			]);
+		} catch (Throwable $e) {
+			// Silenciosamente ignorar si no se puede crear el mensaje del sistema
+		}
+	}
+
+	/**
+	 * Enviar mensaje masivo a múltiples conversaciones (Req 3)
+	 * POST /cci/conversaciones/enviar-masivo
+	 */
+	public function enviarMasivo(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		$inputJson = file_get_contents('php://input');
+		$data = json_decode($inputJson, true) ?: [];
+		$ids = (array) ($data['ids'] ?? []);
+		$mensaje = trim((string) ($data['mensaje'] ?? ''));
+		$agregarNota = (bool) ($data['agregar_nota'] ?? false);
+		$token = (string) ($data['_token'] ?? '');
+
+		if (!verify_csrf($token)) {
+			echo json_encode(['ok' => false, 'error' => 'Token CSRF inválido']);
+			exit;
+		}
+
+		if (empty($ids) || empty($mensaje)) {
+			echo json_encode(['ok' => false, 'error' => 'Datos incompletos']);
+			exit;
+		}
+
+		$db = $this->db();
+		$this->ensureCciTables($db);
+
+		// Filtrar IDs válidos
+		$validIds = array_filter($ids, static fn($id) => is_numeric($id) && ((int)$id) > 0);
+		if (empty($validIds)) {
+			echo json_encode(['ok' => false, 'error' => 'No hay IDs válidas']);
+			exit;
+		}
+
+		try {
+			$sent = 0;
+			$usuario = Auth::user()['nombre'] ?? 'CCI';
+
+			// Enviar mensaje a cada conversación
+			foreach ($validIds as $convId) {
+				$convId = (int) $convId;
+
+				// Crear mensaje en bot_mensajes
+				$stmt = $db->prepare('
+					INSERT INTO bot_mensajes (conversacion_id, usuario_id, usuario_nombre, contenido, tipo, es_bot, fecha, created_at)
+					VALUES (:conversacion_id, 0, :usuario_nombre, :contenido, "texto", 1, NOW(), NOW())
+				');
+				$stmt->execute([
+					'conversacion_id' => $convId,
+					'usuario_nombre' => $usuario,
+					'contenido' => mb_substr($mensaje, 0, 1000),
+				]);
+
+				// Si desea, también crear como nota interna
+				if ($agregarNota) {
+					$this->crearMensajeSistema($db, $convId, 'Mensaje masivo: ' . mb_substr($mensaje, 0, 100), 'info');
+				}
+
+				$sent++;
+			}
+
+			AuditLogger::log('CREATE', 'bot_mensajes', 0, null, [
+				'bulk_send' => true,
+				'count' => $sent,
+				'ids' => implode(',', $validIds),
+				'mensaje_preview' => mb_substr($mensaje, 0, 50),
+			]);
+
+			echo json_encode([
+				'ok' => true,
+				'sent' => $sent,
+				'message' => 'Mensaje enviado a ' . $sent . ' conversación(es)',
+			]);
+		} catch (Throwable $e) {
+			echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+		}
+		exit;
+	}
+
+	// Métodos para subetiquetas (Req 1)
+	public function obtenerSubetiquetas(int $etiquetaId): void
+	{
+		Auth::requireAuth();
+		$db = $this->db();
+		$this->ensureCciTables($db);
+
+		$stmt = $db->prepare('SELECT id, nombre, estado FROM cci_subetiquetas WHERE etiqueta_id = :etiqueta_id AND estado = 1 ORDER BY nombre ASC');
+		$stmt->execute(['etiqueta_id' => $etiquetaId]);
+		$subetiquetas = $stmt->fetchAll() ?: [];
+
+		header('Content-Type: application/json; charset=utf-8');
+		echo json_encode(['ok' => true, 'subetiquetas' => $subetiquetas], JSON_UNESCAPED_UNICODE);
+		exit;
+	}
+
+	public function crearSubetiqueta(): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			header('Content-Type: application/json; charset=utf-8');
+			echo json_encode(['ok' => false, 'error' => 'Token CSRF inválido.'], JSON_UNESCAPED_UNICODE);
+			exit;
+		}
+
+		$etiquetaId = (int) ($_POST['etiqueta_id'] ?? 0);
+		$nombre = trim((string) ($_POST['nombre'] ?? ''));
+		$selectedId = (int) ($_POST['selected_id'] ?? 0);
+		$db = $this->db();
+		$this->ensureCciTables($db);
+
+		if ($etiquetaId <= 0 || $nombre === '') {
+			header('Content-Type: application/json; charset=utf-8');
+			echo json_encode(['ok' => false, 'error' => 'Datos incompletos.'], JSON_UNESCAPED_UNICODE);
+			exit;
+		}
+
+		$stmt = $db->prepare('INSERT INTO cci_subetiquetas (etiqueta_id, nombre, estado, fecha_creacion) VALUES (:etiqueta_id, :nombre, 1, NOW())');
+		$stmt->execute(['etiqueta_id' => $etiquetaId, 'nombre' => mb_substr($nombre, 0, 100)]);
+		AuditLogger::log('CREATE', 'cci_subetiquetas', (int) $db->lastInsertId(), null, ['etiqueta_id' => $etiquetaId, 'nombre' => $nombre]);
+
+		header('Content-Type: application/json; charset=utf-8');
+		echo json_encode(['ok' => true, 'id' => (int) $db->lastInsertId(), 'nombre' => $nombre], JSON_UNESCAPED_UNICODE);
+		exit;
+	}
+
+	public function toggleEstadoSubetiqueta(int $id): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			set_flash('error', 'Token CSRF inválido.');
+			redirect('cci/conversaciones');
+		}
+
+		$selectedId = (int) ($_POST['selected_id'] ?? 0);
+		$db = $this->db();
+		$this->ensureCciTables($db);
+
+		if ($id > 0) {
+			$db->prepare('UPDATE cci_subetiquetas SET estado = IF(estado = 1, 0, 1) WHERE id = :id')->execute(['id' => $id]);
+			AuditLogger::log('UPDATE', 'cci_subetiquetas', $id, null, ['toggle' => true]);
+		}
+
+		redirect('cci/conversaciones' . ($selectedId > 0 ? '?selected_id=' . $selectedId : ''));
+	}
+
 	public function convertirClientePotencial(int $id): void
 	{
 		Auth::requireAuth();
@@ -3745,6 +4019,59 @@ class CCIController extends Controller
 		redirect('crm/interesados?tab=prospects&open_contact_id=' . $contactId);
 	}
 
+	public function cerrarLote(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+		
+		$inputJson = file_get_contents('php://input');
+		$data = json_decode($inputJson, true) ?: [];
+		$ids = (array) ($data['ids'] ?? []);
+		$token = (string) ($data['_token'] ?? '');
+
+		if (!verify_csrf($token)) {
+			echo json_encode(['ok' => false, 'error' => 'Token CSRF inválido']);
+			exit;
+		}
+
+		if (empty($ids)) {
+			echo json_encode(['ok' => false, 'error' => 'Sin IDs seleccionadas']);
+			exit;
+		}
+
+		$db = $this->db();
+		$this->ensureCciTables($db);
+
+		// Filtrar IDs válidos (solo números)
+		$validIds = array_filter($ids, static fn($id) => is_numeric($id) && ((int)$id) > 0);
+		if (empty($validIds)) {
+			echo json_encode(['ok' => false, 'error' => 'No hay IDs válidas']);
+			exit;
+		}
+
+		$placeholders = implode(',', array_fill(0, count($validIds), '?'));
+		$stmt = $db->prepare("UPDATE bot_conversaciones SET estado = 'cerrado', updated_at = NOW() WHERE id IN ($placeholders) AND canal = 'freshchat'");
+		try {
+			$stmt->execute(array_values($validIds));
+			$closed = $stmt->rowCount();
+			
+			// Crear mensaje de sistema para cada conversación cerrada (Req 11)
+			foreach ($validIds as $convId) {
+				$this->crearMensajeSistema($db, (int) $convId, 'Conversación cerrada por ' . (Auth::user()['nombre'] ?? 'usuario'), 'success');
+			}
+			
+			AuditLogger::log('UPDATE', 'bot_conversaciones', 0, null, [
+				'bulk_close' => true,
+				'count' => $closed,
+				'ids' => implode(',', $validIds),
+			]);
+			echo json_encode(['ok' => true, 'closed' => $closed]);
+		} catch (Throwable $e) {
+			echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+		}
+		exit;
+	}
+
 	public function conversaciones(): void
 	{
 		Auth::requireAuth();
@@ -3765,6 +4092,12 @@ class CCIController extends Controller
 		$asesorFilter = (int) ($_GET['asesor'] ?? 0);
 		$etiquetaFilter = (int) ($_GET['etiqueta'] ?? 0);
 
+		// Filtros de fecha (Req 8)
+		$fechaInicio = trim((string) ($_GET['fecha_inicio'] ?? ''));
+		$fechaFin = trim((string) ($_GET['fecha_fin'] ?? ''));
+		$fechaInicio = $fechaInicio !== '' && strtotime($fechaInicio) !== false ? $fechaInicio : '';
+		$fechaFin = $fechaFin !== '' && strtotime($fechaFin) !== false ? $fechaFin : '';
+
 		$total = 0;
 		$items = [];
 		$thread = [];
@@ -3772,9 +4105,15 @@ class CCIController extends Controller
 		$selected = null;
 		$freshchatReplyWindowOpen = true;
 		$freshchatLastInboundAt = '';
+		$hasMoreMessages = false;
+		$messagesHidden = 0;
 		$advisors = $this->fetchCciAdvisorOptions($db);
 		$etiquetasActivas = $db->query("SELECT * FROM cci_etiquetas WHERE estado = 1 ORDER BY nombre ASC")->fetchAll() ?: [];
 		$todasLasEtiquetas = $db->query("SELECT * FROM cci_etiquetas ORDER BY nombre ASC")->fetchAll() ?: [];
+
+		// Para modal de cliente potencial (Req 5)
+		$carreras = $this->fetchCciCareerOptions($db);
+		$asesoresCrm = $db->query("SELECT id, nombre FROM crm_prospect_asesores WHERE estado = 'activo' ORDER BY nombre ASC LIMIT 50")->fetchAll() ?: [];
 
 		try {
 			$where = ["bc.canal = 'freshchat'"];
@@ -3790,6 +4129,15 @@ class CCIController extends Controller
 			if ($etiquetaFilter > 0) {
 				$where[] = 'bc.etiqueta_id = :etiqueta';
 				$params['etiqueta'] = $etiquetaFilter;
+			}
+			// Filtro de rango de fechas (Req 8)
+			if ($fechaInicio !== '') {
+				$where[] = 'COALESCE(bm.fecha, bm.created_at, bc.created_at) >= :fecha_inicio';
+				$params['fecha_inicio'] = $fechaInicio . ' 00:00:00';
+			}
+			if ($fechaFin !== '') {
+				$where[] = 'COALESCE(bm.fecha, bm.created_at, bc.created_at) <= :fecha_fin';
+				$params['fecha_fin'] = $fechaFin . ' 23:59:59';
 			}
 			$whereSql = implode(' AND ', $where);
 
@@ -3828,6 +4176,20 @@ class CCIController extends Controller
 			$stmt->execute($params);
 			$items = $stmt->fetchAll() ?: [];
 
+			// Formatear fechas a DD-mmm (Req 9)
+			$monthNames = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+			foreach ($items as &$item) {
+				if (!empty($item['ultimo_mensaje_fecha'])) {
+					$timestamp = strtotime((string) $item['ultimo_mensaje_fecha']);
+					if ($timestamp !== false) {
+						$day = date('d', $timestamp);
+						$month = date('n', $timestamp) - 1;
+						$item['ultimo_mensaje_fecha'] = (int)$day . '-' . ($monthNames[$month] ?? 'mes');
+					}
+				}
+			}
+			unset($item);
+
 			if ($selectedId <= 0 && !empty($items)) {
 				$selectedId = (int) ($items[0]['id'] ?? 0);
 			}
@@ -3845,12 +4207,23 @@ class CCIController extends Controller
 				$selectParts = ['id', 'mensaje', 'es_bot', 'created_at'];
 				$selectParts[] = in_array('tipo', $msgColumns, true) ? 'tipo' : "'texto' AS tipo";
 				$selectParts[] = in_array('fecha', $msgColumns, true) ? 'fecha' : 'created_at AS fecha';
+				
+				// Paginación de mensajes (Req 12)
+				$pageSize = 50;
 				$threadStmt = $db->prepare('SELECT ' . implode(', ', $selectParts) . '
 					FROM bot_mensajes
 					WHERE conversacion_id = :id
-					ORDER BY COALESCE(' . (in_array('fecha', $msgColumns, true) ? 'fecha' : 'created_at') . ', created_at) ASC, id ASC');
+					ORDER BY COALESCE(' . (in_array('fecha', $msgColumns, true) ? 'fecha' : 'created_at') . ', created_at) ASC, id ASC
+					LIMIT ' . (int)$pageSize);
 				$threadStmt->execute(['id' => $selectedId]);
 				$thread = $threadStmt->fetchAll() ?: [];
+				
+				// Verificar si hay más mensajes (para mostrar botón "Cargar más")
+				$countStmt = $db->prepare('SELECT COUNT(*) FROM bot_mensajes WHERE conversacion_id = :id');
+				$countStmt->execute(['id' => $selectedId]);
+				$totalMessages = (int) $countStmt->fetchColumn();
+				$hasMoreMessages = $totalMessages > $pageSize;
+				$messagesHidden = max(0, $totalMessages - $pageSize);
 				if ((string) ($selected['canal'] ?? '') === 'freshchat') {
 					$freshchatReplyWindowOpen = false;
 					for ($index = count($thread) - 1; $index >= 0; $index--) {
@@ -3865,7 +4238,25 @@ class CCIController extends Controller
 					}
 				}
 
-				$notes = (new CciConversationNote())->byConversation($selectedId);
+				$notesHistory = (new CciConversationNote())->byConversation($selectedId);
+
+				// Fusionar mensajes y notas en timeline cronológico (Req 15)
+				$timeline = [];
+				foreach ($thread as $msg) {
+					$timeline[] = array_merge($msg, [
+						'_type' => 'mensaje',
+						'_sortDate' => strtotime((string) ($msg['fecha'] ?? ($msg['created_at'] ?? 'now'))),
+					]);
+				}
+				foreach ($notesHistory as $note) {
+					$timeline[] = array_merge($note, [
+						'_type' => 'nota',
+						'_sortDate' => strtotime((string) ($note['created_at'] ?? 'now')),
+					]);
+				}
+				usort($timeline, static fn($a, $b) => ((int) ($a['_sortDate'] ?? 0)) <=> ((int) ($b['_sortDate'] ?? 0)));
+				$thread = $timeline;
+				$notes = $notesHistory;
 			}
 		} catch (Throwable $e) {
 			error_log('CCI conversaciones() error: ' . $e->getMessage());
@@ -3901,8 +4292,14 @@ class CCIController extends Controller
 			'estadoFilter',
 			'asesorFilter',
 			'etiquetaFilter',
+			'fechaInicio',
+			'fechaFin',
 			'etiquetasActivas',
 			'todasLasEtiquetas',
+			'carreras',
+			'asesoresCrm',
+			'hasMoreMessages',
+			'messagesHidden',
 			'freshchatReplyWindowOpen',
 			'freshchatLastInboundAt'
 		), [
@@ -3910,4 +4307,63 @@ class CCIController extends Controller
 			'styles' => ['cci.css'],
 		]);
 	}
+
+	/**
+	 * Obtener mensajes anteriores de una conversación (Req 12 - Paginación)
+	 * GET /cci/conversaciones/{id}/mensajes-anteriores?offset=50
+	 */
+	public function obtenerMensajesAnteriores(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		$id = (int) ($_GET['id'] ?? 0);
+		$offset = (int) ($_GET['offset'] ?? 50);
+		
+		if ($id <= 0 || $offset < 0) {
+			echo json_encode(['ok' => false, 'error' => 'Parámetros inválidos']);
+			exit;
+		}
+
+		$db = $this->db();
+		$this->ensureCciTables($db);
+
+		// Fetch mensajes ordenados inversamente (de más antiguos primero)
+		// OFFSET indica cuántos mensajes recientes saltar
+		$stmt = $db->prepare('
+			SELECT id, conversacion_id, usuario_id, usuario_nombre, contenido, tipo, es_bot, fecha, created_at
+			FROM bot_mensajes
+			WHERE conversacion_id = :id
+			ORDER BY created_at ASC
+			LIMIT 50
+			OFFSET :offset
+		');
+		$stmt->bindValue(':id', $id, PDO::PARAM_INT);
+		$stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+		
+		try {
+			$stmt->execute();
+			$messages = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+			echo json_encode([
+				'ok' => true,
+				'mensajes' => array_map(static function ($m) {
+					return [
+						'id'             => (int) $m['id'],
+						'conversacion_id' => (int) $m['conversacion_id'],
+						'usuario_id'     => (int) ($m['usuario_id'] ?? 0),
+						'usuario_nombre' => (string) ($m['usuario_nombre'] ?? 'Cliente'),
+						'contenido'      => (string) ($m['contenido'] ?? ''),
+						'tipo'           => (string) ($m['tipo'] ?? 'texto'),
+						'es_bot'         => (int) ($m['es_bot'] ?? 0),
+						'fecha'          => (string) ($m['fecha'] ?? ($m['created_at'] ?? '')),
+						'_type'          => 'mensaje',
+					];
+				}, $messages),
+			], JSON_UNESCAPED_UNICODE);
+		} catch (Throwable $e) {
+			echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+		}
+		exit;
+	}
+
 }
