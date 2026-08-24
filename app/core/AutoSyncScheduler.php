@@ -50,20 +50,83 @@ class AutoSyncScheduler
 
 	/**
 	 * Ejecutar sincronización en background
-	 * Usa fsockopen para hacer una request sin esperar respuesta
+	 * Dispara una request no-bloqueante al endpoint interno y NO espera su respuesta,
+	 * de modo que la peticion web del usuario nunca queda esperando al sync.
 	 */
 	private static function executeAsync(): void
 	{
 		try {
-			// Actualizar lock file primero para evitar ejecuciones concurrentes
+			// Actualizar lock file primero para evitar disparos repetidos concurrentes.
 			self::updateLockFile();
 
-			// Sin terminal ni cron CLI: ejecutar directamente dentro del request web.
-			// En hosting compartido el disparo debe venir por tráfico web o por un webhook/URL externa.
+			if (self::dispatchBackgroundRequest()) {
+				self::appendRunLog('Auto-sync disparado en background (request separado).');
+				return;
+			}
+
+			// Fallback: si no se pudo abrir el socket, ejecutar directo (comportamiento anterior).
+			error_log('AutoSyncScheduler: fallo el disparo en background, ejecutando directo.');
 			self::executeDirectly();
 		} catch (Throwable $e) {
 			error_log('AutoSyncScheduler error: ' . $e->getMessage());
 		}
+	}
+
+	/**
+	 * Dispara el ciclo de sync en un proceso PHP separado via socket HTTP.
+	 * Devuelve true si el disparo se realizo (no espera la respuesta del sync).
+	 */
+	private static function dispatchBackgroundRequest(): bool
+	{
+		$host = trim((string) ($_SERVER['HTTP_HOST'] ?? ''));
+		$scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'ssl' : 'tcp';
+		$port = (int) ($_SERVER['SERVER_PORT'] ?? 0);
+
+		if ($host === '') {
+			return false;
+		}
+
+		if ($port === 0) {
+			$port = $scheme === 'ssl' ? 443 : 80;
+		}
+		if (str_contains($host, ':')) {
+			[$host, $portFromHost] = array_pad(explode(':', $host, 2), 2, '');
+			if ($host !== '' && ctype_digit($portFromHost)) {
+				$port = (int) $portFromHost;
+			}
+		}
+
+		$token = trim((string) env('MAIL_AUTO_SYNC_INTERNAL_TOKEN', ''));
+		if ($token === '') {
+			$token = trim((string) env('CRM_SYNC_INTERNAL_TOKEN', ''));
+		}
+		if ($token === '' || $host === '') {
+			return false;
+		}
+
+		$path = rtrim((string) app_config('url', ''), '/') . '/api/internal/auto-sync?token=' . rawurlencode($token);
+
+		$errno = 0;
+		$errstr = '';
+		$transport = $scheme === 'ssl' ? 'ssl' : 'tcp';
+		$socket = @fsockopen(($host !== '' ? $transport . '://' : '') . $host, $port, $errno, $errstr, 2);
+		if (!is_resource($socket)) {
+			return false;
+		}
+
+		$out = "GET {$path} HTTP/1.1\r\n"
+			. "Host: {$host}\r\n"
+			. "Connection: Close\r\n"
+			. "X-Requested-With: XMLHttpRequest\r\n"
+			. "\r\n";
+		@fwrite($socket, $out);
+		// No esperar la respuesta del sync: cortar la lectura casi de inmediato.
+		// El proceso remoto sigue ejecutando el ciclo aunque cerremos el socket.
+		@stream_set_timeout($socket, 0, 300000);
+		@fgets($socket, 128);
+		@fclose($socket);
+
+		return true;
 	}
 
 	/**

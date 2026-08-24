@@ -1199,15 +1199,26 @@ document.addEventListener('DOMContentLoaded', () => {
 	restoreStudentsFiltersState();
 	restoreProspectsFiltersState();
 
+	let studentsFilterDebounceTimer = null;
+	const scheduleStudentsFilter = (delay = 350) => {
+		if (studentsFilterDebounceTimer) {
+			clearTimeout(studentsFilterDebounceTimer);
+		}
+		studentsFilterDebounceTimer = setTimeout(() => {
+			studentsFilterDebounceTimer = null;
+			applyTableFilters();
+		}, delay);
+	};
+
 	filterNameInput?.addEventListener('input', () => {
 		saveStudentsFiltersState();
-		applyTableFilters();
+		scheduleStudentsFilter();
 	});
 	Array.from(document.querySelectorAll('.crm-filter-checkbox')).forEach((checkbox) => {
 		checkbox.addEventListener('change', () => {
 			refreshStudentsMultiFilterLabels();
 			saveStudentsFiltersState();
-			applyTableFilters();
+			scheduleStudentsFilter(150);
 		});
 	});
 	Array.from(document.querySelectorAll('.crm-prospect-filter-checkbox')).forEach((checkbox) => {

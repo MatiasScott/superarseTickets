@@ -58,6 +58,11 @@ class WhatchimpService
 			'send_endpoint',
 			$provider === 'wati' ? '/api/v1/sendSessionMessage/{phone}' : '/api/v1/whatsapp/send'
 		));
+		$mediaEndpoint = trim($this->config->getValue(
+			'whatchimp',
+			'media_endpoint',
+			$provider === 'wati' ? '/api/v1/sendSessionFile/{phone}' : '/api/v1/whatsapp/send-file'
+		));
 		$syncEndpoint = trim($this->config->getValue(
 			'whatchimp',
 			'sync_endpoint',
@@ -65,12 +70,19 @@ class WhatchimpService
 		));
 
 		$envSendEndpoint = trim((string) env('BOT_WHATSAPP_SEND_ENDPOINT', env('BOT_WHATSAPP_ENDPOINT', '')));
+		$envMediaEndpoint = trim((string) env('BOT_WHATSAPP_MEDIA_ENDPOINT', ''));
 		$envSyncEndpoint = trim((string) env('BOT_WHATSAPP_SYNC_ENDPOINT', env('BOT_WHATSAPP_ENDPOINT', '')));
 		if ($provider === 'wati') {
 			if ($envSendEndpoint !== '') {
 				$sendEndpoint = $envSendEndpoint;
 			} elseif ($this->isLikelyWhatchimpEndpoint($sendEndpoint)) {
 				$sendEndpoint = '/api/v1/sendSessionMessage/{phone}';
+			}
+
+			if ($envMediaEndpoint !== '') {
+				$mediaEndpoint = $envMediaEndpoint;
+			} elseif ($this->isLikelyWhatchimpEndpoint($mediaEndpoint)) {
+				$mediaEndpoint = '/api/v1/sendSessionFile/{phone}';
 			}
 
 			if ($envSyncEndpoint !== '') {
@@ -81,6 +93,9 @@ class WhatchimpService
 		}
 		if ($sendEndpoint === '/messages/send') {
 			$sendEndpoint = '/api/v1/whatsapp/send';
+		}
+		if ($mediaEndpoint === '/messages/send') {
+			$mediaEndpoint = '/api/v1/whatsapp/send-file';
 		}
 		if ($syncEndpoint === '/messages') {
 			$syncEndpoint = '/api/v1/whatsapp/get/conversation';
@@ -95,6 +110,7 @@ class WhatchimpService
 			'numero_asociado' => $numeroAsociado,
 			'webhook' => $webhook,
 			'send_endpoint' => $sendEndpoint,
+			'media_endpoint' => $mediaEndpoint,
 			'sync_endpoint' => $syncEndpoint,
 			'verify_token' => $verifyToken,
 		];
@@ -644,105 +660,118 @@ class WhatchimpService
 		$phone = $this->normalizePhoneForProvider($to, $provider);
 
 		if ($provider === 'wati') {
-			// Para WATI: usar endpoint /api/v1/sendsessionfile/{whatsappnumber}
-			// Construir la URL usando la base_url configurada
-			$baseUrl = rtrim((string) ($cfg['base_url'] ?? 'https://live.wati.io'), '/');
-			$watiSessionFileUrl = $baseUrl . '/api/v1/sendsessionfile/' . urlencode($phone);
-			
-			$ch = curl_init($watiSessionFileUrl);
-			if ($ch === false) {
-				return ['ok' => false, 'error' => 'No se pudo inicializar cURL para WATI Media.'];
+			$endpointTemplate = trim((string) ($cfg['media_endpoint'] ?? '/api/v1/sendSessionFile/{phone}'));
+			$watiEndpoint = $this->buildEndpoint($cfg['base_url'], $endpointTemplate);
+			if (str_contains($watiEndpoint, '{phone}')) {
+				$watiEndpoint = str_replace('{phone}', rawurlencode($phone), $watiEndpoint);
+			} elseif (str_contains($watiEndpoint, '{whatsappnumber}')) {
+				$watiEndpoint = str_replace('{whatsappnumber}', rawurlencode($phone), $watiEndpoint);
+			} elseif (str_contains($watiEndpoint, '{whatsappNumber}')) {
+				$watiEndpoint = str_replace('{whatsappNumber}', rawurlencode($phone), $watiEndpoint);
+			} else {
+				$watiEndpoint = rtrim($watiEndpoint, '/') . '/' . rawurlencode($phone);
 			}
 
-			// Crear archivo temporal con el contenido
 			$mimeType = $this->getMimeType($filePath);
-			$cfile = curl_file_create($filePath, $mimeType, basename($filePath));
-			
-			$post = [
-				'file' => $cfile,
+			$caption = trim((string) ($meta['caption'] ?? ($meta['text'] ?? '')));
+
+			$payloadVariants = [
+				[
+					'file' => curl_file_create($filePath, $mimeType, basename($filePath)),
+					'caption' => $caption,
+				],
+				[
+					'media' => curl_file_create($filePath, $mimeType, basename($filePath)),
+					'caption' => $caption,
+				],
 			];
 
-			$headers = [
-				'Accept: application/json',
-				'Authorization: Bearer ' . $cfg['api_key'],
-			];
+			$lastError = '';
+			$lastHttpCode = 0;
+			$lastData = null;
 
-			curl_setopt_array($ch, [
-				CURLOPT_RETURNTRANSFER => true,
-				CURLOPT_POST => true,
-				CURLOPT_POSTFIELDS => $post,
-				CURLOPT_HTTPHEADER => $headers,
-				CURLOPT_CONNECTTIMEOUT => 15,
-				CURLOPT_TIMEOUT => 90,
-				CURLOPT_SSL_VERIFYPEER => false,
-				CURLOPT_SSL_VERIFYHOST => 0,
-			]);
+			foreach ($payloadVariants as $post) {
+				$ch = curl_init($watiEndpoint);
+				if ($ch === false) {
+					return ['ok' => false, 'error' => 'No se pudo inicializar cURL para WATI Media.'];
+				}
 
-			$response = curl_exec($ch);
-			$httpCode = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-			$error = curl_error($ch);
-			curl_close($ch);
-
-			if ($error) {
-				return ['ok' => false, 'error' => 'cURL error: ' . $error, 'http_code' => 0];
-			}
-
-			$decoded = json_decode($response ?? '', true);
-			
-			// WATI devuelve 200 OK pero puede tener result: false
-			// Validar si la operación fue exitosa
-			$wasSuccessful = false;
-			$messageId = '';
-			$errorMessage = '';
-			
-			if (is_array($decoded)) {
-				// Buscar indicadores de éxito
-				if (isset($decoded['result']) && $decoded['result'] !== false) {
-					$wasSuccessful = true;
-				} elseif (isset($decoded['result']) && $decoded['result'] === false) {
-					$wasSuccessful = false;
-					$errorMessage = (string) ($decoded['info'] ?? ($decoded['message'] ?? 'Upload failed'));
-				}
-				
-				// Buscar message ID en varias posiciones posibles
-				// WATI devuelve messageId en message.whatsappMessageId o message.localMessageId
-				if (isset($decoded['message'])) {
-					$messageId = (string) ($decoded['message']['whatsappMessageId'] ?? 
-										($decoded['message']['localMessageId'] ?? ''));
-				}
-				
-				// Fallback a otros lugares
-				if ($messageId === '') {
-					$messageId = (string) ($decoded['messageId'] ?? ($decoded['id'] ?? ''));
-				}
-				
-				// Si encontramos un messageId, es éxito
-				if ($messageId !== '') {
-					$wasSuccessful = true;
-				}
-			}
-			
-			if ($wasSuccessful || $messageId !== '') {
-				return [
-					'ok' => true,
-					'http_code' => $httpCode,
-					'message_id' => $messageId,
-					'raw' => $decoded,
-					'provider' => 'wati',
+				$headers = [
+					'Accept: application/json',
+					'Authorization: Bearer ' . $cfg['api_key'],
 				];
+
+				curl_setopt_array($ch, [
+					CURLOPT_RETURNTRANSFER => true,
+					CURLOPT_POST => true,
+					CURLOPT_POSTFIELDS => $post,
+					CURLOPT_HTTPHEADER => $headers,
+					CURLOPT_CONNECTTIMEOUT => 15,
+					CURLOPT_TIMEOUT => 90,
+					CURLOPT_SSL_VERIFYPEER => false,
+					CURLOPT_SSL_VERIFYHOST => 0,
+				]);
+
+				$response = curl_exec($ch);
+				$httpCode = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+				$error = curl_error($ch);
+				curl_close($ch);
+
+				if ($error) {
+					$lastError = 'cURL error: ' . $error;
+					$lastHttpCode = 0;
+					continue;
+				}
+
+				$decoded = json_decode($response ?? '', true);
+				$lastData = $decoded;
+				$lastHttpCode = $httpCode;
+
+				if ($httpCode < 200 || $httpCode >= 300) {
+					$lastError = 'WATI HTTP ' . $httpCode;
+					continue;
+				}
+
+				$messageId = '';
+				$isRejected = false;
+				$errorMessage = '';
+				if (is_array($decoded)) {
+					if (isset($decoded['result']) && $decoded['result'] === false) {
+						$isRejected = true;
+						$errorMessage = (string) ($decoded['info'] ?? ($decoded['message'] ?? 'Upload failed'));
+					}
+					if (isset($decoded['message']) && is_array($decoded['message'])) {
+						$messageId = (string) ($decoded['message']['whatsappMessageId'] ?? ($decoded['message']['localMessageId'] ?? ($decoded['message']['id'] ?? '')));
+					}
+					if ($messageId === '') {
+						$messageId = (string) ($decoded['messageId'] ?? ($decoded['id'] ?? ($decoded['result']['id'] ?? '')));
+					}
+				}
+
+				if (!$isRejected) {
+					return [
+						'ok' => true,
+						'http_code' => $httpCode,
+						'message_id' => $messageId,
+						'raw' => $decoded,
+						'provider' => 'wati',
+					];
+				}
+
+				$lastError = 'WATI: ' . ($errorMessage !== '' ? $errorMessage : 'rechazado');
 			}
-			
+
 			return [
 				'ok' => false,
-				'http_code' => $httpCode,
-				'error' => 'WATI: ' . ($errorMessage !== '' ? $errorMessage : ('HTTP ' . $httpCode)),
-				'data' => $decoded,
+				'http_code' => $lastHttpCode,
+				'error' => $lastError !== '' ? $lastError : 'WATI: no se pudo enviar el archivo.',
+				'data' => is_array($lastData) ? $lastData : [],
 				'provider' => 'wati',
 			];
 		}
 
 		// Para Whatchimp clásico
-		$endpoint = $this->buildEndpoint($cfg['base_url'], 'send-file');
+		$endpoint = $this->buildEndpoint($cfg['base_url'], (string) ($cfg['media_endpoint'] ?? 'send-file'));
 		$phoneNumberId = trim((string) ($cfg['numero_asociado'] ?? ''));
 		
 		$ch = curl_init($endpoint);

@@ -1057,19 +1057,380 @@ class CCIController extends Controller
 		return trim($replaced);
 	}
 
+	/**
+	 * Normaliza archivos del formulario de respuesta:
+	 * - attachments[] (multiple)
+	 * - audio_record (single)
+	 */
+	private function validateFreshchatSendResponse(array $response, bool $expectMedia): array
+	{
+		$data = is_array($response['data'] ?? null) ? $response['data'] : [];
+		$failureStatus = strtoupper(trim((string) ($data['status'] ?? ($data['message']['status'] ?? ''))));
+		$failureReason = trim((string) ($data['error_message'] ?? ($data['message']['error_message'] ?? ($data['message'] ?? ''))));
+		if ($failureStatus === 'FAILED' || $failureReason !== '') {
+			return [
+				'ok' => false,
+				'reason' => 'Freshchat reportó fallo de entrega: ' . ($failureReason !== '' ? $failureReason : $failureStatus),
+				'data_keys' => array_keys($data),
+			];
+		}
+		$messageId = '';
+
+		$idCandidates = [
+			(string) ($data['id'] ?? ''),
+			(string) ($data['message_id'] ?? ''),
+			(string) ($data['messageId'] ?? ''),
+			(string) (($data['message']['id'] ?? '')),
+			(string) (($data['message']['message_id'] ?? '')),
+		];
+		foreach ($idCandidates as $candidate) {
+			$candidate = trim($candidate);
+			if ($candidate !== '') {
+				$messageId = $candidate;
+				break;
+			}
+		}
+
+		if ($messageId === '') {
+			return [
+				'ok' => false,
+				'reason' => 'Freshchat respondió sin id de mensaje.',
+				'data_keys' => array_keys($data),
+			];
+		}
+
+		if (!$expectMedia) {
+			return ['ok' => true, 'message_id' => $messageId];
+		}
+
+		$parts = [];
+		if (isset($data['message_parts']) && is_array($data['message_parts'])) {
+			$parts = $data['message_parts'];
+		} elseif (isset($data['message']['message_parts']) && is_array($data['message']['message_parts'])) {
+			$parts = $data['message']['message_parts'];
+		}
+
+		if (empty($parts)) {
+			return [
+				'ok' => false,
+				'reason' => 'Freshchat respondió sin message_parts de medio.',
+				'message_id' => $messageId,
+				'data_keys' => array_keys($data),
+			];
+		}
+
+		foreach ($parts as $part) {
+			if (!is_array($part)) {
+				continue;
+			}
+			if (
+				isset($part['image'])
+				|| isset($part['video'])
+				|| isset($part['file'])
+				|| isset($part['audio'])
+				|| isset($part['document'])
+			) {
+				return ['ok' => true, 'message_id' => $messageId];
+			}
+		}
+
+		return [
+			'ok' => false,
+			'reason' => 'Freshchat respondió sin partes de media válidas.',
+			'message_id' => $messageId,
+		];
+	}
+
+	private function collectReplyUploads(array $attachmentsInput, array $audioInput): array
+	{
+		$uploads = [];
+
+		if (!empty($attachmentsInput['name']) && is_array($attachmentsInput['name'])) {
+			$count = count($attachmentsInput['name']);
+			for ($i = 0; $i < $count; $i++) {
+				$uploads[] = [
+					'name' => (string) ($attachmentsInput['name'][$i] ?? ''),
+					'error' => (int) ($attachmentsInput['error'][$i] ?? UPLOAD_ERR_NO_FILE),
+					'tmp_name' => (string) ($attachmentsInput['tmp_name'][$i] ?? ''),
+					'size' => (int) ($attachmentsInput['size'][$i] ?? 0),
+				];
+			}
+		}
+
+		if (!empty($audioInput) && is_array($audioInput)) {
+			$uploads[] = [
+				'name' => (string) ($audioInput['name'] ?? ''),
+				'error' => (int) ($audioInput['error'] ?? UPLOAD_ERR_NO_FILE),
+				'tmp_name' => (string) ($audioInput['tmp_name'] ?? ''),
+				'size' => (int) ($audioInput['size'] ?? 0),
+			];
+		}
+
+		return $uploads;
+	}
+
+	private function isUploadedEntryPresent(array $upload): bool
+	{
+		$error = (int) ($upload['error'] ?? UPLOAD_ERR_NO_FILE);
+		$name = trim((string) ($upload['name'] ?? ''));
+		$tmpPath = trim((string) ($upload['tmp_name'] ?? ''));
+
+		if ($error === UPLOAD_ERR_OK && $tmpPath !== '' && is_file($tmpPath)) {
+			return true;
+		}
+
+		return $name !== '' && $error !== UPLOAD_ERR_NO_FILE;
+	}
+
+	private function buildUploadFallbackName(string $tmpPath, string $prefix = 'archivo'): string
+	{
+		$prefix = preg_replace('/[^a-zA-Z0-9_-]/', '_', trim($prefix)) ?: 'archivo';
+		$ext = 'bin';
+		$mime = function_exists('mime_content_type') ? strtolower((string) (mime_content_type($tmpPath) ?: '')) : '';
+
+		if (str_starts_with($mime, 'audio/')) {
+			$audioExt = substr($mime, 6);
+			$audioExt = preg_replace('/[^a-z0-9]/', '', $audioExt);
+			$ext = $audioExt !== '' ? $audioExt : 'ogg';
+		} elseif (str_starts_with($mime, 'image/')) {
+			$imageExt = substr($mime, 6);
+			$imageExt = preg_replace('/[^a-z0-9]/', '', $imageExt);
+			$ext = $imageExt !== '' ? $imageExt : 'jpg';
+		} elseif (str_starts_with($mime, 'video/')) {
+			$videoExt = substr($mime, 6);
+			$videoExt = preg_replace('/[^a-z0-9]/', '', $videoExt);
+			$ext = $videoExt !== '' ? $videoExt : 'mp4';
+		} elseif ($mime === 'application/pdf') {
+			$ext = 'pdf';
+		}
+
+		return $prefix . '_' . date('Ymd_His') . '.' . $ext;
+	}
+
+	private function detectExtensionFromMime(string $mime): string
+	{
+		$mime = strtolower(trim($mime));
+		if ($mime === '') {
+			return '';
+		}
+
+		$map = [
+			'application/pdf' => 'pdf',
+			'application/msword' => 'doc',
+			'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
+			'application/vnd.ms-excel' => 'xls',
+			'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => 'xlsx',
+			'application/zip' => 'zip',
+			'application/vnd.rar' => 'rar',
+			'text/plain' => 'txt',
+			'text/csv' => 'csv',
+			'image/jpeg' => 'jpg',
+			'image/png' => 'png',
+			'image/gif' => 'gif',
+			'image/webp' => 'webp',
+			'video/mp4' => 'mp4',
+			'audio/mpeg' => 'mp3',
+			'audio/mp3' => 'mp3',
+			'audio/ogg' => 'ogg',
+			'audio/wav' => 'wav',
+			'audio/x-wav' => 'wav',
+			'audio/webm' => 'webm',
+			'audio/mp4' => 'm4a',
+		];
+		return $map[$mime] ?? '';
+	}
+
+	private function isGenericAttachmentName(string $name): bool
+	{
+		$name = strtolower(trim($name));
+		if ($name === '') {
+			return false;
+		}
+		return preg_match('/^attachmente?(?:\.[a-z0-9]{1,10})?$/i', $name) === 1;
+	}
+
+	private function buildFreshchatPreferredFileName(string $uploadName, string $remoteName, string $contentType = ''): string
+	{
+		$first = trim($uploadName);
+		$second = trim($remoteName);
+		$candidate = $first !== '' ? $first : $second;
+		if ($this->isGenericAttachmentName($candidate) && $second !== '' && !$this->isGenericAttachmentName($second)) {
+			$candidate = $second;
+		}
+		if ($candidate === '' || $this->isGenericAttachmentName($candidate)) {
+			$candidate = 'documento_' . date('Ymd_His');
+		}
+
+		$candidate = basename($candidate);
+		$translit = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $candidate);
+		if (is_string($translit) && trim($translit) !== '') {
+			$candidate = $translit;
+		}
+		$candidate = preg_replace('/[^A-Za-z0-9._ -]/', '_', $candidate) ?? $candidate;
+		$candidate = preg_replace('/\s+/', ' ', $candidate) ?? $candidate;
+		$candidate = trim($candidate, " ._-");
+
+		$base = pathinfo($candidate, PATHINFO_FILENAME);
+		$ext = strtolower((string) pathinfo($candidate, PATHINFO_EXTENSION));
+		if ($base === '') {
+			$base = 'documento_' . date('Ymd_His');
+		}
+		if ($ext === '') {
+			$ext = strtolower((string) pathinfo($uploadName, PATHINFO_EXTENSION));
+		}
+		if ($ext === '') {
+			$ext = strtolower((string) pathinfo($remoteName, PATHINFO_EXTENSION));
+		}
+		if ($ext === '') {
+			$ext = $this->detectExtensionFromMime($contentType);
+		}
+		if ($ext === '') {
+			$ext = 'bin';
+		}
+		$ext = preg_replace('/[^a-z0-9]/', '', $ext) ?: 'bin';
+
+		$base = mb_substr($base, 0, 90);
+		return $base . '.' . $ext;
+	}
+
+	private function parseIniSizeToBytes(string $value): int
+	{
+		$value = trim($value);
+		if ($value === '') {
+			return 0;
+		}
+		$number = (float) $value;
+		$unit = strtolower(substr($value, -1));
+		switch ($unit) {
+			case 'g':
+				$number *= 1024;
+				// no break
+			case 'm':
+				$number *= 1024;
+				// no break
+			case 'k':
+				$number *= 1024;
+		}
+		return (int) round($number);
+	}
+
+	private function formatBytesLabel(int $bytes): string
+	{
+		if ($bytes <= 0) {
+			return '0 B';
+		}
+		$units = ['B', 'KB', 'MB', 'GB'];
+		$idx = 0;
+		$size = (float) $bytes;
+		while ($size >= 1024 && $idx < count($units) - 1) {
+			$size /= 1024;
+			$idx++;
+		}
+		return number_format($size, $idx === 0 ? 0 : 1) . ' ' . $units[$idx];
+	}
+
+	private function extractBase64AudioUpload(array $post): ?array
+	{
+		$raw = trim((string) ($post['audio_record_b64'] ?? ''));
+		if ($raw === '') {
+			return null;
+		}
+
+		$mime = 'audio/webm';
+		$payload = $raw;
+		if (preg_match('#^data:([^;]+);base64,(.+)$#', $raw, $matches)) {
+			$mime = strtolower(trim((string) ($matches[1] ?? 'audio/webm')));
+			$payload = (string) ($matches[2] ?? '');
+		}
+
+		$binary = base64_decode($payload, true);
+		if ($binary === false || $binary === '') {
+			return null;
+		}
+
+		$tmpPath = tempnam(sys_get_temp_dir(), 'cci-audio-');
+		if ($tmpPath === false || file_put_contents($tmpPath, $binary) === false) {
+			return null;
+		}
+
+		$extMap = [
+			'audio/mpeg' => 'mp3',
+			'audio/mp3' => 'mp3',
+			'audio/wav' => 'wav',
+			'audio/x-wav' => 'wav',
+			'audio/ogg' => 'ogg',
+			'audio/webm' => 'webm',
+			'audio/mp4' => 'm4a',
+			'audio/aac' => 'aac',
+		];
+		$ext = $extMap[$mime] ?? 'webm';
+
+		$size = filesize($tmpPath);
+		if ($size === false || $size <= 0) {
+			@unlink($tmpPath);
+			return null;
+		}
+
+		return [
+			'name' => 'audio_note_' . date('Ymd_His') . '.' . $ext,
+			'error' => UPLOAD_ERR_OK,
+			'tmp_name' => $tmpPath,
+			'size' => (int) $size,
+			'_generated_tmp' => true,
+			'_mime' => $mime,
+		];
+	}
+
 	public function sendConversationReply(int $id): void
 	{
 		Auth::requireAuth();
+		$contentLength = (int) ($_SERVER['CONTENT_LENGTH'] ?? 0);
+		if (
+			strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'POST'
+			&& $contentLength > 0
+			&& empty($_POST)
+			&& empty($_FILES)
+		) {
+			$postMax = $this->parseIniSizeToBytes((string) ini_get('post_max_size'));
+			$uploadMax = $this->parseIniSizeToBytes((string) ini_get('upload_max_filesize'));
+			$limit = $postMax > 0 && $uploadMax > 0 ? min($postMax, $uploadMax) : max($postMax, $uploadMax);
+			$limitText = $limit > 0 ? $this->formatBytesLabel($limit) : ((string) ini_get('post_max_size'));
+			set_flash('error', 'El archivo es demasiado grande para el servidor. Límite actual: ' . $limitText . '.');
+			redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
+		}
 		if (!verify_csrf($_POST['_token'] ?? null)) {
 			set_flash('error', 'Token CSRF inválido.');
 			redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
 		}
 
 		$text = trim((string) ($_POST['reply_text'] ?? ''));
-		$attachments = $_FILES['attachments'] ?? [];
+		$attachments = is_array($_FILES['attachments'] ?? null) ? $_FILES['attachments'] : [];
+		$audioRecord = is_array($_FILES['audio_record'] ?? null) ? $_FILES['audio_record'] : [];
+		$uploads = $this->collectReplyUploads($attachments, $audioRecord);
+		$cleanupGeneratedTmp = [];
+		$base64AudioUpload = $this->extractBase64AudioUpload($_POST);
+		if ($base64AudioUpload !== null) {
+			$uploads[] = $base64AudioUpload;
+			if (!empty($base64AudioUpload['_generated_tmp']) && !empty($base64AudioUpload['tmp_name'])) {
+				$cleanupGeneratedTmp[] = (string) $base64AudioUpload['tmp_name'];
+			}
+		}
 
-		if ($text === '' && (empty($attachments) || empty($attachments['name'] ?? []))) {
+		$hasAnyUpload = false;
+		foreach ($uploads as $upload) {
+			if ($this->isUploadedEntryPresent($upload)) {
+				$hasAnyUpload = true;
+				break;
+			}
+		}
+
+		if ($text === '' && !$hasAnyUpload) {
 			set_flash('error', 'Escribe un mensaje o adjunta archivos.');
+			foreach ($cleanupGeneratedTmp as $tmpFileToCleanup) {
+				if ($tmpFileToCleanup !== '' && is_file($tmpFileToCleanup)) {
+					@unlink($tmpFileToCleanup);
+				}
+			}
 			redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
 		}
 
@@ -1078,7 +1439,7 @@ class CCIController extends Controller
 		$conversationStmt = $db->prepare('SELECT canal FROM bot_conversaciones WHERE id = :id LIMIT 1');
 		$conversationStmt->execute(['id' => $id]);
 		if ((string) ($conversationStmt->fetchColumn() ?: '') === 'freshchat') {
-			$hasAttachments = !empty($attachments['name']) && is_array($attachments['name']) && count(array_filter($attachments['name'], static fn($n) => trim((string) $n) !== '')) > 0;
+			$hasAttachments = $hasAnyUpload;
 			if ($text === '' && !$hasAttachments) {
 				set_flash('error', 'Escribe un mensaje o adjunta un archivo para responder por Freshchat.');
 				redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
@@ -1140,68 +1501,226 @@ class CCIController extends Controller
 
 			$freshchatErrors = [];
 			$freshchatSentCount = 0;
+			$freshchatExpectedCount = $text !== '' ? 1 : 0;
+			$freshchatAttachmentExpectedCount = 0;
+			$freshchatAttachmentSentCount = 0;
 
 			if ($text !== '') {
 				$send = $freshchat->sendConversationMessage($externalConversationId, $agentId, $userId, mb_substr($text, 0, 10000));
 				if ($send['ok'] ?? false) {
-					$messageId = $this->insertBotMessage($db, $id, $text, true, (string) ($send['data']['created_time'] ?? date('c')), 'texto');
-					$externalMessageId = trim((string) ($send['data']['id'] ?? ''));
-					if ($messageId > 0 && $externalMessageId !== '') {
-						$this->saveMessageRef($db, 'freshchat', $externalMessageId, $id, $messageId, 'out');
+					$validation = $this->validateFreshchatSendResponse($send, false);
+					if (!($validation['ok'] ?? false)) {
+						$freshchatErrors[] = 'texto: ' . (string) ($validation['reason'] ?? 'respuesta no confirmada por Freshchat');
+						error_log('CCI Freshchat texto sin confirmacion: ' . json_encode([
+							'conversation_id' => $id,
+							'external_conversation_id' => $externalConversationId,
+							'response_data' => $send['data'] ?? null,
+						], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+					} else {
+						$messageId = $this->insertBotMessage($db, $id, $text, true, (string) ($send['data']['created_time'] ?? date('c')), 'texto');
+						$externalMessageId = trim((string) ($validation['message_id'] ?? ''));
+						if ($messageId > 0 && $externalMessageId !== '') {
+							$this->saveMessageRef($db, 'freshchat', $externalMessageId, $id, $messageId, 'out');
+						}
+						AuditLogger::log('CREATE', 'bot_mensajes', $messageId > 0 ? $messageId : null, null, [
+							'conversacion_id' => $id,
+							'channel' => 'freshchat',
+							'external_message_id' => $externalMessageId,
+						]);
+						$freshchatSentCount++;
 					}
-					AuditLogger::log('CREATE', 'bot_mensajes', $messageId > 0 ? $messageId : null, null, [
-						'conversacion_id' => $id,
-						'channel' => 'freshchat',
-						'external_message_id' => $externalMessageId,
-					]);
-					$freshchatSentCount++;
 				} else {
 					$freshchatErrors[] = (string) ($send['error'] ?? 'error desconocido al enviar el texto');
 				}
 			}
 
 			if ($hasAttachments) {
-				for ($i = 0; $i < count($attachments['name']); $i++) {
-					$fileName = (string) ($attachments['name'][$i] ?? '');
-					$error = (int) ($attachments['error'][$i] ?? 1);
-					$tmpPath = (string) ($attachments['tmp_name'][$i] ?? '');
-					if ($fileName === '' || $error === UPLOAD_ERR_NO_FILE) {
+				foreach ($uploads as $uploadFile) {
+					$fileName = trim((string) ($uploadFile['name'] ?? ''));
+					$error = (int) ($uploadFile['error'] ?? 1);
+					$tmpPath = (string) ($uploadFile['tmp_name'] ?? '');
+					if ($error === UPLOAD_ERR_NO_FILE) {
 						continue;
 					}
+					if ($fileName === '' && $error === UPLOAD_ERR_OK && $tmpPath !== '' && is_file($tmpPath)) {
+						$fileName = $this->buildUploadFallbackName($tmpPath, 'audio');
+					}
+					$freshchatExpectedCount++;
+					$freshchatAttachmentExpectedCount++;
 					if ($error !== UPLOAD_ERR_OK || empty($tmpPath) || !is_file($tmpPath)) {
-						$freshchatErrors[] = e($fileName) . ': no se pudo procesar el archivo subido.';
+						$label = $fileName !== '' ? $fileName : 'archivo sin nombre';
+						$freshchatErrors[] = e($label) . ': no se pudo procesar el archivo subido.';
 						continue;
 					}
 
 					$ext = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
 					$mediaKind = $this->getMediaType($ext); // image | video | audio | document
+					$localDetectedMime = function_exists('mime_content_type') ? (string) (mime_content_type($tmpPath) ?: '') : '';
+					$uploadFileName = $this->buildFreshchatPreferredFileName($fileName, $fileName, $localDetectedMime);
 					$uploadKind = $mediaKind === 'image' ? 'image' : 'file';
 					$upload = $uploadKind === 'image'
-						? $freshchat->uploadImage($tmpPath, $fileName)
-						: $freshchat->uploadFile($tmpPath, $fileName);
+						? $freshchat->uploadImage($tmpPath, $uploadFileName)
+						: $freshchat->uploadFile($tmpPath, $uploadFileName);
 					if (!($upload['ok'] ?? false)) {
 						$freshchatErrors[] = e($fileName) . ': ' . (string) ($upload['error'] ?? 'no se pudo subir a Freshchat.');
 						continue;
 					}
 
-					if ($uploadKind === 'image') {
-						$mediaPart = ['url' => (string) ($upload['data']['url'] ?? '')];
-						$messagePartType = 'image';
-					} else {
-						$mediaPart = [
-							'name' => (string) ($upload['data']['file_name'] ?? $fileName),
-							'url' => (string) ($upload['data']['url'] ?? ''),
-							'fileSource' => 'FRESHCHAT',
-						];
-						$messagePartType = $mediaKind === 'video' ? 'video' : 'file';
-						if ($messagePartType === 'video') {
-							$mediaPart = ['url' => (string) ($upload['data']['url'] ?? '')];
-						}
+					$uploadData = is_array($upload['data'] ?? null) ? $upload['data'] : [];
+					$fileSecurityStatus = strtoupper(trim((string) ($uploadData['file_security_status'] ?? '')));
+					if ($fileSecurityStatus === 'MALWARE_FILE' || $fileSecurityStatus === 'AV_FAILURE') {
+						$freshchatErrors[] = e($fileName) . ': Freshchat bloqueó el archivo por seguridad (' . $fileSecurityStatus . ').';
+						continue;
+					}
+					$sendWhilePending = false;
+					if ($fileSecurityStatus === 'AV_PENDING') {
+						$sendWhilePending = true;
+					}
+					if ($fileSecurityStatus !== '' && !in_array($fileSecurityStatus, ['SAFE_FILE', 'AV_PENDING', 'TOO_LARGE_FOR_MALWARE_CHECK'], true)) {
+						$freshchatErrors[] = e($fileName) . ': Freshchat devolvió estado de seguridad no soportado (' . $fileSecurityStatus . ').';
+						continue;
+					}
+					$fileUrl = $this->resolveFreshchatUploadedUrl($uploadData);
+					$fileHash = $this->resolveFreshchatUploadedHash($uploadData);
+					$fileRemoteName = $this->resolveFreshchatUploadedName($uploadData, $uploadFileName);
+					$fileContentType = trim((string) ($uploadData['file_content_type'] ?? $uploadData['content_type'] ?? ''));
+					$payloadFileName = $this->buildFreshchatPreferredFileName($uploadFileName, $fileRemoteName, $fileContentType);
+					$fileExtensionType = strtolower(trim((string) ($uploadData['file_extension_type'] ?? pathinfo($payloadFileName, PATHINFO_EXTENSION) ?? pathinfo($fileName, PATHINFO_EXTENSION))));
+					if ($fileUrl === '' && $fileHash === '') {
+						$knownKeys = implode(', ', array_keys($uploadData));
+						$freshchatErrors[] = e($fileName) . ': Freshchat no devolvió URL/hash del archivo subido. Claves detectadas: ' . ($knownKeys !== '' ? $knownKeys : 'ninguna');
+						continue;
 					}
 
-					$send = $freshchat->sendConversationMedia($externalConversationId, $agentId, $userId, $messagePartType, $mediaPart);
-					if (!($send['ok'] ?? false)) {
-						$freshchatErrors[] = e($fileName) . ': ' . (string) ($send['error'] ?? 'no se pudo enviar el adjunto.');
+					$attempts = [];
+					$filePartsByHash = [];
+					if ($fileHash !== '') {
+						$canonicalPart = ['fileHash' => $fileHash, 'fileSource' => 'FRESHCHAT'];
+						if ($payloadFileName !== '') {
+							$canonicalPart['name'] = $payloadFileName;
+							$canonicalPart['fileName'] = $payloadFileName;
+							$canonicalPart['filename'] = $payloadFileName;
+						}
+						if ($fileContentType !== '') {
+							$canonicalPart['contentType'] = $fileContentType;
+						}
+						if ($fileExtensionType !== '') {
+							$canonicalPart['file_extension'] = $fileExtensionType;
+							$canonicalPart['fileExtension'] = $fileExtensionType;
+						}
+						$filePartsByHash[] = $canonicalPart;
+						$filePartsByHash[] = ['file_hash' => $fileHash, 'file_source' => 'FRESHCHAT', 'name' => $payloadFileName];
+					}
+					$filePartsByUrl = [];
+					if ($fileUrl !== '') {
+						$filePartsByUrl[] = ['url' => $fileUrl, 'name' => $payloadFileName, 'fileSource' => 'FRESHCHAT'];
+						$filePartsByUrl[] = ['url' => $fileUrl, 'name' => $payloadFileName];
+					}
+					if ($mediaKind === 'image') {
+						foreach ($filePartsByUrl as $part) {
+							$attempts[] = ['type' => 'image', 'part' => ['url' => (string) ($part['url'] ?? '')]];
+						}
+					} elseif ($mediaKind === 'video') {
+						foreach ($filePartsByUrl as $part) {
+							$attempts[] = ['type' => 'video', 'part' => ['url' => (string) ($part['url'] ?? '')]];
+						}
+						foreach ($filePartsByHash as $part) {
+							$attempts[] = ['type' => 'file', 'part' => $part];
+						}
+						foreach ($filePartsByUrl as $part) {
+							$attempts[] = ['type' => 'file', 'part' => $part];
+						}
+					} elseif ($mediaKind === 'audio') {
+						foreach ($filePartsByUrl as $part) {
+							$attempts[] = ['type' => 'audio', 'part' => ['url' => (string) ($part['url'] ?? '')]];
+						}
+						foreach ($filePartsByHash as $part) {
+							$attempts[] = ['type' => 'file', 'part' => $part];
+						}
+						foreach ($filePartsByUrl as $part) {
+							$attempts[] = ['type' => 'file', 'part' => $part];
+						}
+					} else {
+						foreach ($filePartsByHash as $part) {
+							$attempts[] = ['type' => 'document', 'part' => $part];
+						}
+						foreach ($filePartsByUrl as $part) {
+							$attempts[] = ['type' => 'document', 'part' => $part];
+						}
+						foreach ($filePartsByHash as $part) {
+							$attempts[] = ['type' => 'file', 'part' => $part];
+						}
+						foreach ($filePartsByUrl as $part) {
+							$attempts[] = ['type' => 'file', 'part' => $part];
+						}
+					}
+					$attempts = array_values(array_filter($attempts, static fn($a) => !empty($a['type']) && !empty($a['part'])));
+
+					if ($fileSecurityStatus === 'SAFE_FILE' || $fileSecurityStatus === 'TOO_LARGE_FOR_MALWARE_CHECK' || $sendWhilePending) {
+						error_log('CCI Freshchat archivo listo para envio: ' . json_encode([
+							'conversation_id' => $id,
+							'external_conversation_id' => $externalConversationId,
+							'file_name' => $fileName,
+							'file_hash' => $fileHash,
+							'file_security_status' => $fileSecurityStatus,
+						], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+					}
+
+					$send = null;
+					$confirmedExternalMessageId = '';
+					$attemptErrors = [];
+					error_log('CCI Freshchat envio adjunto payload: ' . json_encode([
+						'conversation_id' => $id,
+						'external_conversation_id' => $externalConversationId,
+						'upload_name' => $fileName,
+						'upload_file_name' => $uploadFileName,
+						'remote_name' => $fileRemoteName,
+						'payload_file_name' => $payloadFileName,
+						'file_hash' => $fileHash,
+						'file_url' => $fileUrl,
+						'security_status' => $fileSecurityStatus,
+						'content_type' => $fileContentType,
+					], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+					$maxRounds = $sendWhilePending ? 2 : 1;
+					for ($round = 1; $round <= $maxRounds; $round++) {
+						foreach ($attempts as $attempt) {
+							$sendTry = $freshchat->sendConversationMedia(
+								$externalConversationId,
+								$agentId,
+								$userId,
+								(string) ($attempt['type'] ?? 'file'),
+								(array) ($attempt['part'] ?? [])
+							);
+							if ($sendTry['ok'] ?? false) {
+								$validation = $this->validateFreshchatSendResponse($sendTry, true);
+								if ($validation['ok'] ?? false) {
+									$send = $sendTry;
+									$confirmedExternalMessageId = trim((string) ($validation['message_id'] ?? ''));
+									break 2;
+								}
+								$attemptErrors[] = 'ronda ' . $round . ' ' . (string) ($attempt['type'] ?? 'file') . ': respuesta no confirmada (' . (string) ($validation['reason'] ?? 'sin detalle') . ')';
+								error_log('CCI Freshchat media sin confirmacion: ' . json_encode([
+									'conversation_id' => $id,
+									'external_conversation_id' => $externalConversationId,
+									'file_name' => $fileName,
+									'attempt_round' => $round,
+									'attempt_type' => (string) ($attempt['type'] ?? 'file'),
+									'attempt_part' => (array) ($attempt['part'] ?? []),
+									'response_data' => $sendTry['data'] ?? null,
+								], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+								continue;
+							}
+							$attemptErrors[] = 'ronda ' . $round . ' ' . (string) ($attempt['type'] ?? 'file') . ': ' . (string) ($sendTry['error'] ?? 'rechazado');
+						}
+						if ($round < $maxRounds) {
+							usleep(400000);
+						}
+					}
+					if ($send === null) {
+						if ($sendWhilePending) {
+							$attemptErrors[] = 'archivo aún en escaneo AV_PENDING';
+						}
+						$freshchatErrors[] = e($fileName) . ': no se pudo enviar adjunto (' . implode(' | ', $attemptErrors) . ')';
 						continue;
 					}
 
@@ -1209,7 +1728,9 @@ class CCIController extends Controller
 					$saved = $this->saveConversationAttachment($tmpPath, $fileName, (int) $id, Auth::id());
 					$localName = $saved['name'] ?? $fileName;
 					$messageId = $this->insertBotMessage($db, $id, $localName, true, (string) ($send['data']['created_time'] ?? date('c')), 'archivo');
-					$externalMessageId = trim((string) ($send['data']['id'] ?? ''));
+					$externalMessageId = $confirmedExternalMessageId !== ''
+						? $confirmedExternalMessageId
+						: trim((string) ($send['data']['id'] ?? ''));
 					if ($messageId > 0 && $externalMessageId !== '') {
 						$this->saveMessageRef($db, 'freshchat', $externalMessageId, $id, $messageId, 'out');
 					}
@@ -1219,15 +1740,25 @@ class CCIController extends Controller
 						'archivo' => $localName,
 					]);
 					$freshchatSentCount++;
+					$freshchatAttachmentSentCount++;
 				}
 			}
 
-			if ($freshchatSentCount === 0 && !empty($freshchatErrors)) {
+			if ($freshchatExpectedCount > 0 && $freshchatSentCount === 0) {
+				if (empty($freshchatErrors)) {
+					$freshchatErrors[] = 'Freshchat no confirmó el envío del mensaje.';
+				}
 				$firstError = $freshchatErrors[0];
 				if (stripos($firstError, 'WhatsApp 24 hours window has crossed') !== false) {
 					$firstError = 'La ventana de respuesta de WhatsApp está cerrada. Solo puedes enviar texto libre durante las 24 horas posteriores al último mensaje del contacto. Para reabrir el chat debes enviar una plantilla aprobada desde Freshchat o esperar que el contacto escriba nuevamente.';
 				}
 				set_flash('error', $firstError);
+			} elseif ($freshchatExpectedCount > $freshchatSentCount) {
+				$prefix = 'Se envió parcialmente por Freshchat.';
+				if ($freshchatAttachmentExpectedCount > 0 && $freshchatAttachmentSentCount === 0) {
+					$prefix = 'Freshchat no confirmó entrega de adjuntos/audio al cliente.';
+				}
+				set_flash('warning', $prefix . (!empty($freshchatErrors) ? ' Errores: ' . implode('; ', $freshchatErrors) : ''));
 			} elseif (!empty($freshchatErrors)) {
 				set_flash('warning', 'Se envió parcialmente. Errores: ' . implode('; ', $freshchatErrors));
 			} else {
@@ -1245,15 +1776,19 @@ class CCIController extends Controller
 		$attachmentPaths = [];
 		$uploadErrorMessages = [];
 		$maxFileSize = 100 * 1024 * 1024; // 100MB
-		if (!empty($attachments['name']) && is_array($attachments['name'])) {
-			for ($i = 0; $i < count($attachments['name']); $i++) {
-				$error = (int) ($attachments['error'][$i] ?? 1);
-				$tmpPath = (string) ($attachments['tmp_name'][$i] ?? '');
-				$fileName = (string) ($attachments['name'][$i] ?? '');
-				$fileSize = (int) ($attachments['size'][$i] ?? 0);
+		if (!empty($uploads)) {
+			foreach ($uploads as $uploadFile) {
+				$error = (int) ($uploadFile['error'] ?? 1);
+				$tmpPath = (string) ($uploadFile['tmp_name'] ?? '');
+				$fileName = trim((string) ($uploadFile['name'] ?? ''));
+				$fileSize = (int) ($uploadFile['size'] ?? 0);
 
-				if ($fileName === '' || $error === UPLOAD_ERR_NO_FILE) {
+				if ($error === UPLOAD_ERR_NO_FILE) {
 					continue; // sin archivo, ignorar
+				}
+
+				if ($fileName === '' && $error === UPLOAD_ERR_OK && $tmpPath !== '' && is_file($tmpPath)) {
+					$fileName = $this->buildUploadFallbackName($tmpPath, 'audio');
 				}
 
 				if ($error !== UPLOAD_ERR_OK) {
@@ -1266,18 +1801,21 @@ class CCIController extends Controller
 						UPLOAD_ERR_EXTENSION  => 'bloqueado por extensión PHP',
 					];
 					$errMsg = $phpUploadErrors[$error] ?? "error $error";
-					$uploadErrorMessages[] = e($fileName) . ": $errMsg";
+					$label = $fileName !== '' ? $fileName : 'archivo sin nombre';
+					$uploadErrorMessages[] = e($label) . ": $errMsg";
 					error_log("CCI upload error $error for $fileName");
 					continue;
 				}
 
 				if ($fileSize > $maxFileSize) {
-					$uploadErrorMessages[] = e($fileName) . ': excede 100MB';
+					$label = $fileName !== '' ? $fileName : 'archivo sin nombre';
+					$uploadErrorMessages[] = e($label) . ': excede 100MB';
 					continue;
 				}
 
 				if (empty($tmpPath) || !is_file($tmpPath)) {
-					$uploadErrorMessages[] = e($fileName) . ': archivo temporal no encontrado';
+					$label = $fileName !== '' ? $fileName : 'archivo sin nombre';
+					$uploadErrorMessages[] = e($label) . ': archivo temporal no encontrado';
 					error_log("Temporary file not found: $tmpPath");
 					continue;
 				}
@@ -1290,13 +1828,19 @@ class CCIController extends Controller
 						'size' => $fileSize,
 					];
 				} else {
-					$uploadErrorMessages[] = e($fileName) . ': no se pudo guardar en servidor';
+					$label = $fileName !== '' ? $fileName : 'archivo sin nombre';
+					$uploadErrorMessages[] = e($label) . ': no se pudo guardar en servidor';
 				}
 			}
 		}
 
 		// Si hubo errores de upload antes de procesar, reportarlos de inmediato
 		if (!empty($uploadErrorMessages) && empty($attachmentPaths) && $text === '') {
+			foreach ($cleanupGeneratedTmp as $tmpFileToCleanup) {
+				if ($tmpFileToCleanup !== '' && is_file($tmpFileToCleanup)) {
+					@unlink($tmpFileToCleanup);
+				}
+			}
 			set_flash('error', 'Error al subir archivo(s): ' . implode('; ', $uploadErrorMessages));
 			redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
 		}
@@ -1392,12 +1936,109 @@ class CCIController extends Controller
 		redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
 	}
 
+	private function resolveFreshchatUploadedUrl(array $data): string
+	{
+		$candidates = [
+			(string) ($data['url'] ?? ''),
+			(string) ($data['file_url'] ?? ''),
+			(string) ($data['fileUrl'] ?? ''),
+			(string) ($data['location'] ?? ''),
+			(string) ($data['download_url'] ?? ''),
+			(string) ($data['downloadUrl'] ?? ''),
+		];
+
+		if (isset($data['file']) && is_array($data['file'])) {
+			$candidates[] = (string) ($data['file']['url'] ?? '');
+			$candidates[] = (string) ($data['file']['file_url'] ?? '');
+			$candidates[] = (string) ($data['file']['fileUrl'] ?? '');
+		}
+		if (isset($data['data']) && is_array($data['data'])) {
+			$candidates[] = (string) ($data['data']['url'] ?? '');
+			$candidates[] = (string) ($data['data']['file_url'] ?? '');
+			$candidates[] = (string) ($data['data']['fileUrl'] ?? '');
+		}
+
+		foreach ($candidates as $candidate) {
+			$candidate = trim($candidate);
+			if ($candidate !== '' && filter_var($candidate, FILTER_VALIDATE_URL)) {
+				return $candidate;
+			}
+		}
+
+		// Fallback: buscar cualquier valor URL en profundidad (1 nivel)
+		foreach ($data as $value) {
+			if (is_string($value)) {
+				$raw = trim($value);
+				if ($raw !== '' && filter_var($raw, FILTER_VALIDATE_URL)) {
+					return $raw;
+				}
+			}
+			if (is_array($value)) {
+				foreach ($value as $nested) {
+					if (!is_string($nested)) {
+						continue;
+					}
+					$rawNested = trim($nested);
+					if ($rawNested !== '' && filter_var($rawNested, FILTER_VALIDATE_URL)) {
+						return $rawNested;
+					}
+				}
+			}
+		}
+
+		return '';
+	}
+
+	private function resolveFreshchatUploadedName(array $data, string $fallback): string
+	{
+		$candidates = [
+			(string) ($data['file_name'] ?? ''),
+			(string) ($data['filename'] ?? ''),
+			(string) ($data['name'] ?? ''),
+			(string) ($data['fileName'] ?? ''),
+			(isset($data['file']) && is_array($data['file'])) ? (string) ($data['file']['name'] ?? '') : '',
+			(isset($data['data']) && is_array($data['data'])) ? (string) ($data['data']['name'] ?? '') : '',
+		];
+
+		foreach ($candidates as $candidate) {
+			$candidate = trim($candidate);
+			if ($candidate !== '') {
+				if (preg_match('/^attachment(?:\.[a-z0-9]{1,10})?$/i', $candidate) === 1) {
+					continue;
+				}
+				return $candidate;
+			}
+		}
+
+		return $fallback;
+	}
+
+	private function resolveFreshchatUploadedHash(array $data): string
+	{
+		$candidates = [
+			(string) ($data['file_hash'] ?? ''),
+			(string) ($data['fileHash'] ?? ''),
+			(string) ($data['hash'] ?? ''),
+			(isset($data['file']) && is_array($data['file'])) ? (string) ($data['file']['file_hash'] ?? ($data['file']['hash'] ?? '')) : '',
+			(isset($data['data']) && is_array($data['data'])) ? (string) ($data['data']['file_hash'] ?? ($data['data']['hash'] ?? '')) : '',
+		];
+
+		foreach ($candidates as $candidate) {
+			$candidate = trim($candidate);
+			if ($candidate !== '') {
+				return $candidate;
+			}
+		}
+
+		return '';
+	}
+
 	private function getMediaType(string $ext): string
 	{
 		$ext = strtolower($ext);
 		$imageExts = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'];
 		$videoExts = ['mp4', 'avi', 'mov', 'mkv', 'flv', 'wmv'];
-		$audioExts = ['mp3', 'wav', 'aac', 'm4a', 'flac', 'ogg'];
+		$audioExts = ['mp3', 'wav', 'aac', 'm4a', 'flac', 'ogg', 'webm', 'opus'];
 
 		if (in_array($ext, $imageExts)) return 'image';
 		if (in_array($ext, $videoExts)) return 'video';
@@ -1411,7 +2052,12 @@ class CCIController extends Controller
 		if (!is_file($tmpPath)) return null;
 		$uploadDir = STORAGE_PATH . '/uploads/cci-attachments';
 		if (!is_dir($uploadDir)) @mkdir($uploadDir, 0755, true);
-		$sanitized = preg_replace('/[^a-zA-Z0-9._-]/', '_', basename($filename));
+		$originalBaseName = basename($filename);
+		$sanitized = preg_replace('/[\\\/:*?"<>|\x00-\x1F\x7F]/u', '_', $originalBaseName);
+		$sanitized = trim((string) $sanitized);
+		if ($sanitized === '' || $sanitized === '.' || $sanitized === '..') {
+			$sanitized = 'archivo_adjunto';
+		}
 		$unique = date('YmdHis') . '_' . substr(md5(uniqid()), 0, 8) . '_' . $sanitized;
 		$destPath = $uploadDir . '/' . $unique;
 		if (!move_uploaded_file($tmpPath, $destPath)) return null;
@@ -1492,11 +2138,12 @@ class CCIController extends Controller
 		$parts = json_decode($messageParts, true);
 		if (!is_array($parts)) {
 			$text = trim($messageParts);
-			return ['text' => $text, 'tipo' => preg_match('#^https?://#i', $text) ? 'archivo' : 'texto'];
+			return ['text' => $text, 'tipo' => preg_match('#^https?://#i', $text) ? 'archivo' : 'texto', 'media_name' => ''];
 		}
 
 		$texts = [];
 		$mediaUrls = [];
+		$mediaNames = [];
 		foreach ($parts as $part) {
 			if (!is_array($part)) {
 				continue;
@@ -1505,17 +2152,180 @@ class CCIController extends Controller
 			if ($text !== '') {
 				$texts[] = $text;
 			}
-			foreach (['image', 'video', 'file'] as $mediaType) {
+			foreach (['image', 'video', 'file', 'audio', 'document'] as $mediaType) {
+				$name = trim((string) ($part[$mediaType]['name'] ?? ''));
+				if ($name !== '' && !$this->isGenericAttachmentName($name)) {
+					$mediaNames[] = $name;
+				}
 				$url = trim((string) ($part[$mediaType]['url'] ?? ''));
 				if ($url !== '') {
 					$mediaUrls[] = $url;
+					continue;
+				}
+				if ($name !== '') {
+					$mediaUrls[] = $name;
 				}
 			}
 		}
 		if ($mediaUrls !== []) {
-			return ['text' => implode("\n", $mediaUrls), 'tipo' => 'archivo'];
+			return [
+				'text' => implode("\n", $mediaUrls),
+				'tipo' => 'archivo',
+				'media_name' => $mediaNames[0] ?? '',
+			];
 		}
-		return ['text' => implode("\n", $texts), 'tipo' => 'texto'];
+		return ['text' => implode("\n", $texts), 'tipo' => 'texto', 'media_name' => ''];
+	}
+
+	private function syncFreshchatConversationLive(PDO $db, int $localConversationId, string $externalConversationId): array
+	{
+		if ($localConversationId <= 0 || trim($externalConversationId) === '') {
+			return ['ok' => false, 'created' => 0, 'skipped' => 0];
+		}
+
+		$service = new FreshchatService();
+		$rowsById = [];
+		$anchorStmt = $db->prepare('SELECT MAX(COALESCE(fecha, created_at)) FROM bot_mensajes WHERE conversacion_id = :id');
+		$anchorStmt->execute(['id' => $localConversationId]);
+		$lastLocalTs = strtotime((string) ($anchorStmt->fetchColumn() ?: '')) ?: 0;
+		$fromTimeUtc = $lastLocalTs > 0 ? gmdate('Y-m-d\TH:i:s\Z', max(0, $lastLocalTs - 900)) : '';
+
+		$passes = [];
+		if ($fromTimeUtc !== '') {
+			$passes[] = ['from_time' => $fromTimeUtc, 'max_pages' => 8];
+		}
+		$passes[] = ['from_time' => '', 'max_pages' => 6];
+
+		foreach ($passes as $pass) {
+			$fromTime = (string) ($pass['from_time'] ?? '');
+			$maxPages = (int) ($pass['max_pages'] ?? 6);
+			$passRows = [];
+			for ($page = 1; $page <= $maxPages; $page++) {
+				$response = $service->getConversationMessages($externalConversationId, $page, 50, $fromTime);
+				if (!($response['ok'] ?? false)) {
+					if ($fromTime !== '') {
+						error_log('CCI Freshchat live sync reintento sin from_time: ' . json_encode([
+							'local_conversation_id' => $localConversationId,
+							'external_conversation_id' => $externalConversationId,
+							'page' => $page,
+							'from_time' => $fromTime,
+							'error' => (string) ($response['error'] ?? 'error desconocido'),
+						], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+						break;
+					}
+					error_log('CCI Freshchat live sync fallo: ' . json_encode([
+						'local_conversation_id' => $localConversationId,
+						'external_conversation_id' => $externalConversationId,
+						'page' => $page,
+						'error' => (string) ($response['error'] ?? 'error desconocido'),
+					], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+					return ['ok' => false, 'created' => 0, 'skipped' => 0, 'error' => (string) ($response['error'] ?? 'error desconocido')];
+				}
+
+				$pageRows = is_array($response['data']['messages'] ?? null) ? $response['data']['messages'] : [];
+				if ($pageRows === []) {
+					break;
+				}
+				foreach ($pageRows as $row) {
+					if (!is_array($row)) {
+						continue;
+					}
+					$passRows[] = $row;
+					$rid = trim((string) ($row['id'] ?? ''));
+					$key = $rid !== '' ? $rid : ('p' . $page . '_' . count($rowsById));
+					$rowsById[$key] = $row;
+				}
+
+				if (count($pageRows) < 50) {
+					break;
+				}
+			}
+
+			if ($fromTime !== '' && !empty($passRows) && $lastLocalTs > 0) {
+				$maxFetchedTs = 0;
+				foreach ($passRows as $passRow) {
+					$ts = strtotime((string) ($passRow['created_time'] ?? ($passRow['created_at'] ?? ''))) ?: 0;
+					if ($ts > $maxFetchedTs) {
+						$maxFetchedTs = $ts;
+					}
+				}
+				if ($maxFetchedTs > 0 && $maxFetchedTs + 60 < $lastLocalTs) {
+					error_log('CCI Freshchat live sync detecto lote antiguo y aplicara fallback: ' . json_encode([
+						'local_conversation_id' => $localConversationId,
+						'external_conversation_id' => $externalConversationId,
+						'from_time' => $fromTime,
+						'last_local_ts' => $lastLocalTs,
+						'max_fetched_ts' => $maxFetchedTs,
+					], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+					$rowsById = [];
+					continue;
+				}
+			}
+
+			if (!empty($rowsById)) {
+				break;
+			}
+		}
+
+		$rows = array_values($rowsById);
+
+		usort($rows, static function (array $a, array $b): int {
+			$ta = strtotime((string) ($a['created_time'] ?? ($a['created_at'] ?? ''))) ?: 0;
+			$tb = strtotime((string) ($b['created_time'] ?? ($b['created_at'] ?? ''))) ?: 0;
+			if ($ta === $tb) {
+				return strcmp((string) ($a['id'] ?? ''), (string) ($b['id'] ?? ''));
+			}
+			return $ta <=> $tb;
+		});
+		$created = 0;
+		$skipped = 0;
+		error_log('CCI Freshchat live sync lote: ' . json_encode([
+			'local_conversation_id' => $localConversationId,
+			'external_conversation_id' => $externalConversationId,
+			'from_time' => $fromTimeUtc,
+			'fetched_rows' => count($rows),
+		], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+		foreach ($rows as $row) {
+			if (!is_array($row)) {
+				$skipped++;
+				continue;
+			}
+			$externalMessageId = trim((string) ($row['id'] ?? ''));
+			if ($externalMessageId === '' || $this->messageRefExists($db, 'freshchat', $externalMessageId)) {
+				$skipped++;
+				continue;
+			}
+
+			$messagePartsJson = json_encode($row['message_parts'] ?? [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+			$message = $this->extractFreshchatMessage((string) $messagePartsJson);
+			$text = trim((string) ($message['text'] ?? ''));
+			if ($text === '') {
+				$skipped++;
+				continue;
+			}
+
+			$tipo = (string) ($message['tipo'] ?? 'texto');
+			if ($tipo === 'archivo') {
+				$maybeUrl = $this->extractFreshchatMediaUrl($text);
+				if ($maybeUrl !== '') {
+					$preferredMediaName = trim((string) ($message['media_name'] ?? ''));
+					$text = $this->cacheFreshchatMedia($maybeUrl, $externalMessageId, $preferredMediaName);
+				}
+			}
+
+			$actorType = strtoupper(trim((string) ($row['actor_type'] ?? '')));
+			$isOut = $actorType !== 'USER';
+			$createdAt = (string) ($row['created_time'] ?? ($row['created_at'] ?? date('c')));
+			$localMessageId = $this->insertBotMessage($db, $localConversationId, $text, $isOut, $createdAt, $tipo);
+			if ($localMessageId > 0) {
+				$this->saveMessageRef($db, 'freshchat', $externalMessageId, $localConversationId, $localMessageId, $isOut ? 'out' : 'in');
+				$created++;
+			} else {
+				$skipped++;
+			}
+		}
+
+		return ['ok' => true, 'created' => $created, 'skipped' => $skipped];
 	}
 
 	private function normalizeImportedFreshchatMedia(PDO $db): int
@@ -1534,7 +2344,7 @@ class CCIController extends Controller
 		return $stmt->rowCount();
 	}
 
-	private function cacheFreshchatMedia(string $url, string $externalMessageId): string
+	private function cacheFreshchatMedia(string $url, string $externalMessageId, string $preferredName = ''): string
 	{
 		if (!filter_var($url, FILTER_VALIDATE_URL) || !function_exists('curl_init')) {
 			return $url;
@@ -1583,7 +2393,12 @@ class CCIController extends Controller
 			};
 		}
 
-		$filename = 'freshchat_' . substr(hash('sha256', $externalMessageId . '|' . $url), 0, 32) . '.' . $extension;
+		$hashToken = substr(hash('sha256', $externalMessageId . '|' . $url), 0, 8);
+		$safePreferred = $this->buildFreshchatPreferredFileName($preferredName, $preferredName, $contentType);
+		if ($safePreferred === '' || $this->isGenericAttachmentName($safePreferred)) {
+			$safePreferred = 'freshchat_media.' . $extension;
+		}
+		$filename = date('YmdHis') . '_' . $hashToken . '_' . $safePreferred;
 		$storageDir = STORAGE_PATH . '/uploads/cci-attachments';
 		$publicDir = PUBLIC_PATH . '/cci-attachments';
 		if ((!is_dir($storageDir) && !@mkdir($storageDir, 0755, true)) || (!is_dir($publicDir) && !@mkdir($publicDir, 0755, true))) {
@@ -1842,10 +2657,13 @@ class CCIController extends Controller
 			return ['ok' => true, 'status' => 'disabled', 'message' => 'Freshchat no tiene token configurado.'];
 		}
 
-		$stateStmt = $db->prepare('SELECT last_cursor FROM cci_sync_state WHERE provider_code = "freshchat" LIMIT 1');
+		$stateStmt = $db->prepare('SELECT last_cursor, updated_at FROM cci_sync_state WHERE provider_code = "freshchat" LIMIT 1');
 		$stateStmt->execute();
 		$state = $stateStmt->fetch() ?: [];
 		$pending = json_decode((string) ($state['last_cursor'] ?? ''), true);
+		$stateUpdatedAtRaw = trim((string) ($state['updated_at'] ?? ''));
+		$stateUpdatedAtTs = $stateUpdatedAtRaw !== '' ? strtotime($stateUpdatedAtRaw) : false;
+		$pendingAgeSeconds = $stateUpdatedAtTs !== false ? (time() - $stateUpdatedAtTs) : 0;
 		$checkpointStmt = $db->query('SELECT MAX(window_end) FROM cci_sync_diagnostics WHERE provider_code = "freshchat"');
 		$latestCheckpoint = trim((string) ($checkpointStmt ? ($checkpointStmt->fetchColumn() ?: '') : ''));
 		$pendingWindowEnd = is_array($pending) ? trim((string) ($pending['window_end'] ?? '')) : '';
@@ -1861,49 +2679,76 @@ class CCIController extends Controller
 				->execute(['cursor' => json_encode($pending, JSON_UNESCAPED_SLASHES)]);
 		}
 
+		// Si un report_id queda pendiente demasiado tiempo, liberar cursor para no bloquear toda la sincronización.
+		if (is_array($pending) && !empty($pending['report_id']) && $pendingAgeSeconds > 1200) {
+			$fallbackStart = $pendingWindowEnd !== '' ? $pendingWindowEnd : $latestCheckpoint;
+			$pending = ['next_start' => $fallbackStart !== '' ? $fallbackStart : date(DateTimeInterface::ATOM)];
+			$db->prepare('UPDATE cci_sync_state SET last_cursor = :cursor, updated_at = NOW() WHERE provider_code = "freshchat"')
+				->execute(['cursor' => json_encode($pending, JSON_UNESCAPED_SLASHES)]);
+		}
+
 		if (is_array($pending) && !empty($pending['report_id'])) {
 			$report = $service->getReport((string) $pending['report_id']);
 			if (!$report['ok']) {
-				return ['ok' => false, 'status' => 'error', 'message' => (string) $report['error']];
+				$reportError = (string) ($report['error'] ?? 'error desconocido');
+				$looksStale = preg_match('/\b(404|not\s*found|expired|gone)\b/i', $reportError) === 1;
+				if ($looksStale && $pendingAgeSeconds > 1200) {
+					$fallbackStart = $pendingWindowEnd !== '' ? $pendingWindowEnd : $latestCheckpoint;
+					$resetState = ['next_start' => $fallbackStart !== '' ? $fallbackStart : date(DateTimeInterface::ATOM)];
+					$db->prepare('UPDATE cci_sync_state SET last_cursor = :cursor, updated_at = NOW() WHERE provider_code = "freshchat"')
+						->execute(['cursor' => json_encode($resetState, JSON_UNESCAPED_SLASHES)]);
+					$pending = $resetState;
+				} else {
+					return ['ok' => true, 'status' => 'pending', 'message' => 'La exportación Freshchat aún no está lista.'];
+				}
 			}
 			$link = (string) ($report['data']['links'][0]['link']['href'] ?? '');
-			if ($link === '') {
-				return ['ok' => true, 'status' => 'pending', 'message' => 'La exportación Freshchat sigue en proceso.'];
-			}
-			$download = $service->downloadCsv($link);
-			if (!$download['ok']) {
-				return ['ok' => false, 'status' => 'error', 'message' => (string) $download['error']];
-			}
-
-			$result = $this->importFreshchatTranscript($db, (string) $download['csv']);
-			$result['normalized_media'] = $this->normalizeImportedFreshchatMedia($db);
-			$result['normalized_media_urls'] = $this->normalizeFreshchatMediaUrls($db);
-			$result['normalized_cached_filenames'] = $this->normalizeCachedFreshchatFilenames($db);
-			$this->saveFreshchatDiagnostic($db, $result, $pending);
-
-			$windowEnd = trim((string) ($pending['window_end'] ?? ''));
-			$overallEnd = trim((string) ($pending['overall_end'] ?? ''));
-			$nextCursor = '';
-			if ($windowEnd !== '') {
-				$nextState = ['next_start' => $windowEnd];
-				if ($overallEnd !== '' && strtotime($windowEnd) < strtotime($overallEnd)) {
-					$nextState['overall_end'] = $overallEnd;
+			if ($link === '' && ($report['ok'] ?? false)) {
+				if ($pendingAgeSeconds > 1200) {
+					$fallbackStart = $pendingWindowEnd !== '' ? $pendingWindowEnd : $latestCheckpoint;
+					$resetState = ['next_start' => $fallbackStart !== '' ? $fallbackStart : date(DateTimeInterface::ATOM)];
+					$db->prepare('UPDATE cci_sync_state SET last_cursor = :cursor, updated_at = NOW() WHERE provider_code = "freshchat"')
+						->execute(['cursor' => json_encode($resetState, JSON_UNESCAPED_SLASHES)]);
+				} else {
+					return ['ok' => true, 'status' => 'pending', 'message' => 'La exportación Freshchat sigue en proceso.'];
 				}
-				$nextCursor = json_encode($nextState, JSON_UNESCAPED_SLASHES);
 			}
-			$saveState = $db->prepare('INSERT INTO cci_sync_state (provider_code, last_cursor, last_sync_at, updated_at) VALUES ("freshchat", :cursor, NOW(), NOW()) ON DUPLICATE KEY UPDATE last_cursor = VALUES(last_cursor), last_sync_at = NOW(), updated_at = NOW()');
-			$saveState->execute(['cursor' => $nextCursor]);
+			if ($link !== '') {
+				$download = $service->downloadCsv($link);
+				if (!$download['ok']) {
+					return ['ok' => false, 'status' => 'error', 'message' => (string) $download['error']];
+				}
 
-			return [
-				'ok' => true,
-				'status' => 'imported',
-				'created' => (int) ($result['created'] ?? 0),
-				'skipped' => (int) ($result['skipped'] ?? 0),
-				'source_rows' => (int) ($result['source_rows'] ?? 0),
-				'message' => 'Freshchat sincronizado. Filas del reporte: ' . (int) ($result['source_rows'] ?? 0)
-					. ', importados: ' . (int) ($result['created'] ?? 0)
-					. ', omitidos: ' . (int) ($result['skipped'] ?? 0) . '.',
-			];
+				$result = $this->importFreshchatTranscript($db, (string) $download['csv']);
+				$result['normalized_media'] = $this->normalizeImportedFreshchatMedia($db);
+				$result['normalized_media_urls'] = $this->normalizeFreshchatMediaUrls($db);
+				$result['normalized_cached_filenames'] = $this->normalizeCachedFreshchatFilenames($db);
+				$this->saveFreshchatDiagnostic($db, $result, $pending);
+
+				$windowEnd = trim((string) ($pending['window_end'] ?? ''));
+				$overallEnd = trim((string) ($pending['overall_end'] ?? ''));
+				$nextCursor = '';
+				if ($windowEnd !== '') {
+					$nextState = ['next_start' => $windowEnd];
+					if ($overallEnd !== '' && strtotime($windowEnd) < strtotime($overallEnd)) {
+						$nextState['overall_end'] = $overallEnd;
+					}
+					$nextCursor = json_encode($nextState, JSON_UNESCAPED_SLASHES);
+				}
+				$saveState = $db->prepare('INSERT INTO cci_sync_state (provider_code, last_cursor, last_sync_at, updated_at) VALUES ("freshchat", :cursor, NOW(), NOW()) ON DUPLICATE KEY UPDATE last_cursor = VALUES(last_cursor), last_sync_at = NOW(), updated_at = NOW()');
+				$saveState->execute(['cursor' => $nextCursor]);
+
+				return [
+					'ok' => true,
+					'status' => 'imported',
+					'created' => (int) ($result['created'] ?? 0),
+					'skipped' => (int) ($result['skipped'] ?? 0),
+					'source_rows' => (int) ($result['source_rows'] ?? 0),
+					'message' => 'Freshchat sincronizado. Filas del reporte: ' . (int) ($result['source_rows'] ?? 0)
+						. ', importados: ' . (int) ($result['created'] ?? 0)
+						. ', omitidos: ' . (int) ($result['skipped'] ?? 0) . '.',
+				];
+			}
 		}
 
 		$overallEnd = new DateTimeImmutable('now', new DateTimeZone('UTC'));
@@ -1921,6 +2766,12 @@ class CCIController extends Controller
 		} catch (Throwable $e) {
 			return ['ok' => false, 'status' => 'error', 'message' => 'FRESHCHAT_SYNC_START no tiene una fecha UTC válida.'];
 		}
+
+		// Si el backlog es demasiado grande, priorizar últimos 2 días para reflejar mensajes recientes antes.
+		$recentFloor = $overallEnd->sub(new DateInterval('P2D'));
+		if ($start < $recentFloor) {
+			$start = $recentFloor;
+		}
 		if ($start >= $overallEnd) {
 			return ['ok' => true, 'status' => 'up_to_date', 'message' => 'El historial Freshchat ya está actualizado.'];
 		}
@@ -1928,6 +2779,10 @@ class CCIController extends Controller
 		$windowEnd = min($start->add(new DateInterval('P1D')), $overallEnd);
 		$report = $service->requestChatTranscript($start->format('Y-m-d\TH:i:s.000\Z'), $windowEnd->format('Y-m-d\TH:i:s.000\Z'));
 		if (!$report['ok']) {
+			$reportError = (string) ($report['error'] ?? 'error desconocido');
+			if (strpos($reportError, 'HTTP 429') !== false || stripos($reportError, 'req/min') !== false) {
+				return ['ok' => true, 'status' => 'throttled', 'message' => 'Freshchat limitó temporalmente la solicitud de transcript. Reintentará automáticamente.'];
+			}
 			return ['ok' => false, 'status' => 'error', 'message' => (string) $report['error']];
 		}
 		$reportId = trim((string) ($report['data']['id'] ?? ''));
@@ -4202,6 +5057,15 @@ class CCIController extends Controller
 				$selStmt->execute(['id' => $selectedId]);
 				$selected = $selStmt->fetch() ?: null;
 
+				if (is_array($selected) && (string) ($selected['canal'] ?? '') === 'freshchat') {
+					$refStmt = $db->prepare('SELECT external_conversation_id FROM cci_conversacion_refs WHERE provider_code = "freshchat" AND conversacion_id = :id LIMIT 1');
+					$refStmt->execute(['id' => $selectedId]);
+					$externalConversationId = trim((string) ($refStmt->fetchColumn() ?: ''));
+					if ($externalConversationId !== '') {
+						$this->syncFreshchatConversationLive($db, $selectedId, $externalConversationId);
+					}
+				}
+
 				// En algunos entornos bot_mensajes no tiene columna tipo/fecha: seleccionar solo lo disponible.
 				$msgColumns = $this->getTableColumnsSafe($db, 'bot_mensajes');
 				$selectParts = ['id', 'mensaje', 'es_bot', 'created_at'];
@@ -4210,13 +5074,16 @@ class CCIController extends Controller
 				
 				// Paginación de mensajes (Req 12)
 				$pageSize = 50;
+				$dateExpr = 'COALESCE(' . (in_array('fecha', $msgColumns, true) ? 'fecha' : 'created_at') . ', created_at)';
 				$threadStmt = $db->prepare('SELECT ' . implode(', ', $selectParts) . '
 					FROM bot_mensajes
 					WHERE conversacion_id = :id
-					ORDER BY COALESCE(' . (in_array('fecha', $msgColumns, true) ? 'fecha' : 'created_at') . ', created_at) ASC, id ASC
+					ORDER BY ' . $dateExpr . ' DESC, id DESC
 					LIMIT ' . (int)$pageSize);
 				$threadStmt->execute(['id' => $selectedId]);
 				$thread = $threadStmt->fetchAll() ?: [];
+				// Revertir para pintar en orden cronológico (antiguo -> nuevo) en la vista.
+				$thread = array_reverse($thread);
 				
 				// Verificar si hay más mensajes (para mostrar botón "Cargar más")
 				$countStmt = $db->prepare('SELECT COUNT(*) FROM bot_mensajes WHERE conversacion_id = :id');
@@ -4328,13 +5195,20 @@ class CCIController extends Controller
 		$db = $this->db();
 		$this->ensureCciTables($db);
 
-		// Fetch mensajes ordenados inversamente (de más antiguos primero)
-		// OFFSET indica cuántos mensajes recientes saltar
+		// Fetch mensajes anteriores: saltar los más recientes y traer el bloque previo.
 		$stmt = $db->prepare('
-			SELECT id, conversacion_id, usuario_id, usuario_nombre, contenido, tipo, es_bot, fecha, created_at
+			SELECT id,
+			       conversacion_id,
+			       COALESCE(usuario_id, 0) AS usuario_id,
+			       COALESCE(usuario_nombre, "") AS usuario_nombre,
+			       COALESCE(mensaje, "") AS contenido,
+			       COALESCE(tipo, "texto") AS tipo,
+			       COALESCE(es_bot, 0) AS es_bot,
+			       COALESCE(fecha, created_at) AS fecha,
+			       created_at
 			FROM bot_mensajes
 			WHERE conversacion_id = :id
-			ORDER BY created_at ASC
+			ORDER BY COALESCE(fecha, created_at) DESC, id DESC
 			LIMIT 50
 			OFFSET :offset
 		');
@@ -4344,6 +5218,7 @@ class CCIController extends Controller
 		try {
 			$stmt->execute();
 			$messages = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+			$messages = array_reverse($messages);
 			echo json_encode([
 				'ok' => true,
 				'mensajes' => array_map(static function ($m) {

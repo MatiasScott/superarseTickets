@@ -376,6 +376,7 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 							<textarea class="form-control mb-2" name="reply_text" rows="3" maxlength="10000" placeholder="Escribe tu mensaje aquí..." id="cci-reply-text" style="font-size: 0.9rem; resize: none;"></textarea>
 
 							<input type="file" name="audio_record" id="cci-audio-file" style="display: none;" accept="audio/*">
+							<input type="hidden" name="audio_record_b64" id="cci-audio-b64" value="">
 
 							<div class="d-flex gap-2 align-items-center w-100 flex-wrap">
 								<input type="file" id="cci-file-input" name="attachments[]" multiple accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.zip" style="display: none;">
@@ -613,7 +614,7 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 			var convId = <?= (int) $selectedId ?>;
 			var scrollEl = document.getElementById('cci-msg-scroll');
 			var fileInput = document.getElementById('cci-file-input');
-			var refreshMs = 20000;
+			var refreshMs = 8000;
 			var timer = null;
 
 			// Solicitar permisos para notificaciones del navegador
@@ -843,6 +844,10 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 
 			if (fileInput) {
 				fileInput.addEventListener('change', function() {
+					var audioB64Input = document.getElementById('cci-audio-b64');
+					if (audioB64Input) {
+						audioB64Input.value = '';
+					}
 					removedFileIndices = [];
 					if (fileInput.files && fileInput.files.length > MAX_FILES) {
 						alert('Solo puedes adjuntar hasta ' + MAX_FILES + ' archivos por mensaje.');
@@ -857,7 +862,12 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 
 				var form = fileInput.closest('form');
 				if (form) {
-					form.addEventListener('submit', function() {
+					form.addEventListener('submit', function(event) {
+						if ((window.__cciAudioPreparing === true) || (window.__cciMediaRecorder && window.__cciMediaRecorder.state === 'recording')) {
+							event.preventDefault();
+							alert('Espera a que termine de procesarse la nota de audio antes de enviar.');
+							return;
+						}
 						var dt = new DataTransfer();
 						var files = fileInput.files;
 						for (var j = 0; j < files.length; j++) {
@@ -916,6 +926,19 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 			var audioChunks = [];
 			var recTimer = null;
 			var seconds = 0;
+			window.__cciAudioPreparing = false;
+			window.__cciMediaRecorder = null;
+
+			function guessAudioExtension(mime) {
+				var clean = String(mime || '').toLowerCase();
+				if (clean.indexOf('mpeg') !== -1 || clean.indexOf('mp3') !== -1) return 'mp3';
+				if (clean.indexOf('ogg') !== -1) return 'ogg';
+				if (clean.indexOf('wav') !== -1) return 'wav';
+				if (clean.indexOf('aac') !== -1) return 'aac';
+				if (clean.indexOf('mp4') !== -1 || clean.indexOf('m4a') !== -1) return 'm4a';
+				if (clean.indexOf('webm') !== -1) return 'webm';
+				return 'webm';
+			}
 
 			if (btnMic) {
 				btnMic.addEventListener('click', function() {
@@ -924,7 +947,21 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 								audio: true
 							})
 							.then(function(stream) {
-								mediaRecorder = new MediaRecorder(stream);
+								var preferredAudioMimes = [
+									'audio/ogg;codecs=opus',
+									'audio/webm;codecs=opus',
+									'audio/ogg',
+									'audio/webm'
+								];
+								var recorderOptions = {};
+								for (var m = 0; m < preferredAudioMimes.length; m++) {
+									if (window.MediaRecorder && typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported(preferredAudioMimes[m])) {
+										recorderOptions.mimeType = preferredAudioMimes[m];
+										break;
+									}
+								}
+								mediaRecorder = Object.keys(recorderOptions).length > 0 ? new MediaRecorder(stream, recorderOptions) : new MediaRecorder(stream);
+								window.__cciMediaRecorder = mediaRecorder;
 								audioChunks = [];
 
 								mediaRecorder.ondataavailable = function(e) {
@@ -932,21 +969,48 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 								};
 
 								mediaRecorder.onstop = function() {
+									window.__cciAudioPreparing = true;
 									var audioBlob = new Blob(audioChunks, {
-										type: 'audio/mp3'
+										type: mediaRecorder && mediaRecorder.mimeType ? mediaRecorder.mimeType : ((audioChunks[0] && audioChunks[0].type) ? audioChunks[0].type : 'audio/webm')
 									});
-									var file = new File([audioBlob], 'audio_note_' + Date.now() + '.mp3', {
-										type: 'audio/mp3'
+									var blobMime = audioBlob.type || 'audio/webm';
+									var audioExt = guessAudioExtension(blobMime);
+									var file = new File([audioBlob], 'audio_note_' + Date.now() + '.' + audioExt, {
+										type: blobMime
 									});
+									var audioB64Input = document.getElementById('cci-audio-b64');
 
 									var container = new DataTransfer();
 									container.items.add(file);
 									document.getElementById('cci-audio-file').files = container.files;
 
+									if (audioB64Input) {
+										var reader = new FileReader();
+										reader.onload = function(ev) {
+											audioB64Input.value = typeof ev.target.result === 'string' ? ev.target.result : '';
+											window.__cciAudioPreparing = false;
+											var fileCountReady = document.getElementById('cci-file-count');
+											var fileNumReady = document.getElementById('cci-file-num');
+											if (fileCountReady && fileNumReady) {
+												fileNumReady.textContent = 'Nota de audio lista';
+												fileCountReady.style.display = 'inline-flex';
+											}
+										};
+										reader.onerror = function() {
+											window.__cciAudioPreparing = false;
+										};
+										reader.onabort = function() {
+											window.__cciAudioPreparing = false;
+										};
+										reader.readAsDataURL(audioBlob);
+									} else {
+										window.__cciAudioPreparing = false;
+									}
+
 									var fileCountEl = document.getElementById('cci-file-count');
 									var fileNumEl = document.getElementById('cci-file-num');
 									if (fileCountEl && fileNumEl) {
-										fileNumEl.textContent = 'Nota de audio lista';
+										fileNumEl.textContent = 'Procesando audio...';
 										fileCountEl.style.display = 'inline-flex';
 									}
 								};

@@ -409,7 +409,10 @@ class CRMController extends Controller
 		Auth::requireAuth();
 		$this->ensureCrmSupportTables();
 		try {
-			$this->reconcileProspectsWithSuperarseUsers();
+			if ($this->shouldRunProspectReconcile()) {
+				$this->reconcileProspectsWithSuperarseUsers();
+				$this->markProspectReconcileRun();
+			}
 		} catch (Throwable $e) {
 			// Evitar romper la vista por reconciliacion.
 		}
@@ -4347,6 +4350,28 @@ class CRMController extends Controller
 			echo json_encode(['success' => false, 'error' => 'Error: ' . $e->getMessage()]);
 		}
 		exit;
+	}
+
+	private const PROSPECT_RECONCILE_LOCK_FILE = STORAGE_PATH . '/logs/.crm_prospect_reconcile_last_run';
+	private const PROSPECT_RECONCILE_INTERVAL_SECONDS = 300;
+
+	private function shouldRunProspectReconcile(): bool
+	{
+		$lastRun = 0;
+		if (is_file(self::PROSPECT_RECONCILE_LOCK_FILE)) {
+			$lastRun = (int) @file_get_contents(self::PROSPECT_RECONCILE_LOCK_FILE);
+		}
+
+		return (time() - $lastRun) >= self::PROSPECT_RECONCILE_INTERVAL_SECONDS;
+	}
+
+	private function markProspectReconcileRun(): void
+	{
+		$logDir = dirname(self::PROSPECT_RECONCILE_LOCK_FILE);
+		if (!is_dir($logDir)) {
+			@mkdir($logDir, 0755, true);
+		}
+		@file_put_contents(self::PROSPECT_RECONCILE_LOCK_FILE, (string) time(), LOCK_EX);
 	}
 
 	private function reconcileProspectsWithSuperarseUsers(): void

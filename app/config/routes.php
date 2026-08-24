@@ -64,6 +64,9 @@ return static function (Router $router): void {
 	$router->get('/api/internal/process-attachments', 'InternalApiController@processAttachments');
 	$router->post('/api/internal/process-attachments', 'InternalApiController@processAttachments');
 
+	$router->get('/api/internal/auto-sync', 'InternalApiController@runAutoSync');
+	$router->post('/api/internal/auto-sync', 'InternalApiController@runAutoSync');
+
 	$router->post('/api/internal/generate-preview', 'InternalApiController@generatePreview');
 	$router->get('/api/internal/dashboard-metrics', 'InternalApiController@dashboardMetrics');
 	$router->post('/api/internal/dashboard-metrics', 'InternalApiController@dashboardMetrics');

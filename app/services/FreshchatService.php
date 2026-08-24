@@ -75,16 +75,22 @@ class FreshchatService
 		return $this->apiRequest('GET', '/conversations/' . rawurlencode($conversationId));
 	}
 
-	public function getConversationMessages(string $conversationId): array
+	public function getConversationMessages(string $conversationId, int $page = 1, int $itemsPerPage = 50, string $fromTimeUtc = ''): array
 	{
 		if (trim($conversationId) === '') {
 			return ['ok' => false, 'error' => 'Falta el identificador de la conversación Freshchat.'];
 		}
 
-		return $this->apiRequest('GET', '/conversations/' . rawurlencode($conversationId) . '/messages', null, [
-			'page' => 1,
-			'items_per_page' => 50,
-		]);
+		$query = [
+			'page' => max(1, $page),
+			'items_per_page' => max(1, min(50, $itemsPerPage)),
+		];
+		$fromTimeUtc = trim($fromTimeUtc);
+		if ($fromTimeUtc !== '') {
+			$query['from_time'] = $fromTimeUtc;
+		}
+
+		return $this->apiRequest('GET', '/conversations/' . rawurlencode($conversationId) . '/messages', null, $query);
 	}
 
 	public function findAgentByEmail(string $email): ?array
@@ -176,7 +182,7 @@ class FreshchatService
 			return ['ok' => false, 'error' => 'No se pudo inicializar cURL para Freshchat.'];
 		}
 
-		$mimeType = function_exists('mime_content_type') ? (mime_content_type($filePath) ?: 'application/octet-stream') : 'application/octet-stream';
+		$mimeType = $this->detectUploadMimeType($filePath, $fileName);
 		curl_setopt_array($curl, [
 			CURLOPT_RETURNTRANSFER => true,
 			CURLOPT_POST => true,
@@ -214,10 +220,66 @@ class FreshchatService
 		return ['ok' => true, 'data' => $data];
 	}
 
+	private function detectUploadMimeType(string $filePath, string $fileName): string
+	{
+		$ext = strtolower((string) pathinfo($fileName, PATHINFO_EXTENSION));
+		$map = [
+			'pdf' => 'application/pdf',
+			'doc' => 'application/msword',
+			'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+			'xls' => 'application/vnd.ms-excel',
+			'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+			'txt' => 'text/plain',
+			'csv' => 'text/csv',
+			'zip' => 'application/zip',
+			'rar' => 'application/vnd.rar',
+			'mp3' => 'audio/mpeg',
+			'wav' => 'audio/wav',
+			'ogg' => 'audio/ogg',
+			'aac' => 'audio/aac',
+			'm4a' => 'audio/mp4',
+			'webm' => 'audio/webm',
+			'opus' => 'audio/ogg',
+			'jpg' => 'image/jpeg',
+			'jpeg' => 'image/jpeg',
+			'png' => 'image/png',
+			'gif' => 'image/gif',
+			'webp' => 'image/webp',
+			'mp4' => 'video/mp4',
+		];
+		if (isset($map[$ext])) {
+			return $map[$ext];
+		}
+
+		if (function_exists('finfo_open') && function_exists('finfo_file')) {
+			$finfo = @finfo_open(FILEINFO_MIME_TYPE);
+			if ($finfo !== false) {
+				$detected = (string) @finfo_file($finfo, $filePath);
+				@finfo_close($finfo);
+				if ($detected !== '') {
+					return $detected;
+				}
+			}
+		}
+
+		if (function_exists('mime_content_type')) {
+			$detected = (string) (mime_content_type($filePath) ?: '');
+			if ($detected !== '') {
+				return $detected;
+			}
+		}
+
+		return 'application/octet-stream';
+	}
+
 	public function downloadCsv(string $url): array
 	{
 		if (!filter_var($url, FILTER_VALIDATE_URL)) {
 			return ['ok' => false, 'error' => 'La URL de descarga del reporte Freshchat es inválida.'];
+		}
+		$config = $this->getConfig();
+		if ($config['api_token'] === '') {
+			return ['ok' => false, 'error' => 'Falta FRESHCHAT_API_TOKEN en el archivo .env local.'];
 		}
 		if (!function_exists('curl_init')) {
 			return ['ok' => false, 'error' => 'La extensión cURL de PHP no está habilitada.'];
@@ -228,12 +290,26 @@ class FreshchatService
 			return ['ok' => false, 'error' => 'No se pudo inicializar la descarga del reporte Freshchat.'];
 		}
 		$responseHeaders = [];
+		$hasPresignedSignature = str_contains($url, 'X-Amz-Algorithm=')
+			|| str_contains($url, 'X-Amz-Signature=')
+			|| str_contains($url, 'X-Amz-Credential=');
+		$headers = [
+			'Accept: text/csv,application/zip,application/octet-stream,*/*',
+		];
+		if (!$hasPresignedSignature) {
+			$headers[] = 'Authorization: Bearer ' . $config['api_token'];
+		}
+
 		curl_setopt_array($curl, [
 			CURLOPT_RETURNTRANSFER => true,
+			CURLOPT_FOLLOWLOCATION => true,
+			CURLOPT_MAXREDIRS => 5,
+			CURLOPT_ENCODING => '',
 			CURLOPT_CONNECTTIMEOUT => 10,
 			CURLOPT_TIMEOUT => 60,
 			CURLOPT_SSL_VERIFYPEER => true,
 			CURLOPT_SSL_VERIFYHOST => 2,
+			CURLOPT_HTTPHEADER => $headers,
 			CURLOPT_HEADERFUNCTION => static function ($curl, string $header) use (&$responseHeaders): int {
 				$separator = strpos($header, ':');
 				if ($separator !== false) {
@@ -249,7 +325,9 @@ class FreshchatService
 		curl_close($curl);
 
 		if ($raw === false || $error !== '' || $httpCode < 200 || $httpCode >= 300) {
-			return ['ok' => false, 'error' => 'No se pudo descargar el reporte Freshchat.'];
+			$responseSnippet = is_string($raw) ? trim(mb_substr(strip_tags($raw), 0, 250)) : '';
+			$detail = $responseSnippet !== '' ? ': ' . $responseSnippet : '';
+			return ['ok' => false, 'error' => 'No se pudo descargar el reporte Freshchat (HTTP ' . $httpCode . ')' . $detail];
 		}
 		if (str_starts_with((string) $raw, "PK\x03\x04")) {
 			if (!class_exists('ZipArchive')) {

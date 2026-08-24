@@ -71,6 +71,49 @@ class InternalApiController extends Controller
         ]);
     }
 
+    /**
+     * Ejecuta el ciclo completo de auto-sync (correo + adjuntos + WhatsApp + Freshchat)
+     * en un proceso separado del request del usuario. Protegido por token interno.
+     */
+    public function runAutoSync(): void
+    {
+        $expected = trim((string) env('MAIL_AUTO_SYNC_INTERNAL_TOKEN', ''));
+        if ($expected === '') {
+            $expected = trim((string) env('CRM_SYNC_INTERNAL_TOKEN', ''));
+        }
+        $provided = trim((string) ($_GET['token'] ?? $_POST['token'] ?? ''));
+
+        if ($expected === '' || $provided === '' || !hash_equals($expected, $provided)) {
+            $this->jsonResponse([
+                'ok' => false,
+                'error' => 'Token invalido o faltante.',
+            ], 403);
+            exit;
+        }
+
+        // Liberar la sesion para no bloquear otras peticiones del mismo usuario.
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            @session_write_close();
+        }
+        ignore_user_abort(true);
+        @set_time_limit(0);
+
+        try {
+            AutoSyncScheduler::forceExecute();
+            $this->jsonResponse([
+                'ok' => true,
+                'service' => 'auto-sync-cycle',
+                'time' => date('Y-m-d H:i:s'),
+            ]);
+        } catch (Throwable $e) {
+            $this->jsonResponse([
+                'ok' => false,
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+        exit;
+    }
+
     public function generatePreview(): void
     {
         $this->enqueueJob(QueueService::PREVIEW_QUEUE, [

@@ -75,6 +75,12 @@ Auth::enforceRequestAccess($uri);
 
 $router->dispatch($method, $uri);
 
+// Liberar el lock de sesion lo antes posible para no bloquear
+// otras peticiones del mismo usuario mientras corren tareas pesadas.
+if (session_status() === PHP_SESSION_ACTIVE) {
+	session_write_close();
+}
+
 // Mantener desacoplado el request web: solo ejecutar autosync si se habilita explicitamente.
 if ((string) env('APP_WEB_AUTOSYNC_ENABLED', 'false') === 'true') {
 	AutoSyncScheduler::checkAndExecute();
