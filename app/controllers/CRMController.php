@@ -438,17 +438,15 @@ class CRMController extends Controller
 		}
 
 		$totalProspects = $this->countLocalProspects();
-		$prospectPerPage = max(25, min(50000, $totalProspects > 0 ? $totalProspects : 25));
-		$prospectPage = 1;
-		$prospectPages = 1;
-		$prospectosLocales = $this->fetchLocalProspects($prospectPerPage, 0, $prospectSort);
+		$prospectPerPage = 50;
+		$prospectPage = max(1, (int) ($_GET['prospect_page'] ?? 1));
+		$prospectPages = max(1, (int) ceil($totalProspects / $prospectPerPage));
+		$prospectPage = min($prospectPage, $prospectPages);
+		$prospectosLocales = $this->fetchLocalProspects($prospectPerPage, ($prospectPage - 1) * $prospectPerPage, $prospectSort);
 
-		if (empty($prospectosLocales) && $totalProspects > 0) {
-			$prospectPerPage = 25;
-			$prospectPage = max(1, (int) ($_GET['prospect_page'] ?? 1));
-			$prospectPages = max(1, (int) ceil($totalProspects / $prospectPerPage));
-			$prospectPage = min($prospectPage, $prospectPages);
-			$prospectosLocales = $this->fetchLocalProspects($prospectPerPage, ($prospectPage - 1) * $prospectPerPage, $prospectSort);
+		if (empty($prospectosLocales) && $totalProspects > 0 && $prospectPage > 1) {
+			$prospectPage = 1;
+			$prospectosLocales = $this->fetchLocalProspects($prospectPerPage, 0, $prospectSort);
 		}
 
 		$db = Database::getInstance()->connection();
@@ -462,6 +460,15 @@ class CRMController extends Controller
 			$pipelineEstadosEstudiantes = [];
 			$prospectAdvisorOptions = [];
 			$prospectCreatorOptions = [];
+		}
+
+		try {
+			$prospectFilterOptions = $this->fetchDistinctProspectFilterOptions();
+		} catch (Throwable $e) {
+			$prospectFilterOptions = ['origins' => [], 'stages' => [], 'careers' => [], 'createdBy' => []];
+		}
+		if (empty($prospectAdvisorOptions)) {
+			$prospectAdvisorOptions = $prospectFilterOptions['origins'];
 		}
 
 		$this->view('crm/interesados', [
@@ -479,6 +486,7 @@ class CRMController extends Controller
 			'pipelineEstadosEstudiantes' => $pipelineEstadosEstudiantes,
 			'prospectAdvisorOptions' => $prospectAdvisorOptions,
 			'prospectCreatorOptions' => $prospectCreatorOptions,
+			'prospectFilterOptions' => $prospectFilterOptions,
 			'sourceLabel' => (string) ($studentsData['source'] ?? 'No disponible'),
 			'sourceError' => (string) ($studentsData['error'] ?? ''),
 			'prospectPage'   => $prospectPage,
@@ -1715,6 +1723,307 @@ class CRMController extends Controller
 		$stmt = $db->prepare($sql);
 		$stmt->execute();
 		return $stmt ? ($stmt->fetchAll() ?: []) : [];
+	}
+
+	public function interesadosProspectsFilter(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		$accentMap = [
+			'á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u', 'ü' => 'u', 'ñ' => 'n',
+			'à' => 'a', 'è' => 'e', 'ì' => 'i', 'ò' => 'o', 'ù' => 'u',
+			'â' => 'a', 'ê' => 'e', 'î' => 'i', 'ô' => 'o', 'û' => 'u',
+			'ä' => 'a', 'ë' => 'e', 'ï' => 'i', 'ö' => 'o',
+			'ç' => 'c',
+		];
+		// Normalizar igual que en SQL: minusculas, sin acentos y sin enie.
+		$normalizeFilter = static function ($value) use ($accentMap): string {
+			$normalized = mb_strtolower(trim((string) $value), 'UTF-8');
+			$normalized = strtr($normalized, $accentMap);
+			$normalized = preg_replace('/[^a-z0-9]+/i', ' ', $normalized) ?: '';
+			return trim((string) preg_replace('/\s+/', ' ', $normalized));
+		};
+		$readMulti = static function (string $name) use ($normalizeFilter): array {
+			$raw = $_GET[$name] ?? null;
+			$items = is_array($raw) ? $raw : (is_string($raw) && trim($raw) !== '' ? preg_split('/\s*,\s*/', $raw, -1, PREG_SPLIT_NO_EMPTY) ?: [] : []);
+			return array_values(array_filter(array_unique(array_map($normalizeFilter, $items)), static fn($v) => $v !== ''));
+		};
+
+		$search = trim((string) ($_GET['q'] ?? ''));
+		$searchDigits = preg_replace('/\D+/', '', $search) ?: '';
+		$origenes = $readMulti('origen');
+		$etapas = $readMulti('etapa');
+		$carreras = $readMulti('carrera');
+		$creadoPor = $readMulti('creado_por');
+		$preset = trim((string) ($_GET['created_preset'] ?? ''));
+		$dateFrom = trim((string) ($_GET['date_from'] ?? ''));
+		$dateTo = trim((string) ($_GET['date_to'] ?? ''));
+		$sort = $this->normalizeProspectSort((string) ($_GET['sort'] ?? 'desc'));
+		$page = max(1, (int) ($_GET['page'] ?? 1));
+		$perPage = max(10, min(200, (int) ($_GET['per_page'] ?? 50)));
+
+		try {
+			$db = Database::getInstance()->connection();
+
+			$where = ["i.estado = 'activo'", 'COALESCE(i.convertido, 0) = 0', 'i.deleted_at IS NULL'];
+			$params = [];
+
+			if ($search !== '') {
+				$like = '%' . mb_strtolower($search, 'UTF-8') . '%';
+				$cond = "(LOWER(CONCAT_WS(' ', COALESCE(c.nombre, ''), COALESCE(c.apellido, ''))) LIKE :search_name
+					OR LOWER(COALESCE(c.email, '')) LIKE :search_email";
+				$params[':search_name'] = $like;
+				$params[':search_email'] = $like;
+				if ($searchDigits !== '') {
+					// El telefono puede venir con +593: buscar por sufijo de digitos.
+					$cond .= " OR REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(tc.telefono, ''), '+', ''), '-', ''), ' ', ''), ')', ''), '(', '') LIKE :search_phone";
+					$params[':search_phone'] = '%' . $searchDigits;
+				}
+				$cond .= ')';
+				$where[] = $cond;
+			}
+
+			// Los valores llegan normalizados desde el cliente (minusculas, sin acentos,
+			// sin enie): normalizar igual la columna en SQL para que coincidan.
+			$sqlAccentExpr = static function (string $expression): string {
+				return "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER($expression), 'á', 'a'), 'é', 'e'), 'í', 'i'), 'ó', 'o'), 'ú', 'u'), 'ü', 'u'), 'ñ', 'n')";
+			};
+			$valueAccentMap = ['á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u', 'ü' => 'u', 'ñ' => 'n'];
+
+			$addMulti = function (string $expressionBase, array $values, string $prefix) use (&$where, &$params, $sqlAccentExpr, $valueAccentMap): void {
+				if (empty($values)) {
+					return;
+				}
+				$expr = $sqlAccentExpr($expressionBase);
+				$placeholders = [];
+				foreach (array_values($values) as $idx => $value) {
+					$key = $prefix . '_' . $idx;
+					$placeholders[] = ':' . ltrim($key, ':');
+					$params[$key] = strtr($value, $valueAccentMap);
+				}
+				$where[] = "$expr IN (" . implode(',', $placeholders) . ")";
+			};
+
+			$addMulti('i.origen', $origenes, ':origen');
+			$addMulti('COALESCE(pe.nombre, \'\')', $etapas, ':etapa');
+			$addMulti('i.carrera', $carreras, ':carrera');
+
+			// creado_por puede contener varios nombres separados por coma:
+			// se busca por subcadena dentro del campo normalizado.
+			if (!empty($creadoPor)) {
+				$cpExpr = $sqlAccentExpr('i.creado_por');
+				$orParts = [];
+				foreach (array_values($creadoPor) as $idx => $value) {
+					$key = ':cp_' . $idx;
+					$orParts[] = "$cpExpr LIKE " . $key;
+					$params[$key] = '%' . strtr($value, $valueAccentMap) . '%';
+				}
+				$where[] = '(' . implode(' OR ', $orParts) . ')';
+			}
+
+			// Filtros de fecha de creacion
+			$now = new DateTimeImmutable('now');
+			$presetStart = null;
+			$presetEnd = null;
+			if ($preset === 'today') {
+				$presetStart = $now->setTime(0, 0, 0);
+				$presetEnd = $presetStart->modify('+1 day');
+			} elseif ($preset === 'current_week') {
+				$dow = (int) $now->format('N');
+				$presetStart = $now->setTime(0, 0, 0)->modify('-' . ($dow - 1) . ' days');
+				$presetEnd = $presetStart->modify('+7 days');
+			} elseif ($preset === 'previous_week') {
+				$dow = (int) $now->format('N');
+				$presetStart = $now->setTime(0, 0, 0)->modify('-' . ($dow - 1 + 7) . ' days');
+				$presetEnd = $presetStart->modify('+7 days');
+			} elseif ($preset === 'last_30_days') {
+				$presetStart = $now->setTime(0, 0, 0)->modify('-30 days');
+			} elseif ($preset === 'custom' || $dateFrom !== '' || $dateTo !== '') {
+				if ($dateFrom !== '') {
+					$dt = DateTimeImmutable::createFromFormat('Y-m-d\TH:i', $dateFrom);
+					$presetStart = $dt ?: null;
+				}
+				if ($dateTo !== '') {
+					$dt = DateTimeImmutable::createFromFormat('Y-m-d\TH:i', $dateTo);
+					$presetEnd = $dt ?: null;
+				}
+			}
+
+			if ($presetStart instanceof DateTimeInterface) {
+				$where[] = 'i.created_at >= :date_from';
+				$params[':date_from'] = $presetStart->format('Y-m-d H:i:s');
+			}
+			if ($presetEnd instanceof DateTimeInterface) {
+				$where[] = ($preset === 'custom' ? 'i.created_at <= :date_to' : 'i.created_at < :date_to');
+				$params[':date_to'] = $presetEnd->format('Y-m-d H:i:s');
+			}
+
+			$whereSql = 'WHERE ' . implode(' AND ', $where);
+			$orderBy = $sort === 'asc'
+				? "ORDER BY COALESCE(c.nombre, 'Sin nombre') ASC, COALESCE(c.apellido, '') ASC, i.id ASC"
+				: "ORDER BY COALESCE(c.nombre, 'Sin nombre') DESC, COALESCE(c.apellido, '') DESC, i.id DESC";
+			$offset = ($page - 1) * $perPage;
+
+			$baseJoins = '
+				FROM interesados i
+				LEFT JOIN contactos c ON c.id = i.contacto_id
+				LEFT JOIN pipeline_estados pe ON pe.id = i.estado_id
+					AND LOWER(REPLACE(TRIM(COALESCE(pe.categoria, \'\')), \' \', \'_\')) <> \'sin_crm\'
+				LEFT JOIN (
+					SELECT t1.contacto_id, t1.telefono
+					FROM telefonos_contacto t1
+					INNER JOIN (
+						SELECT contacto_id, MAX(id) AS first_id
+						FROM telefonos_contacto
+						WHERE estado = \'activo\'
+						GROUP BY contacto_id
+					) tx ON tx.first_id = t1.id
+				) tc ON tc.contacto_id = i.contacto_id';
+
+			$sql = "SELECT
+				i.id,
+				i.contacto_id,
+				i.origen,
+				i.convertido,
+				i.carrera,
+				i.creado_por,
+				i.modalidad,
+				i.provincia,
+				i.ciudad,
+				i.estado_id,
+				i.created_at,
+				COALESCE(pe.nombre, 'Sin etapa') AS etapa,
+				COALESCE(c.nombre, 'Sin nombre') AS nombre,
+				COALESCE(c.apellido, '') AS apellido,
+				COALESCE(c.cedula, '') AS cedula,
+				COALESCE(c.email, '') AS email,
+				CASE WHEN COALESCE(i.convertido, 0) = 1 THEN 'Estudiante' ELSE 'Cliente potencial' END AS estado_cliente,
+				COALESCE(tc.telefono, '') AS celular
+			{$baseJoins}
+			{$whereSql}
+			{$orderBy}
+			LIMIT {$perPage} OFFSET {$offset}";
+
+			$stmt = $db->prepare($sql);
+			foreach ($params as $key => $value) {
+				$stmt->bindValue($key, $value, PDO::PARAM_STR);
+			}
+			$stmt->execute();
+			$rows = $stmt->fetchAll() ?: [];
+
+			$countStmt = $db->prepare("SELECT COUNT(*) {$baseJoins} {$whereSql}");
+			foreach ($params as $key => $value) {
+				$countStmt->bindValue($key, $value, PDO::PARAM_STR);
+			}
+			$countStmt->execute();
+			$total = (int) $countStmt->fetchColumn();
+			$pages = max(1, (int) ceil($total / $perPage));
+
+			// Renderizar las filas con la misma plantilla que usa la vista inicial.
+			$html = '';
+			try {
+				$partialFile = dirname(__DIR__) . '/views/crm/partials/prospectos_rows.php';
+				if (is_file($partialFile)) {
+					ob_start();
+					$prospectosLocales = $rows;
+					include $partialFile;
+					$html = ob_get_clean();
+				}
+			} catch (Throwable $partialError) {
+				$html = '';
+			}
+
+			echo json_encode([
+				'success' => true,
+				'html' => $html,
+				'prospectos' => $rows,
+				'total' => $total,
+				'page' => min($page, $pages),
+				'pages' => $pages,
+				'per_page' => $perPage,
+			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		} catch (Throwable $e) {
+			http_response_code(500);
+			echo json_encode([
+				'success' => false,
+				'error' => $e->getMessage(),
+			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		}
+
+		exit;
+	}
+
+	private function fetchDistinctProspectFilterOptions(): array
+	{
+		$options = [
+			'origins' => [],
+			'stages' => [],
+			'careers' => [],
+			'createdBy' => [],
+		];
+
+		try {
+			$db = Database::getInstance()->connection();
+
+			$rows = $db->query("SELECT DISTINCT i.origen AS value
+				FROM interesados i
+				WHERE i.estado = 'activo' AND COALESCE(i.convertido, 0) = 0 AND i.deleted_at IS NULL
+				  AND COALESCE(TRIM(i.origen), '') <> ''
+				ORDER BY value ASC")->fetchAll() ?: [];
+			foreach ($rows as $row) {
+				$value = trim((string) ($row['value'] ?? ''));
+				if ($value !== '') {
+					$options['origins'][] = $value;
+				}
+			}
+
+			$rows = $db->query("SELECT DISTINCT COALESCE(pe.nombre, 'Sin etapa') AS value
+				FROM interesados i
+				LEFT JOIN pipeline_estados pe ON pe.id = i.estado_id
+					AND LOWER(REPLACE(TRIM(COALESCE(pe.categoria, '')), ' ', '_')) <> 'sin_crm'
+				WHERE i.estado = 'activo' AND COALESCE(i.convertido, 0) = 0 AND i.deleted_at IS NULL
+				ORDER BY value ASC")->fetchAll() ?: [];
+			foreach ($rows as $row) {
+				$value = trim((string) ($row['value'] ?? ''));
+				if ($value !== '') {
+					$options['stages'][] = $value;
+				}
+			}
+
+			$rows = $db->query("SELECT DISTINCT i.carrera AS value
+				FROM interesados i
+				WHERE i.estado = 'activo' AND COALESCE(i.convertido, 0) = 0 AND i.deleted_at IS NULL
+				  AND COALESCE(TRIM(i.carrera), '') <> ''
+				ORDER BY value ASC")->fetchAll() ?: [];
+			foreach ($rows as $row) {
+				$value = trim((string) ($row['value'] ?? ''));
+				if ($value !== '') {
+					$options['careers'][] = $value;
+				}
+			}
+
+			$rows = $db->query("SELECT i.creado_por
+				FROM interesados i
+				WHERE i.estado = 'activo' AND COALESCE(i.convertido, 0) = 0 AND i.deleted_at IS NULL
+				  AND COALESCE(TRIM(i.creado_por), '') <> ''")->fetchAll() ?: [];
+			$creators = [];
+			foreach ($rows as $row) {
+				$parts = preg_split('/\s*,\s*/', trim((string) ($row['creado_por'] ?? '')), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+				foreach ($parts as $part) {
+					$part = trim($part);
+					if ($part !== '') {
+						$creators[mb_strtolower($part, 'UTF-8')] = $part;
+					}
+				}
+			}
+			$options['createdBy'] = array_values($creators);
+			natsort($options['createdBy']);
+		} catch (Throwable $e) {
+			return $options;
+		}
+
+		return $options;
 	}
 
 	private function fetchLocalProspects(int $perPage = 25, int $offset = 0, string $sortDirection = 'desc'): array

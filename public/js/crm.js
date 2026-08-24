@@ -483,6 +483,14 @@ document.addEventListener('DOMContentLoaded', () => {
 	const prospectDateToInput = document.getElementById('crmProspectDateTo');
 	const prospectClearBtn = document.getElementById('crmProspectFilterClear');
 	const prospectsCounter = document.getElementById('crmProspectsCounter');
+	const prospectsTableBody = document.getElementById('crmProspectsTableBody');
+	const prospectsPaginationNav = document.getElementById('crmProspectPaginationNav');
+	const prospectsPaginationList = document.getElementById('crmProspectPaginationList');
+	const prospectsPageInfo = document.getElementById('crmProspectPageInfo');
+	let prospectServerPage = Math.max(1, Number(new URLSearchParams(window.location.search).get('prospect_page')) || 1);
+	let prospectServerTotal = Number(prospectsCounter?.getAttribute('data-total') || 0);
+	let prospectAbortController = null;
+	let prospectRequestId = 0;
 	const prospectCreatePhoneInput = document.getElementById('prospectCelular');
 	const prospectCreateForm = document.querySelector('#createProspectModal form');
 	const prospectCreateStatus = document.getElementById('prospectCreateStatus');
@@ -585,34 +593,6 @@ document.addEventListener('DOMContentLoaded', () => {
 		prospectSortButton.setAttribute('aria-label', prospectSortButton.title);
 	};
 
-	const sortProspectRows = () => {
-		if (!prospectsTable) {
-			return;
-		}
-
-		const tbody = prospectsTable.querySelector('tbody');
-		if (!tbody) {
-			return;
-		}
-
-		const direction = String(prospectSortButton?.getAttribute('data-sort-direction') || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
-		const rows = Array.from(tbody.querySelectorAll('tr[data-prospect-name]'));
-		rows.sort((leftRow, rightRow) => {
-			const leftName = normalizeText(leftRow.getAttribute('data-prospect-name') || '');
-			const rightName = normalizeText(rightRow.getAttribute('data-prospect-name') || '');
-			const nameCompare = leftName.localeCompare(rightName, 'es', { sensitivity: 'base', numeric: true });
-			if (nameCompare !== 0) {
-				return direction === 'asc' ? nameCompare : -nameCompare;
-			}
-
-			const leftIndex = Number(leftRow.getAttribute('data-prospect-index') || 0);
-			const rightIndex = Number(rightRow.getAttribute('data-prospect-index') || 0);
-			return direction === 'asc' ? leftIndex - rightIndex : rightIndex - leftIndex;
-		});
-
-		rows.forEach((row) => tbody.appendChild(row));
-	};
-
 	const bindProspectPhoneInput = (input) => {
 		if (!input || input.dataset.phoneNormalized === '1') {
 			return;
@@ -704,8 +684,8 @@ document.addEventListener('DOMContentLoaded', () => {
 			const currentDirection = String(prospectSortButton.getAttribute('data-sort-direction') || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
 			prospectSortButton.setAttribute('data-sort-direction', currentDirection === 'asc' ? 'desc' : 'asc');
 			updateProspectSortButtonState();
-			sortProspectRows();
-			applyProspectFilters();
+			saveProspectsFiltersState();
+			scheduleProspectFilter(0);
 		});
 
 	const getCheckedFilterValues = (group) => {
@@ -1079,121 +1059,182 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 	};
 
-	const applyProspectFilters = async () => {
-		if (!prospectsTable) {
-			updateProspectsCounter();
-			return;
+	const buildProspectsQuery = (page) => {
+		const params = new URLSearchParams();
+		const searchValue = String(prospectSearchInput?.value || '').trim();
+		if (searchValue !== '') {
+			params.set('q', searchValue);
 		}
-
-		sortProspectRows();
-
-		const searchValue = normalizeText(String(prospectSearchInput?.value || '').trim());
-		const searchDigits = String(prospectSearchInput?.value || '').replace(/\D+/g, '');
-
 		const selectedOrigins = getCheckedProspectFilterValues('prospect-origin');
 		const selectedStages = getCheckedProspectFilterValues('prospect-stage');
 		const selectedCareers = getCheckedProspectFilterValues('prospect-career');
 		const selectedCreatedBy = getCheckedProspectFilterValues('prospect-created-by');
+		if (selectedOrigins.length > 0) params.set('origen', selectedOrigins.join(','));
+		if (selectedStages.length > 0) params.set('etapa', selectedStages.join(','));
+		if (selectedCareers.length > 0) params.set('carrera', selectedCareers.join(','));
+		if (selectedCreatedBy.length > 0) params.set('creado_por', selectedCreatedBy.join(','));
 		const createdPreset = String(prospectCreatedPreset?.value || '').trim();
-		const fromDate = String(prospectDateFromInput?.value || '').trim();
-		const toDate = String(prospectDateToInput?.value || '').trim();
-		const rows = prospectsTable.querySelectorAll('tbody tr[data-prospect-origin]');
-		const now = new Date();
+		if (createdPreset !== '') {
+			params.set('created_preset', createdPreset);
+			if (createdPreset === 'custom') {
+				const fromDate = String(prospectDateFromInput?.value || '').trim();
+				const toDate = String(prospectDateToInput?.value || '').trim();
+				if (fromDate !== '') params.set('date_from', fromDate);
+				if (toDate !== '') params.set('date_to', toDate);
+			}
+		}
+		const sortDirection = String(prospectSortButton?.getAttribute('data-sort-direction') || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
+		params.set('sort', sortDirection);
+		params.set('page', String(Math.max(1, Number(page) || 1)));
+		params.set('per_page', '50');
+		return params;
+	};
 
-		const getWeekRange = (referenceDate, previous = false) => {
-			const date = new Date(referenceDate);
-			const day = date.getDay();
-			const deltaToMonday = day === 0 ? -6 : 1 - day;
-			date.setHours(0, 0, 0, 0);
-			date.setDate(date.getDate() + deltaToMonday + (previous ? -7 : 0));
-			const start = new Date(date);
-			const end = new Date(date);
-			end.setDate(end.getDate() + 7);
-			return { start, end };
-		};
-
-		let presetStart = null;
-		let presetEnd = null;
-		if (createdPreset === 'current_week') {
-			const range = getWeekRange(now, false);
-			presetStart = range.start;
-			presetEnd = range.end;
-		} else if (createdPreset === 'today') {
-			presetStart = new Date(now);
-			presetStart.setHours(0, 0, 0, 0);
-			presetEnd = new Date(presetStart);
-			presetEnd.setDate(presetEnd.getDate() + 1);
-		} else if (createdPreset === 'previous_week') {
-			const range = getWeekRange(now, true);
-			presetStart = range.start;
-			presetEnd = range.end;
-		} else if (createdPreset === 'last_30_days') {
-			presetStart = new Date(now);
-			presetStart.setHours(0, 0, 0, 0);
-			presetStart.setDate(presetStart.getDate() - 30);
-			presetEnd = null;
+	const renderProspectsPagination = (page, pages) => {
+		if (!prospectsPaginationNav || !prospectsPaginationList) {
+			return;
+		}
+		prospectsPaginationNav.classList.toggle('d-none', pages <= 1);
+		prospectsPaginationNav.setAttribute('data-pages', String(pages));
+		if (pages <= 1) {
+			prospectsPaginationList.innerHTML = '';
+			return;
 		}
 
-		const customFrom = fromDate !== '' ? new Date(fromDate) : null;
-		const customTo = toDate !== '' ? new Date(toDate) : null;
+		const buildHref = (targetPage) => {
+			try {
+				const url = new URL(window.location.href);
+				url.searchParams.set('prospect_page', String(targetPage));
+				return url.toString();
+			} catch (error) {
+				return `?prospect_page=${targetPage}`;
+			}
+		};
+
+		let html = `<li class="page-item ${page <= 1 ? 'disabled' : ''}"><a class="page-link" data-prospect-page="${page - 1}" href="${buildHref(page - 1)}">&#8249; Anterior</a></li>`;
+		const rangeStart = Math.max(1, page - 2);
+		const rangeEnd = Math.min(pages, page + 2);
+		if (rangeStart > 1) {
+			html += `<li class="page-item"><a class="page-link" data-prospect-page="1" href="${buildHref(1)}">1</a></li>`;
+			if (rangeStart > 2) {
+				html += '<li class="page-item disabled"><span class="page-link">…</span></li>';
+			}
+		}
+		for (let p = rangeStart; p <= rangeEnd; p++) {
+			html += `<li class="page-item ${p === page ? 'active' : ''}"><a class="page-link" data-prospect-page="${p}" href="${buildHref(p)}">${p}</a></li>`;
+		}
+		if (rangeEnd < pages) {
+			if (rangeEnd < pages - 1) {
+				html += '<li class="page-item disabled"><span class="page-link">…</span></li>';
+			}
+			html += `<li class="page-item"><a class="page-link" data-prospect-page="${pages}" href="${buildHref(pages)}">${pages}</a></li>`;
+		}
+		html += `<li class="page-item ${page >= pages ? 'disabled' : ''}"><a class="page-link" data-prospect-page="${page + 1}" href="${buildHref(page + 1)}">Siguiente &#8250;</a></li>`;
+		prospectsPaginationList.innerHTML = html;
+	};
+
+	const updateProspectsUrlState = () => {
+		try {
+			const url = new URL(window.location.href);
+			url.searchParams.set('prospect_page', String(prospectServerPage));
+			url.searchParams.set('prospect_sort', String(prospectSortButton?.getAttribute('data-sort-direction') || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc');
+			window.history.replaceState({}, '', url.toString());
+		} catch (error) {
+			// Ignorar errores de historial.
+		}
+	};
+
+	const restoreBulkSelectionInRows = () => {
+		if (!prospectsTableBody) {
+			return;
+		}
+		const selectedIds = window.bulkActionState?.selectedIds;
+		if (!selectedIds || typeof selectedIds.has !== 'function' || selectedIds.size === 0) {
+			const selectAll = document.getElementById('crmSelectAllCheck');
+			if (selectAll) {
+				selectAll.checked = false;
+			}
+			window.bulkActionState?.updateBulkUI?.();
+			return;
+		}
+		prospectsTableBody.querySelectorAll('.prospect-bulk-checkbox[data-contact-id]').forEach((checkbox) => {
+			const contactId = String(checkbox.getAttribute('data-contact-id') || '');
+			checkbox.checked = selectedIds.has(contactId);
+		});
+		window.bulkActionState.updateBulkUI?.();
+	};
+
+	const applyProspectFilters = async (options = {}) => {
+		if (!prospectsTable || !prospectsTableBody) {
+			updateProspectsCounter();
+			return;
+		}
 
 		if (prospectCustomWrap) {
+			const createdPreset = String(prospectCreatedPreset?.value || '').trim();
 			prospectCustomWrap.classList.toggle('d-none', createdPreset !== 'custom');
 		}
 
-		rows.forEach((row) => {
-			const rowName = normalizeText(row.getAttribute('data-prospect-name') || '');
-			const rowPhone = String(row.getAttribute('data-prospect-phone') || '').replace(/\D+/g, '');
-			const rowEmail = normalizeText(row.getAttribute('data-prospect-email') || '');
-			const rowContactId = Number(row.getAttribute('data-prospect-contact-id') || 0);
-			const rowOrigin = normalizeText(row.getAttribute('data-prospect-origin') || '');
-			const rowStage = normalizeText(row.getAttribute('data-prospect-stage') || '');
-			const rowCareer = normalizeText(row.getAttribute('data-prospect-career') || '');
-			const rowCreatedByRaw = String(row.getAttribute('data-prospect-created-by') || '');
-			const rowCreatedBy = rowCreatedByRaw === ''
-				? []
-				: rowCreatedByRaw.split('|').map((value) => normalizeText(value)).filter((value) => value !== '');
-			const rowDatetimeRaw = String(row.getAttribute('data-prospect-datetime') || '').trim();
-			const rowDatetime = rowDatetimeRaw !== '' ? new Date(rowDatetimeRaw.replace(' ', 'T')) : null;
+		prospectRequestId += 1;
+		const requestId = prospectRequestId;
+		if (prospectAbortController) {
+			prospectAbortController.abort();
+		}
+		prospectAbortController = new AbortController();
 
-			// Búsqueda: nombre, teléfono o correo directo del prospecto
-			const matchSearch = searchValue === ''
-				? true
-				: rowName.includes(searchValue) 
-				  || (searchDigits !== '' && rowPhone.includes(searchDigits))
-				  || (rowEmail !== '' && rowEmail.includes(searchValue));
-			const matchOrigin = selectedOrigins.length === 0 || selectedOrigins.includes(rowOrigin);
-			const matchStage = selectedStages.length === 0 || selectedStages.includes(rowStage);
-			const matchCareer = selectedCareers.length === 0 || selectedCareers.includes(rowCareer);
-			const matchCreatedBy = selectedCreatedBy.length === 0 || selectedCreatedBy.some((item) => rowCreatedBy.includes(item));
+		const params = buildProspectsQuery(options.page ?? prospectServerPage);
 
-			let matchCreated = true;
-			if (createdPreset === 'custom') {
-				if (!rowDatetime || Number.isNaN(rowDatetime.getTime())) {
-					matchCreated = false;
-				} else {
-					const afterFrom = !customFrom || rowDatetime >= customFrom;
-					const beforeTo = !customTo || rowDatetime <= customTo;
-					matchCreated = afterFrom && beforeTo;
-				}
-			} else if (presetStart instanceof Date) {
-				if (!rowDatetime || Number.isNaN(rowDatetime.getTime())) {
-					matchCreated = false;
-				} else {
-					const afterStart = rowDatetime >= presetStart;
-					const beforeEnd = !(presetEnd instanceof Date) || rowDatetime < presetEnd;
-					matchCreated = afterStart && beforeEnd;
-				}
+		try {
+			const response = await fetch(`${BASE_URL}crm/prospectos/filter?${params.toString()}`, {
+				signal: prospectAbortController.signal,
+				cache: 'no-store',
+			});
+			if (!response.ok) {
+				throw new Error('No se pudo filtrar clientes potenciales');
 			}
 
-			const match = searchValue !== ''
-				? matchSearch
-				: (matchOrigin && matchStage && matchCareer && matchCreatedBy && matchCreated);
-			row.style.display = match ? '' : 'none';
-		});
-		reindexVisibleProspectsRows();
-		updateProspectsCounter();
-		saveProspectsFiltersState();
+			const data = await response.json();
+			if (requestId !== prospectRequestId) {
+				return;
+			}
+			if (!data.success) {
+				throw new Error(data.error || 'Error al filtrar clientes potenciales');
+			}
+
+			prospectsTableBody.innerHTML = String(data.html || '');
+			prospectServerPage = Math.max(1, Number(data.page) || 1);
+			prospectServerTotal = Number(data.total) || 0;
+
+			if (prospectsCounter) {
+				prospectsCounter.setAttribute('data-total', String(prospectServerTotal));
+				prospectsCounter.textContent = `Mostrando ${prospectServerTotal} de ${prospectServerTotal} clientes potenciales`;
+			}
+			renderProspectsPagination(prospectServerPage, Number(data.pages) || 1);
+			if (prospectsPageInfo) {
+				prospectsPageInfo.textContent = `Pagina ${prospectServerPage} de ${Number(data.pages) || 1} - ${prospectServerTotal} clientes potenciales`;
+			}
+
+			restoreBulkSelectionInRows();
+			bindStudentActions();
+			updateProspectsUrlState();
+		} catch (error) {
+			if (error && error.name === 'AbortError') {
+				return;
+			}
+			console.error('Error filtrando clientes potenciales:', error);
+			window.showGlobalNotification?.('No se pudo aplicar el filtro de clientes potenciales. Intenta de nuevo.', 'warning');
+		}
+	};
+
+	let prospectsFilterDebounceTimer = null;
+	const scheduleProspectFilter = (delay = 350, options = {}) => {
+		if (prospectsFilterDebounceTimer) {
+			clearTimeout(prospectsFilterDebounceTimer);
+		}
+		prospectsFilterDebounceTimer = setTimeout(() => {
+			prospectsFilterDebounceTimer = null;
+			applyProspectFilters({ ...options, page: options.page ?? 1 });
+		}, delay);
 	};
 
 	restoreStudentsFiltersState();
@@ -1225,24 +1266,24 @@ document.addEventListener('DOMContentLoaded', () => {
 		checkbox.addEventListener('change', () => {
 			refreshProspectMultiFilterLabels();
 			saveProspectsFiltersState();
-			applyProspectFilters();
+			scheduleProspectFilter(150);
 		});
 	});
 	prospectSearchInput?.addEventListener('input', () => {
 		saveProspectsFiltersState();
-		applyProspectFilters();
+		scheduleProspectFilter();
 	});
 	prospectCreatedPreset?.addEventListener('change', () => {
 		saveProspectsFiltersState();
-		applyProspectFilters();
+		scheduleProspectFilter(0);
 	});
 	prospectDateFromInput?.addEventListener('change', () => {
 		saveProspectsFiltersState();
-		applyProspectFilters();
+		scheduleProspectFilter(0);
 	});
 	prospectDateToInput?.addEventListener('change', () => {
 		saveProspectsFiltersState();
-		applyProspectFilters();
+		scheduleProspectFilter(0);
 	});
 	filterClearBtn?.addEventListener('click', () => {
 		if (filterNameInput) {
@@ -1275,7 +1316,20 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 		refreshProspectMultiFilterLabels();
 		saveProspectsFiltersState();
-		applyProspectFilters();
+		scheduleProspectFilter(0);
+	});
+
+	prospectsPaginationNav?.addEventListener('click', (event) => {
+		const link = event.target.closest('a[data-prospect-page]');
+		if (!link) {
+			return;
+		}
+		event.preventDefault();
+		const targetPage = Number(link.getAttribute('data-prospect-page') || 0);
+		if (!Number.isFinite(targetPage) || targetPage < 1) {
+			return;
+		}
+		applyProspectFilters({ page: targetPage });
 	});
 
 	applyTableFilters();

@@ -17,11 +17,16 @@ class RedisService
 
         try {
 
+            $timeout = (float) env('REDIS_TIMEOUT', 1.0);
+
             $parameters = [
                 'scheme'   => 'tcp',
                 'host'     => (string) env('REDIS_HOST', '127.0.0.1'),
                 'port'     => (int) env('REDIS_PORT', 6379),
                 'database' => (int) env('REDIS_DB', 0),
+                // Timeouts cortos: si Redis no esta disponible, no bloquear el request.
+                'timeout'            => max(0.2, min($timeout, 3.0)),
+                'read_write_timeout' => max(0.5, min(max($timeout, 1.0), 5.0)),
             ];
 
             $password = trim((string) env('REDIS_PASSWORD', ''));

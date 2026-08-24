@@ -19,35 +19,27 @@
 	<?php $prospectAdvisorOptions = $prospectAdvisorOptions ?? []; ?>
 	<?php $prospectCreatorOptions = $prospectCreatorOptions ?? []; ?>
 	<?php
-	$prospectOrigins = [];
-	$prospectStages = [];
-	$prospectCareers = [];
-	$prospectCreatedByOptions = [];
-	$studentLevels = [];
+	$prospectFilterOptions = $prospectFilterOptions ?? ['origins' => [], 'stages' => [], 'careers' => [], 'createdBy' => []];
+	$prospectOrigins = $prospectFilterOptions['origins'];
+	$prospectStages = $prospectFilterOptions['stages'];
+	$prospectCareers = $prospectFilterOptions['careers'];
+	$prospectCreatedByOptions = $prospectFilterOptions['createdBy'];
 	foreach ($prospectosLocales as $prospectoItem) {
+		// Complementar con valores presentes en la pagina actual (por si hay datos historicos nuevos).
 		$originValue = trim((string) ($prospectoItem['origen'] ?? ''));
 		$stageValue = trim((string) ($prospectoItem['etapa'] ?? ''));
 		$careerValue = trim((string) ($prospectoItem['carrera'] ?? ''));
-		$createdByRaw = trim((string) ($prospectoItem['creado_por'] ?? ''));
 		if ($originValue !== '') {
-			$prospectOrigins[$originValue] = $originValue;
+			$prospectOrigins[] = $originValue;
 		}
 		if ($stageValue !== '') {
-			$prospectStages[$stageValue] = $stageValue;
+			$prospectStages[] = $stageValue;
 		}
 		if ($careerValue !== '') {
-			$prospectCareers[$careerValue] = $careerValue;
-		}
-		if ($createdByRaw !== '') {
-			$createdByItems = preg_split('/\s*,\s*/', $createdByRaw, -1, PREG_SPLIT_NO_EMPTY) ?: [];
-			foreach ($createdByItems as $createdByItem) {
-				$createdByItem = trim((string) $createdByItem);
-				if ($createdByItem !== '') {
-					$prospectCreatedByOptions[$createdByItem] = $createdByItem;
-				}
-			}
+			$prospectCareers[] = $careerValue;
 		}
 	}
+	$studentLevels = [];
 	foreach ($nivelesEstudiantes as $levelItem) {
 		$levelValue = trim((string) $levelItem);
 		if ($levelValue !== '') {
@@ -55,23 +47,22 @@
 		}
 	}
 	if (empty($studentLevels)) {
-	foreach ($estudiantesSuperarse as $studentItem) {
-		$levelValue = trim((string) ($studentItem['nivel'] ?? ''));
-		if ($levelValue !== '') {
-			$studentLevels[$levelValue] = $levelValue;
-		}
+foreach ($estudiantesSuperarse as $studentItem) {
+	$levelValue = trim((string) ($studentItem['nivel'] ?? ''));
+	if ($levelValue !== '') {
+		$studentLevels[$levelValue] = $levelValue;
 	}
-	}
-	ksort($prospectOrigins, SORT_NATURAL | SORT_FLAG_CASE);
+}
+}
+ksort($studentLevels, SORT_NATURAL | SORT_FLAG_CASE);
+$studentLevels = array_values($studentLevels);
+ksort($prospectOrigins, SORT_NATURAL | SORT_FLAG_CASE);
 	ksort($prospectStages, SORT_NATURAL | SORT_FLAG_CASE);
 	ksort($prospectCareers, SORT_NATURAL | SORT_FLAG_CASE);
 	ksort($prospectCreatedByOptions, SORT_NATURAL | SORT_FLAG_CASE);
-	ksort($studentLevels, SORT_NATURAL | SORT_FLAG_CASE);
-	$prospectOrigins = array_values($prospectOrigins);
-	$prospectStages = array_values($prospectStages);
-	$prospectCareers = array_values($prospectCareers);
-	$prospectCreatedByOptions = array_values($prospectCreatedByOptions);
-	$studentLevels = array_values($studentLevels);
+	$prospectOrigins = array_values(array_unique($prospectOrigins));
+	$prospectStages = array_values(array_unique($prospectStages));
+	$prospectCareers = array_values(array_unique($prospectCareers));
 	?>
 	<?php
 	$buildCrmUrl = function (array $params = []) use ($periodoSeleccionado, $studentPage, $prospectPage, $prospectSort): string {
@@ -409,7 +400,7 @@
 					</div>
 				</div>
 				<div class="d-flex justify-content-end mb-3">
-					<small id="crmProspectsCounter" class="text-muted" data-total="<?= e((string) count($prospectosLocales)) ?>">Mostrando 0 de 0 clientes potenciales</small>
+					<small id="crmProspectsCounter" class="text-muted" data-total="<?= (int) $totalProspects ?>">Mostrando <?= count($prospectosLocales) ?> de <?= (int) $totalProspects ?> clientes potenciales</small>
 				</div>
 			</div>
 			<div class="card-body p-0">
@@ -456,116 +447,16 @@
 								<th class="text-end">Acciones</th>
 							</tr>
 						</thead>
-						<tbody>
-							<?php foreach ($prospectosLocales as $index => $prospecto): ?>
-								<?php
-								$fullName = trim((string) (($prospecto['nombre'] ?? '') . ' ' . ($prospecto['apellido'] ?? '')));
-								$rawPhone = (string) ($prospecto['celular'] ?? '');
-								$phoneDigits = preg_replace('/[^0-9]/', '', $rawPhone) ?: '';
-								$rawCreatedAt = trim((string) ($prospecto['created_at'] ?? ''));
-								$createdByRaw = trim((string) ($prospecto['creado_por'] ?? ''));
-								$createdByTokens = [];
-								if ($createdByRaw !== '') {
-									$createdByParts = preg_split('/\s*,\s*/', strtolower($createdByRaw), -1, PREG_SPLIT_NO_EMPTY) ?: [];
-									foreach ($createdByParts as $createdByPart) {
-										$createdByPart = trim((string) $createdByPart);
-										if ($createdByPart !== '') {
-											$createdByTokens[] = $createdByPart;
-										}
-									}
-								}
-								$createdByNormalized = implode('|', array_values(array_unique($createdByTokens)));
-								$createdDate = '';
-								if ($rawCreatedAt !== '' && strlen($rawCreatedAt) >= 10) {
-									$createdDate = substr($rawCreatedAt, 0, 10);
-								}
-								?>
-								<tr
-									data-prospect-index="<?= (int) ($index + 1) ?>"
-									data-prospect-name="<?= e(strtolower($fullName)) ?>"
-									data-prospect-phone="<?= e($phoneDigits) ?>"
-									data-prospect-email="<?= e(strtolower((string) ($prospecto['email'] ?? ''))) ?>"
-									data-prospect-origin="<?= e(strtolower((string) ($prospecto['origen'] ?? ''))) ?>"
-									data-prospect-stage="<?= e(strtolower((string) ($prospecto['etapa'] ?? ''))) ?>"
-									data-prospect-career="<?= e(strtolower((string) ($prospecto['carrera'] ?? ''))) ?>"
-									data-prospect-created-by="<?= e($createdByNormalized) ?>"
-									data-prospect-date="<?= e($createdDate) ?>"
-									data-prospect-datetime="<?= e((string) ($prospecto['created_at'] ?? '')) ?>"
-									data-prospect-contact-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
-								>
-									<td>
-										<div class="form-check">
-											<input class="form-check-input prospect-bulk-checkbox" type="checkbox" data-contact-id="<?= e($prospecto['contacto_id'] ?? '') ?>">
-										</div>
-									</td>
-									<td data-prospect-row-num><?= (int) ($index + 1) ?></td>
-									<td>
-										<button
-											type="button"
-											class="btn btn-link p-0 text-decoration-none prospect-edit-link"
-											data-contact-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
-											data-bs-toggle="modal"
-											data-bs-target="#prospectEditModal"
-										>
-											<?= e($fullName) ?>
-										</button>
-									</td>
-									<td><?= e($prospecto['carrera'] ?? '-') ?></td>
-									<td><span class="badge text-bg-light border"><?= e($prospecto['etapa'] ?? 'Sin etapa') ?></span></td>
-									<td>
-										<?php
-										$digitsPhone = $phoneDigits;
-										if ($digitsPhone !== '' && strlen($digitsPhone) === 10 && strpos($digitsPhone, '0') === 0) {
-											$digitsPhone = '593' . substr($digitsPhone, 1);
-										}
-										?>
-										<?php if ($digitsPhone !== ''): ?>
-											<a href="https://wa.me/<?= e($digitsPhone) ?>" target="_blank" rel="noopener noreferrer"><?= e($rawPhone !== '' ? $rawPhone : $digitsPhone) ?></a>
-										<?php else: ?>
-											<?= e($rawPhone !== '' ? $rawPhone : '-') ?>
-										<?php endif; ?>
-									</td>
-									<td><?= e($prospecto['origen'] ?? '-') ?></td>
-									<td><?= e($prospecto['creado_por'] ?? '-') ?></td>
-									<td class="text-end">
-											<div class="btn-group btn-group-sm" role="group">
-												<button
-													type="button"
-													class="btn btn-outline-primary student-pipeline-action"
-													data-student-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
-													data-entity-type="contact"
-													data-bs-toggle="modal"
-													data-bs-target="#studentPipelineModal"
-													title="Editar etapa"
-												>
-													<i class="bi bi-pencil-square"></i>
-												</button>
-												<button
-													type="button"
-													class="btn btn-outline-danger prospect-delete-inline"
-													data-contact-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
-													title="Eliminar prospect"
-												>
-													<i class="bi bi-trash"></i>
-												</button>
-											</div>
-									</td>
-								</tr>
-							<?php endforeach; ?>
-							<?php if (empty($prospectosLocales)): ?>
-								<tr>
-									<td colspan="8" class="text-center text-muted py-4">No hay clientes potenciales CRM creados todavia.</td>
-								</tr>
-							<?php endif; ?>
-						</tbody>
+						<tbody id="crmProspectsTableBody">
+								<?php include __DIR__ . '/partials/prospectos_rows.php'; ?>
+							</tbody>
 					</table>
 				</div>
 			</div>
 		</div>
 
-		<?php if ($prospectPages > 1): ?>
-		<nav class="mt-3" aria-label="Paginacion clientes potenciales">
-			<ul class="pagination pagination-sm justify-content-center flex-wrap">
+		<nav class="mt-3 <?= $prospectPages > 1 ? '' : 'd-none' ?>" id="crmProspectPaginationNav" aria-label="Paginacion clientes potenciales" data-pages="<?= (int) $prospectPages ?>">
+			<ul class="pagination pagination-sm justify-content-center flex-wrap" id="crmProspectPaginationList">
 				<li class="page-item <?= $prospectPage <= 1 ? 'disabled' : '' ?>">
 					<a class="page-link" href="<?= e($buildCrmUrl(['prospect_page' => $prospectPage - 1])) ?>">&#8249; Anterior</a>
 				</li>
@@ -589,9 +480,8 @@
 					<a class="page-link" href="<?= e($buildCrmUrl(['prospect_page' => $prospectPage + 1])) ?>">Siguiente &#8250;</a>
 				</li>
 			</ul>
-			<p class="text-center text-muted small">Pagina <?= $prospectPage ?> de <?= $prospectPages ?> - <?= $totalProspects ?> clientes potenciales</p>
+			<p class="text-center text-muted small" id="crmProspectPageInfo">Pagina <?= $prospectPage ?> de <?= $prospectPages ?> - <?= $totalProspects ?> clientes potenciales</p>
 		</nav>
-		<?php endif; ?>
 			</div>
 		</div>
 	</div>
