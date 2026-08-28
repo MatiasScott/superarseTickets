@@ -66,6 +66,8 @@ return static function (Router $router): void {
 
 	$router->get('/api/internal/auto-sync', 'InternalApiController@runAutoSync');
 	$router->post('/api/internal/auto-sync', 'InternalApiController@runAutoSync');
+	$router->get('/api/internal/cci-sync', 'InternalApiController@runCciSync');
+	$router->post('/api/internal/cci-sync', 'InternalApiController@runCciSync');
 
 	$router->post('/api/internal/generate-preview', 'InternalApiController@generatePreview');
 	$router->get('/api/internal/dashboard-metrics', 'InternalApiController@dashboardMetrics');
@@ -100,6 +102,7 @@ return static function (Router $router): void {
 	$router->get('/cci', 'CCIController@dashboard');
 	$router->get('/cci/dashboard', 'CCIController@dashboard');
 	$router->get('/cci/conversaciones', 'CCIController@conversaciones');
+	$router->get('/cci/conversaciones/poll', 'CCIController@conversacionesPoll');
 	$router->post('/cci/conversaciones/{id}/reply', 'CCIController@sendConversationReply');
 	$router->post('/cci/conversaciones/{id}/notas', 'CCIController@storeConversationNote');
 	$router->post('/cci/conversaciones/{id}/etiqueta', 'CCIController@guardarEtiqueta');

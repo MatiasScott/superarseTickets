@@ -114,6 +114,63 @@ class InternalApiController extends Controller
         exit;
     }
 
+    /**
+     * Ejecuta únicamente las sincronizaciones de CCI (Freshchat + WhatsApp)
+     * en un proceso separado. Protegido por token interno.
+     * Disparado por el polling de /cci/conversaciones para lograr frescura ~10s.
+     */
+    public function runCciSync(): void
+    {
+        $expected = trim((string) env('MAIL_AUTO_SYNC_INTERNAL_TOKEN', ''));
+        if ($expected === '') {
+            $expected = trim((string) env('CRM_SYNC_INTERNAL_TOKEN', ''));
+        }
+        $provided = trim((string) ($_GET['token'] ?? $_POST['token'] ?? ''));
+
+        if ($expected === '' || $provided === '' || !hash_equals($expected, $provided)) {
+            $this->jsonResponse([
+                'ok' => false,
+                'error' => 'Token invalido o faltante.',
+            ], 403);
+            exit;
+        }
+
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            @session_write_close();
+        }
+        ignore_user_abort(true);
+        @set_time_limit(0);
+
+        try {
+            $controller = new CCIController();
+            $fcResult = $controller->runFreshchatSyncBackground();
+            $waResult = $controller->runWhatchimpSyncBackground(100);
+
+            $this->jsonResponse([
+                'ok' => true,
+                'service' => 'cci-sync',
+                'freshchat' => [
+                    'status' => (string) ($fcResult['status'] ?? '?'),
+                    'created' => (int) ($fcResult['created'] ?? 0),
+                    'skipped' => (int) ($fcResult['skipped'] ?? 0),
+                ],
+                'whatsapp' => [
+                    'ok' => (bool) ($waResult['ok'] ?? false),
+                    'created' => (int) ($waResult['created'] ?? 0),
+                    'skipped' => (int) ($waResult['skipped'] ?? 0),
+                    'error' => (string) ($waResult['error'] ?? ''),
+                ],
+                'time' => date('Y-m-d H:i:s'),
+            ]);
+        } catch (Throwable $e) {
+            $this->jsonResponse([
+                'ok' => false,
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+        exit;
+    }
+
     public function generatePreview(): void
     {
         $this->enqueueJob(QueueService::PREVIEW_QUEUE, [

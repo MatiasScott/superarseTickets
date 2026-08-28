@@ -101,49 +101,8 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 					</button>
 				</div>
 			</div>
-			<div class="cci-chat-list-body">
-				<?php foreach ($items as $row): ?>
-					<?php
-					$id = (int) ($row['id'] ?? 0);
-					$active = $id === $selectedId;
-					$nombre = trim((string) (($row['nombre'] ?? '') . ' ' . ($row['apellido'] ?? '')));
-					if ($nombre === '') {
-						$nombre = 'Contacto #' . $id;
-					}
-					$numero = trim((string) ($row['telefono'] ?? ''));
-					$ultimo = trim((string) ($row['ultimo_mensaje'] ?? 'Sin mensajes'));
-					$fecha = (string) ($row['ultimo_mensaje_fecha'] ?? ($row['fecha_inicio'] ?? ''));
-					$estado = (string) ($row['estado'] ?? 'activo');
-					$asesor = (string) ($row['asesor'] ?? 'Sin asignar');
-					$hayNuevos = $active ? false : (bool) ($row['hay_nuevos'] ?? false);
-					?>
-					<a class="cci-thread-item<?= $active ? ' active' : '' ?>" href="<?= e(base_url('cci/conversaciones?' . $filterQuery . '&selected_id=' . $id)) ?>" style="position: relative;" data-phone="<?= e($numero) ?>">
-						<?php if ($hayNuevos): ?>
-							<span class="cci-badge-unread">•</span>
-						<?php endif; ?>
-						<div style="position: absolute; left: 8px; top: 8px; z-index: 2;">
-							<input type="checkbox" class="form-check-input cci-conv-checkbox" value="<?= e((string) $id) ?>" onclick="event.stopPropagation();" onchange="event.stopPropagation();">
-						</div>
-						<div class="cci-avatar"><?= e(strtoupper(substr($nombre, 0, 1))) ?></div>
-						<div class="cci-thread-main">
-							<div class="cci-thread-top">
-								<span class="cci-thread-name"><?= e($nombre) ?></span>
-								<small style="font-size: 0.8rem;"><?= e($fecha) ?></small>
-							</div>
-							<div class="cci-thread-meta" style="font-size: 0.8rem;"><?= e($numero !== '' ? $numero : 'Sin número') ?></div>
-							<div class="cci-thread-meta" style="font-size: 0.78rem;">
-								<i class="bi bi-person-badge"></i> <?= e($asesor) ?>
-								<?php if ($estado === 'cerrado'): ?>
-									<span class="badge text-bg-secondary" style="font-size: 0.65rem;">Cerrada</span>
-								<?php endif; ?>
-							</div>
-							<div class="cci-thread-snippet"><?= e(mb_substr($ultimo, 0, 50)) ?></div>
-						</div>
-					</a>
-				<?php endforeach; ?>
-				<?php if (empty($items)): ?>
-					<div class="p-3 text-muted" style="font-size: 0.9rem;">No hay conversaciones registradas.</div>
-				<?php endif; ?>
+			<div class="cci-chat-list-body" id="cci-chat-list-body">
+				<?php $itemsLocal = $items; include __DIR__ . '/partials/conversaciones_list.php'; ?>
 			</div>
 		</div>
 
@@ -217,7 +176,7 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 										<select class="form-select form-select-sm" name="crm_asesor_id" required style="max-width: 150px;">
 											<option value="">Asignar a...</option>
 											<?php foreach ($advisors as $advisor): ?>
-												<option value="<?= e((string) ($advisor['usuario_id'] ?? 0)) ?>"><?= e((string) ($advisor['nombre'] ?? 'Asesor')) ?></option>
+												<option value="<?= e((string) ($advisor['id'] ?? 0)) ?>"><?= e((string) ($advisor['nombre'] ?? 'Asesor')) ?> — <?= e((string) ($advisor['usuario_nombre'] ?? 'Sin usuario')) ?></option>
 											<?php endforeach; ?>
 										</select>
 										<button class="btn btn-sm btn-outline-primary" type="submit" title="Asignar"><i class="bi bi-person-check"></i></button>
@@ -614,7 +573,9 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 			var convId = <?= (int) $selectedId ?>;
 			var scrollEl = document.getElementById('cci-msg-scroll');
 			var fileInput = document.getElementById('cci-file-input');
-			var refreshMs = 8000;
+			var refreshMs = 10000;
+			var listChecksum = '<?= e((string) ($listChecksum ?? '')) ?>';
+			var filterQ = '<?= e($filterQuery) ?>';
 			var timer = null;
 
 			// Solicitar permisos para notificaciones del navegador
@@ -664,14 +625,31 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 
 			function poll() {
 				clearTimeout(timer);
-				fetch('<?= e(base_url('cci/conversaciones')) ?>?json_thread=1&selected_id=' + convId, {
+				var pollUrl = '<?= e(base_url('cci/conversaciones/poll')) ?>?' + filterQ
+					+ '&selected_id=' + convId
+					+ '&list_checksum=' + encodeURIComponent(listChecksum);
+				fetch(pollUrl, {
 						credentials: 'same-origin'
 					})
 					.then(function(r) {
 						return r.ok ? r.json() : null;
 					})
 					.then(function(data) {
-						if (!data || !data.ok || !Array.isArray(data.messages)) return;
+						if (!data || !data.ok) return;
+
+						// Refrescar panel lateral solo si cambió (checksum distinto)
+						if (data.list_html && typeof data.list_html === 'string' && data.list_html !== '') {
+							listChecksum = data.list_checksum || listChecksum;
+							var listBody = document.getElementById('cci-chat-list-body');
+							if (listBody) {
+								listBody.innerHTML = data.list_html;
+								if (typeof window.__cciRebindBulkCheckboxes === 'function') {
+									window.__cciRebindBulkCheckboxes();
+								}
+							}
+						}
+
+						if (!Array.isArray(data.messages)) return;
 						var added = false;
 
 						data.messages.forEach(function(msg) {
@@ -1091,12 +1069,12 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 				});
 			}
 
-			var checkboxEls = Array.prototype.slice.call(document.querySelectorAll('.cci-conv-checkbox'));
+			var checkboxEls = [];
 			var bulkBar = document.getElementById('cci-bulk-actions');
 			var selectedCountEl = document.getElementById('cci-selected-count');
 			var btnBulkMessage = document.getElementById('cci-btn-bulk-message');
 			var btnBulkClose = document.getElementById('cci-btn-bulk-close');
-			var btnBulkClear = document.getElementById('cci-btn-bulk-clear');
+			var btnBulkClear = document.getElementById('cci-bulk-clear') || document.getElementById('cci-btn-bulk-clear');
 			var selectedIds = [];
 
 			function updateBulkUi() {
@@ -1111,9 +1089,16 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 				if (totalEl) totalEl.textContent = selectedIds.length;
 			}
 
-			checkboxEls.forEach(function(cb) {
-				cb.addEventListener('change', updateBulkUi);
-			});
+			// Re-vincular checkboxes tras cada refresco del panel lateral por polling
+			window.__cciRebindBulkCheckboxes = function() {
+				checkboxEls = Array.prototype.slice.call(document.querySelectorAll('.cci-conv-checkbox'));
+				checkboxEls.forEach(function(cb) {
+					cb.removeEventListener('change', updateBulkUi);
+					cb.addEventListener('change', updateBulkUi);
+				});
+				updateBulkUi();
+			};
+			window.__cciRebindBulkCheckboxes();
 
 			if (btnBulkClear) {
 				btnBulkClear.addEventListener('click', function() {

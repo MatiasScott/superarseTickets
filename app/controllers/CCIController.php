@@ -4971,79 +4971,9 @@ class CCIController extends Controller
 		$asesoresCrm = $db->query("SELECT id, nombre FROM crm_prospect_asesores WHERE estado = 'activo' ORDER BY nombre ASC LIMIT 50")->fetchAll() ?: [];
 
 		try {
-			$where = ["bc.canal = 'freshchat'"];
-			$params = [];
-			if ($estadoFilter !== 'todos') {
-				$where[] = 'bc.estado = :estado';
-				$params['estado'] = $estadoFilter;
-			}
-			if ($asesorFilter > 0) {
-				$where[] = 'bc.asignado_a = :asesor';
-				$params['asesor'] = $asesorFilter;
-			}
-			if ($etiquetaFilter > 0) {
-				$where[] = 'bc.etiqueta_id = :etiqueta';
-				$params['etiqueta'] = $etiquetaFilter;
-			}
-			// Filtro de rango de fechas (Req 8)
-			if ($fechaInicio !== '') {
-				$where[] = 'COALESCE(bm.fecha, bm.created_at, bc.created_at) >= :fecha_inicio';
-				$params['fecha_inicio'] = $fechaInicio . ' 00:00:00';
-			}
-			if ($fechaFin !== '') {
-				$where[] = 'COALESCE(bm.fecha, bm.created_at, bc.created_at) <= :fecha_fin';
-				$params['fecha_fin'] = $fechaFin . ' 23:59:59';
-			}
-			$whereSql = implode(' AND ', $where);
-
-			$countStmt = $db->prepare('SELECT COUNT(*) FROM bot_conversaciones bc WHERE ' . $whereSql);
-			$countStmt->execute($params);
-			$total = (int) $countStmt->fetchColumn();
-
-			$sql = "SELECT bc.id, bc.contacto_id, bc.canal, bc.estado, bc.asignado_a, bc.etiqueta_id,
-				COALESCE(et.nombre, '') AS etiqueta_nombre,
-				COALESCE(bc.fecha_inicio, bc.created_at) AS fecha_inicio,
-				COALESCE(c.nombre, '') AS nombre,
-				COALESCE(c.apellido, '') AS apellido,
-				COALESCE(tc.telefono, '') AS telefono,
-				COALESCE(u.nombre, 'Sin asignar') AS asesor,
-				MAX(COALESCE(bm.fecha, bm.created_at)) AS ultimo_mensaje_fecha,
-				SUBSTRING_INDEX(GROUP_CONCAT(COALESCE(bm.mensaje, '') ORDER BY COALESCE(bm.fecha, bm.created_at) DESC SEPARATOR '||'), '||', 1) AS ultimo_mensaje
-			FROM bot_conversaciones bc
-			LEFT JOIN contactos c ON c.id = bc.contacto_id
-			LEFT JOIN usuarios u ON u.id = bc.asignado_a
-			LEFT JOIN cci_etiquetas et ON et.id = bc.etiqueta_id
-			LEFT JOIN bot_mensajes bm ON bm.conversacion_id = bc.id
-			LEFT JOIN (
-				SELECT x.contacto_id, x.telefono
-				FROM telefonos_contacto x
-				INNER JOIN (
-					SELECT contacto_id, MIN(id) AS first_id
-					FROM telefonos_contacto
-					WHERE estado = 'activo'
-					GROUP BY contacto_id
-				) y ON y.first_id = x.id
-			) tc ON tc.contacto_id = bc.contacto_id
-			WHERE {$whereSql}
-			GROUP BY bc.id, bc.contacto_id, bc.canal, bc.estado, bc.asignado_a, bc.etiqueta_id, et.nombre, bc.fecha_inicio, bc.created_at, c.nombre, c.apellido, tc.telefono, u.nombre
-			ORDER BY COALESCE(MAX(COALESCE(bm.fecha, bm.created_at)), bc.fecha_inicio, bc.created_at) DESC";
-			$stmt = $db->prepare($sql);
-			$stmt->execute($params);
-			$items = $stmt->fetchAll() ?: [];
-
-			// Formatear fechas a DD-mmm (Req 9)
-			$monthNames = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
-			foreach ($items as &$item) {
-				if (!empty($item['ultimo_mensaje_fecha'])) {
-					$timestamp = strtotime((string) $item['ultimo_mensaje_fecha']);
-					if ($timestamp !== false) {
-						$day = date('d', $timestamp);
-						$month = date('n', $timestamp) - 1;
-						$item['ultimo_mensaje_fecha'] = (int)$day . '-' . ($monthNames[$month] ?? 'mes');
-					}
-				}
-			}
-			unset($item);
+			$items = $this->fetchConversationListItems($db, $estadoFilter, $asesorFilter, $etiquetaFilter, $fechaInicio, $fechaFin);
+			$total = count($items);
+			$listChecksum = $this->cciListChecksum($items);
 
 			if ($selectedId <= 0 && !empty($items)) {
 				$selectedId = (int) ($items[0]['id'] ?? 0);
@@ -5053,7 +4983,7 @@ class CCIController extends Controller
 				$selStmt = $db->prepare('SELECT bc.*, COALESCE(u.nombre, "Sin asignar") AS asesor
 					FROM bot_conversaciones bc
 					LEFT JOIN usuarios u ON u.id = bc.asignado_a
-					WHERE bc.id = :id AND bc.canal = "freshchat" LIMIT 1');
+					WHERE bc.id = :id AND bc.canal IN ("freshchat", "whatsapp") LIMIT 1');
 				$selStmt->execute(['id' => $selectedId]);
 				$selected = $selStmt->fetch() ?: null;
 
@@ -5151,6 +5081,7 @@ class CCIController extends Controller
 		$this->view('cci/conversaciones', compact(
 			'items',
 			'total',
+			'listChecksum',
 			'selected',
 			'selectedId',
 			'thread',
@@ -5173,6 +5104,284 @@ class CCIController extends Controller
 			'title' => 'Centro de Comunicaciones - Conversaciones',
 			'styles' => ['cci.css'],
 		]);
+	}
+
+	/**
+	 * Listado de conversaciones para el panel lateral de CCI.
+	 * Incluye los canales freshchat y whatsapp (antes solo freshchat).
+	 */
+	private function fetchConversationListItems($db, string $estadoFilter, int $asesorFilter, int $etiquetaFilter, string $fechaInicio, string $fechaFin): array
+	{
+		$where = ["bc.canal IN ('freshchat', 'whatsapp')"];
+		$params = [];
+		if ($estadoFilter !== 'todos') {
+			$where[] = 'bc.estado = :estado';
+			$params['estado'] = $estadoFilter;
+		}
+		if ($asesorFilter > 0) {
+			$where[] = 'bc.asignado_a = :asesor';
+			$params['asesor'] = $asesorFilter;
+		}
+		if ($etiquetaFilter > 0) {
+			$where[] = 'bc.etiqueta_id = :etiqueta';
+			$params['etiqueta'] = $etiquetaFilter;
+		}
+		// Filtro de rango de fechas (Req 8): conversación con ALGÚN mensaje en el rango,
+		// o (sin mensajes) cuya fecha de creación esté en el rango. Semántica del GROUP BY original.
+		if ($fechaInicio !== '') {
+			$where[] = "(EXISTS (SELECT 1 FROM bot_mensajes bf WHERE bf.conversacion_id = bc.id AND COALESCE(bf.fecha, bf.created_at) >= :fecha_inicio)
+				OR (NOT EXISTS (SELECT 1 FROM bot_mensajes bn WHERE bn.conversacion_id = bc.id) AND COALESCE(bc.fecha_inicio, bc.created_at) >= :fecha_inicio))";
+			$params['fecha_inicio'] = $fechaInicio . ' 00:00:00';
+		}
+		if ($fechaFin !== '') {
+			$where[] = "(EXISTS (SELECT 1 FROM bot_mensajes bf2 WHERE bf2.conversacion_id = bc.id AND COALESCE(bf2.fecha, bf2.created_at) <= :fecha_fin)
+				OR (NOT EXISTS (SELECT 1 FROM bot_mensajes bn2 WHERE bn2.conversacion_id = bc.id) AND COALESCE(bc.fecha_inicio, bc.created_at) <= :fecha_fin))";
+			$params['fecha_fin'] = $fechaFin . ' 23:59:59';
+		}
+		$whereSql = implode(' AND ', $where);
+
+		$sql = "SELECT bc.id, bc.contacto_id, bc.canal, bc.estado, bc.asignado_a, bc.etiqueta_id,
+			COALESCE(et.nombre, '') AS etiqueta_nombre,
+			COALESCE(bc.fecha_inicio, bc.created_at) AS fecha_inicio,
+			COALESCE(c.nombre, '') AS nombre,
+			COALESCE(c.apellido, '') AS apellido,
+			COALESCE(tc.telefono, '') AS telefono,
+			COALESCE(u.nombre, 'Sin asignar') AS asesor,
+			lm.ultimo_mensaje_fecha,
+			lm.ultimo_mensaje
+		FROM bot_conversaciones bc
+		LEFT JOIN contactos c ON c.id = bc.contacto_id
+		LEFT JOIN usuarios u ON u.id = bc.asignado_a
+		LEFT JOIN cci_etiquetas et ON et.id = bc.etiqueta_id
+		LEFT JOIN (
+			SELECT x.contacto_id, x.telefono
+			FROM telefonos_contacto x
+			INNER JOIN (
+				SELECT contacto_id, MIN(id) AS first_id
+				FROM telefonos_contacto
+				WHERE estado = 'activo'
+				GROUP BY contacto_id
+			) y ON y.first_id = x.id
+		) tc ON tc.contacto_id = bc.contacto_id
+		LEFT JOIN (
+			SELECT conversacion_id,
+				MAX(COALESCE(fecha, created_at)) AS ultimo_mensaje_fecha,
+				SUBSTRING_INDEX(GROUP_CONCAT(mensaje ORDER BY COALESCE(fecha, created_at) DESC, id DESC SEPARATOR '||'), '||', 1) AS ultimo_mensaje
+			FROM bot_mensajes
+			GROUP BY conversacion_id
+		) lm ON lm.conversacion_id = bc.id
+		WHERE {$whereSql}
+		ORDER BY COALESCE(lm.ultimo_mensaje_fecha, bc.fecha_inicio, bc.created_at) DESC";
+		$stmt = $db->prepare($sql);
+		$stmt->execute($params);
+		$items = $stmt->fetchAll() ?: [];
+
+		// Formatear fechas a DD-mmm (Req 9); conservar timestamp crudo para checksum
+		$monthNames = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+		foreach ($items as &$item) {
+			$item['_raw_ts'] = '';
+			if (!empty($item['ultimo_mensaje_fecha'])) {
+				$timestamp = strtotime((string) $item['ultimo_mensaje_fecha']);
+				if ($timestamp !== false) {
+					$item['_raw_ts'] = (string) $timestamp;
+					$day = date('d', $timestamp);
+					$month = date('n', $timestamp) - 1;
+					$item['ultimo_mensaje_fecha'] = (int)$day . '-' . ($monthNames[$month] ?? 'mes');
+				}
+			}
+		}
+		unset($item);
+
+		return $items;
+	}
+
+	/**
+	 * Checksum del listado de conversaciones para detectar cambios sin reenviar HTML.
+	 */
+	private function cciListChecksum(array $items): string
+	{
+		$parts = [];
+		foreach ($items as $item) {
+			$parts[] = implode('|', [
+				(string) ($item['id'] ?? 0),
+				(string) ($item['_raw_ts'] ?? ''),
+				(string) ($item['estado'] ?? ''),
+				(string) ($item['asignado_a'] ?? ''),
+				mb_substr((string) ($item['ultimo_mensaje'] ?? ''), 0, 60),
+			]);
+		}
+		return md5(implode("\n", $parts));
+	}
+
+	/**
+	 * Dispara la sincronización CCI (Freshchat + WhatsApp) en un proceso background,
+	 * con throttle global de 10s para no saturar al proveedor.
+	 */
+	private function maybeDispatchCciBackgroundSync(): bool
+	{
+		$lockFile = STORAGE_PATH . '/logs/.cci_poll_sync_last_run';
+		$dir = dirname($lockFile);
+		if (!is_dir($dir)) {
+			@mkdir($dir, 0755, true);
+		}
+
+		$lastRun = is_file($lockFile) ? (int) @file_get_contents($lockFile) : 0;
+		$now = time();
+		if ($now - $lastRun < 10) {
+			return false;
+		}
+		@file_put_contents($lockFile, (string) $now, LOCK_EX);
+
+		$host = trim((string) ($_SERVER['HTTP_HOST'] ?? ''));
+		if ($host === '') {
+			return false;
+		}
+		$scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'ssl' : 'tcp';
+		$port = (int) ($_SERVER['SERVER_PORT'] ?? 0);
+		if ($port === 0) {
+			$port = $scheme === 'ssl' ? 443 : 80;
+		}
+		if (str_contains($host, ':')) {
+			[$host, $portFromHost] = array_pad(explode(':', $host, 2), 2, '');
+			if ($host !== '' && ctype_digit($portFromHost)) {
+				$port = (int) $portFromHost;
+			}
+		}
+
+		$token = trim((string) env('MAIL_AUTO_SYNC_INTERNAL_TOKEN', ''));
+		if ($token === '') {
+			$token = trim((string) env('CRM_SYNC_INTERNAL_TOKEN', ''));
+		}
+		if ($token === '') {
+			return false;
+		}
+
+		$path = rtrim((string) app_config('url', ''), '/') . '/api/internal/cci-sync?token=' . rawurlencode($token);
+
+		$errno = 0;
+		$errstr = '';
+		$transport = $scheme === 'ssl' ? 'ssl' : 'tcp';
+		$socket = @fsockopen(($host !== '' ? $transport . '://' : '') . $host, $port, $errno, $errstr, 2);
+		if (!is_resource($socket)) {
+			return false;
+		}
+
+		$out = "GET {$path} HTTP/1.1\r\n"
+			. "Host: {$host}\r\n"
+			. "Connection: Close\r\n"
+			. "X-Requested-With: XMLHttpRequest\r\n"
+			. "\r\n";
+		@fwrite($socket, $out);
+		@stream_set_timeout($socket, 0, 300000);
+		@fgets($socket, 128);
+		@fclose($socket);
+
+		return true;
+	}
+
+	/**
+	 * Polling ligero para la vista de conversaciones (~10s de frescura).
+	 * GET /cci/conversaciones/poll?selected_id=&estado=&asesor=&etiqueta=&list_checksum=
+	 * Devuelve mensajes del hilo abierto + HTML del panel lateral solo si cambió.
+	 */
+	public function conversacionesPoll(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		$db = $this->db();
+		$this->ensureCciTables($db);
+
+		$selectedId = (int) ($_GET['selected_id'] ?? 0);
+		$estadoFilter = strtolower(trim((string) ($_GET['estado'] ?? 'activo')));
+		if (!in_array($estadoFilter, ['activo', 'cerrado', 'todos'], true)) {
+			$estadoFilter = 'activo';
+		}
+		$asesorFilter = (int) ($_GET['asesor'] ?? 0);
+		$etiquetaFilter = (int) ($_GET['etiqueta'] ?? 0);
+		$fechaInicio = trim((string) ($_GET['fecha_inicio'] ?? ''));
+		$fechaFin = trim((string) ($_GET['fecha_fin'] ?? ''));
+		$fechaInicio = $fechaInicio !== '' && strtotime($fechaInicio) !== false ? $fechaInicio : '';
+		$fechaFin = $fechaFin !== '' && strtotime($fechaFin) !== false ? $fechaFin : '';
+		$clientChecksum = trim((string) ($_GET['list_checksum'] ?? ''));
+
+		$syncDispatched = $this->maybeDispatchCciBackgroundSync();
+
+		try {
+			$items = $this->fetchConversationListItems($db, $estadoFilter, $asesorFilter, $etiquetaFilter, $fechaInicio, $fechaFin);
+		} catch (Throwable $e) {
+			error_log('CCI conversacionesPoll() list error: ' . $e->getMessage());
+			$items = [];
+		}
+
+		$filterQuery = 'estado=' . rawurlencode($estadoFilter) . '&asesor=' . $asesorFilter . '&etiqueta=' . $etiquetaFilter;
+		if ($fechaInicio !== '') {
+			$filterQuery .= '&fecha_inicio=' . rawurlencode($fechaInicio);
+		}
+		if ($fechaFin !== '') {
+			$filterQuery .= '&fecha_fin=' . rawurlencode($fechaFin);
+		}
+
+		$payload = [
+			'ok' => true,
+			'sync_dispatched' => $syncDispatched,
+			'list_checksum' => $this->cciListChecksum($items),
+			'total' => count($items),
+		];
+
+		if ($clientChecksum !== $payload['list_checksum']) {
+			$html = '';
+			try {
+				$partialFile = dirname(__DIR__) . '/views/cci/partials/conversaciones_list.php';
+				if (is_file($partialFile)) {
+					ob_start();
+					$itemsLocal = $items;
+					include $partialFile;
+					$html = ob_get_clean();
+				}
+			} catch (Throwable $partialError) {
+				$html = '';
+				error_log('CCI poll partial error: ' . $partialError->getMessage());
+			}
+			$payload['list_html'] = $html;
+		}
+
+		if ($selectedId > 0) {
+			$messages = [];
+			try {
+				// El hilo abierto se actualiza vía la sincronización background disparada
+				// por este mismo polling (throttle 10s); aquí solo leemos la BD local.
+				$msgColumns = $this->getTableColumnsSafe($db, 'bot_mensajes');
+				$selectParts = ['id', 'mensaje', 'es_bot', 'created_at'];
+				$selectParts[] = in_array('tipo', $msgColumns, true) ? 'tipo' : "'texto' AS tipo";
+				$selectParts[] = in_array('fecha', $msgColumns, true) ? 'fecha' : 'created_at AS fecha';
+				$dateExpr = 'COALESCE(' . (in_array('fecha', $msgColumns, true) ? 'fecha' : 'created_at') . ', created_at)';
+				$threadStmt = $db->prepare('SELECT ' . implode(', ', $selectParts) . '
+					FROM bot_mensajes
+					WHERE conversacion_id = :id
+					ORDER BY ' . $dateExpr . ' DESC, id DESC
+					LIMIT 50');
+				$threadStmt->execute(['id' => $selectedId]);
+				$messages = array_reverse($threadStmt->fetchAll() ?: []);
+			} catch (Throwable $e) {
+				error_log('CCI conversacionesPoll() thread error: ' . $e->getMessage());
+			}
+
+			$payload['messages'] = array_values(array_map(static function (array $m): array {
+				return [
+					'id'     => (int) ($m['id'] ?? 0),
+					'texto'  => (string) ($m['mensaje'] ?? ''),
+					'tipo'   => (string) ($m['tipo'] ?? 'texto'),
+					'es_bot' => (int) ($m['es_bot'] ?? 0),
+					'fecha'  => (string) ($m['fecha'] ?? ($m['created_at'] ?? '')),
+				];
+			}, $messages));
+		} else {
+			$payload['messages'] = [];
+		}
+
+		echo json_encode($payload, JSON_UNESCAPED_UNICODE);
+		exit;
 	}
 
 	/**
