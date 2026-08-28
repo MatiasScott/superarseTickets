@@ -1,0 +1,9 @@
+.git
+.gitignore
+.env
+MANUAL
+composer.phar
+public/error_log
+storage/logs
+Dockerfile
+docker-compose.yml
