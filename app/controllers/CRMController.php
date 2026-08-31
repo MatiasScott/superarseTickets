@@ -595,6 +595,7 @@ class CRMController extends Controller
 						apellido = :apellido,
 						cedula = COALESCE(:cedula, cedula),
 						estado = "activo",
+						deleted_at = NULL,
 						updated_at = NOW()
 					WHERE id = :id
 					LIMIT 1');
@@ -2176,6 +2177,7 @@ class CRMController extends Controller
 					ciudad = :ciudad,
 					convertido = 0,
 					estado = "activo",
+					deleted_at = NULL,
 					updated_at = NOW()
 				WHERE id = :id
 				LIMIT 1');
