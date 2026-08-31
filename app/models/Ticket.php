@@ -48,6 +48,7 @@ class Ticket extends Model
 			LEFT JOIN ticket_grupos tg ON tg.id = t.grupo_id
 			LEFT JOIN contactos c ON c.id = t.contacto_id
 			LEFT JOIN usuarios u ON u.id = t.asignado_a
+			LEFT JOIN ticket_sla ts ON LOWER(ts.prioridad) = LOWER(tp.nombre)
 			{$whereSql}
 			{$orderSql}
 			LIMIT :limit OFFSET :offset";
@@ -89,6 +90,8 @@ class Ticket extends Model
 
 		$sql = "SELECT COUNT(*) FROM tickets t
 			LEFT JOIN contactos c ON c.id = t.contacto_id
+			LEFT JOIN ticket_prioridades tp ON tp.id = t.prioridad_id
+			LEFT JOIN ticket_sla ts ON LOWER(ts.prioridad) = LOWER(tp.nombre)
 			{$whereSql}";
 
 		$stmt = $this->db->prepare($sql);
@@ -258,6 +261,13 @@ class Ticket extends Model
 				$where[] = 't.created_at <= :fecha_hasta';
 				$params['fecha_hasta'] = $fechaHasta . ' 23:59:59';
 			}
+		}
+
+		$vencido = strtolower(trim((string) ($filters['vencido'] ?? '')));
+		if (in_array($vencido, ['si', '1', 'true', 'yes'], true)) {
+			$where[] = 'COALESCE(ts.resolucion_horas, 0) > 0 AND DATE_ADD(t.created_at, INTERVAL ts.resolucion_horas HOUR) < CURDATE()';
+		} elseif (in_array($vencido, ['no', '0', 'false'], true)) {
+			$where[] = 'NOT (COALESCE(ts.resolucion_horas, 0) > 0 AND DATE_ADD(t.created_at, INTERVAL ts.resolucion_horas HOUR) < CURDATE())';
 		}
 
 		$whereSql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';

@@ -694,24 +694,50 @@ class CorreoController extends Controller
 			}
 		}
 
-		if (empty($emails)) {
-			return [
-				'aliases' => $aliasesToSync,
-				'created' => $created,
-				'updated' => $updated,
-				'skipped' => $skipped,
-				'created_by_group' => $createdByGroup,
-				'updated_by_group' => $updatedByGroup,
-				'omitted_breakdown' => $omittedBreakdown,
-				'sync_errors' => $syncErrors,
-			];
+		if (!empty($emails)) {
+			$counts = $this->syncEmailsIntoTickets($db, $mailbox, $emails, $ticketCfg, $createdByGroup, $updatedByGroup, $omittedBreakdown);
+			$created += (int) ($counts['created'] ?? 0);
+			$updated += (int) ($counts['updated'] ?? 0);
+			$skipped += (int) ($counts['skipped'] ?? 0);
+			foreach ((array) ($counts['created_by_group'] ?? []) as $groupKey => $count) {
+				$createdByGroup[(string) $groupKey] = (int) ($createdByGroup[(string) $groupKey] ?? 0) + (int) $count;
+			}
+			foreach ((array) ($counts['updated_by_group'] ?? []) as $groupKey => $count) {
+				$updatedByGroup[(string) $groupKey] = (int) ($updatedByGroup[(string) $groupKey] ?? 0) + (int) $count;
+			}
+			foreach ((array) ($counts['omitted_breakdown'] ?? []) as $reason => $count) {
+				$omittedBreakdown[(string) $reason] = (int) ($omittedBreakdown[(string) $reason] ?? 0) + (int) $count;
+			}
 		}
+
+		return [
+			'aliases' => $aliasesToSync,
+			'created' => $created,
+			'updated' => $updated,
+			'skipped' => $skipped,
+			'created_by_group' => $createdByGroup,
+			'updated_by_group' => $updatedByGroup,
+			'omitted_breakdown' => $omittedBreakdown,
+			'sync_errors' => $syncErrors,
+		];
+	}
+
+	/**
+	 * Procesa una lista de correos ya obtenidos (delta o recuperacion) y los
+	 * convierte en tickets, reutilizando la logica de sincronizacion para que
+	 * no duplique los mensajes ya procesados en mail_ticket_sync.
+	 */
+	private function syncEmailsIntoTickets(PDO $db, MailboxService $mailbox, array $emails, array $ticketCfg, array $createdByGroup = [], array $updatedByGroup = [], array $omittedBreakdown = []): array
+	{
+		$created = 0;
+		$updated = 0;
+		$skipped = 0;
 
 		foreach ($emails as $email) {
 			try {
 				if ($this->alreadyProcessedEmail($db, $email)) {
 					$skipped++;
-					$omittedBreakdown['ya_procesado']++;
+					$omittedBreakdown['ya_procesado'] = (int) ($omittedBreakdown['ya_procesado'] ?? 0) + 1;
 
 					$ticketId = $this->findProcessedTicketId($db, $email);
 					$fallbackGroupId = isset($ticketCfg['grupo_id']) ? (int) $ticketCfg['grupo_id'] : null;
@@ -719,7 +745,7 @@ class CorreoController extends Controller
 					if ($ticketId !== null && $guessedGroupId !== null && ($fallbackGroupId === null || $guessedGroupId !== $fallbackGroupId)) {
 						if ($this->updateTicketGroupIfNeeded($db, $ticketId, $guessedGroupId)) {
 							$updated++;
-							$omittedBreakdown['grupo_actualizado']++;
+							$omittedBreakdown['grupo_actualizado'] = (int) ($omittedBreakdown['grupo_actualizado'] ?? 0) + 1;
 							$updatedGroupName = $this->resolveGroupNameByTicketId($db, $ticketId);
 							$updatedGroupKey = $updatedGroupName !== '' ? $updatedGroupName : 'Sin asignar';
 							$updatedByGroup[$updatedGroupKey] = (int) ($updatedByGroup[$updatedGroupKey] ?? 0) + 1;
@@ -731,7 +757,7 @@ class CorreoController extends Controller
 				$contactId = $this->findOrCreateContactFromEmail($db, $email);
 				if ($contactId <= 0) {
 					$skipped++;
-					$omittedBreakdown['contacto_invalido']++;
+					$omittedBreakdown['contacto_invalido'] = (int) ($omittedBreakdown['contacto_invalido'] ?? 0) + 1;
 					continue;
 				}
 
@@ -774,20 +800,18 @@ class CorreoController extends Controller
 				$created++;
 			} catch (Throwable $e) {
 				$skipped++;
-				$omittedBreakdown['error']++;
+				$omittedBreakdown['error'] = (int) ($omittedBreakdown['error'] ?? 0) + 1;
 				error_log('Sync correo->ticket error: ' . $e->getMessage());
 			}
 		}
 
 		return [
-			'aliases' => $aliasesToSync,
 			'created' => $created,
 			'updated' => $updated,
 			'skipped' => $skipped,
 			'created_by_group' => $createdByGroup,
 			'updated_by_group' => $updatedByGroup,
 			'omitted_breakdown' => $omittedBreakdown,
-			'sync_errors' => $syncErrors,
 		];
 	}
 

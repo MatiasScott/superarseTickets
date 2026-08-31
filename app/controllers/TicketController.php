@@ -103,6 +103,7 @@ class TicketController extends Controller
 			'buscar'       => trim((string) ($_GET['buscar']       ?? '')),
 			'fecha_desde'  => trim((string) ($_GET['fecha_desde']  ?? '')),
 			'fecha_hasta'  => trim((string) ($_GET['fecha_hasta']  ?? '')),
+			'vencido'      => strtolower(trim((string) ($_GET['vencido'] ?? ''))),
 			'sort'         => trim((string) ($_GET['sort']         ?? 'id')),
 			'direction'    => trim((string) ($_GET['direction']    ?? 'desc')),
 		];

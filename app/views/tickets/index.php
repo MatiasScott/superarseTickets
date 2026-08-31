@@ -273,6 +273,15 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 					</div>
 				</div>
 
+				<div class="col-12 col-sm-6 col-md-4 col-lg-2">
+					<label class="form-label fw-semibold mb-1 small"><i class="bi bi-alarm"></i> Vencido</label>
+					<select name="vencido" class="form-select form-select-sm ticket-simple-select">
+						<option value="">Todos</option>
+						<option value="si" <?= ($filters['vencido'] ?? '') === 'si' ? 'selected' : '' ?>>Sí</option>
+						<option value="no" <?= ($filters['vencido'] ?? '') === 'no' ? 'selected' : '' ?>>No</option>
+					</select>
+				</div>
+
 			</div>
 
 			<div class="d-flex gap-2 mt-3 align-items-center flex-wrap">
@@ -376,8 +385,6 @@ function selOpt(array $items, string $key, string $label, string $fieldId, strin
 			</table>
 			</div>
 		</div>
-
-	</div>
 
 	<?php if ($pages > 1): ?>
 	<nav class="mt-3" aria-label="Paginacion tickets">

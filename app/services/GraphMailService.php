@@ -742,7 +742,7 @@ class GraphMailService
 			$alias = strtolower($userPrincipalName);
 		}
 
-		$limit = max(1, min(3, $limit));
+		$limit = max(1, min(20, $limit));
 		if ($this->isHistoricalBootstrapEnabled()) {
 			$historical = $this->fetchHistoricalBootstrapForTicketing($account, $userPrincipalName, $alias, $limit);
 			if (!$historical['ok']) {
@@ -787,7 +787,6 @@ class GraphMailService
 			$items = is_array($body['value'] ?? null) ? $body['value'] : [];
 			$nextLink = trim((string) ($body['@odata.nextLink'] ?? ''));
 			$newDeltaLink = trim((string) ($body['@odata.deltaLink'] ?? ''));
-			error_log(print_r($body, true));
 			error_log('[GraphMailService] fetchDeltaForTicketing page=' . ($loop + 1) . ' items=' . count($items) . ' nextLink=' . ($nextLink !== '' ? 'yes' : 'no') . ' deltaLink=' . ($newDeltaLink !== '' ? 'yes' : 'no'));
 
 			foreach ($items as $item) {
@@ -841,6 +840,78 @@ class GraphMailService
 		}
 
 		error_log('[GraphMailService] fetchDeltaForTicketing summary received=' . $receivedCount . ' discarded=' . $discardedCount . ' added=' . $addedCount . ' emails=' . count($emails));
+		return ['ok' => true, 'error' => null, 'emails' => $emails];
+	}
+
+	/**
+	 * Obtiene los correos de la bandeja recibidos desde una fecha (ISO UTC),
+	 * paginando hasta agotar la lista. Usado por la recuperacion de tickets
+	 * de correos atrasados en un rango de fechas.
+	 */
+	public function fetchSinceForTicketing(array $account, string $sinceIsoUtc, int $max = 200): array
+	{
+		$userPrincipalName = trim((string) ($account['email'] ?? ''));
+		if ($userPrincipalName === '') {
+			return ['ok' => false, 'error' => 'La cuenta no tiene email configurado para Graph.', 'emails' => []];
+		}
+
+		$alias = trim((string) ($account['alias'] ?? ''));
+		if ($alias === '') {
+			$alias = strtolower($userPrincipalName);
+		}
+
+		$emails = [];
+		$perPage = 50;
+		$pages = 0;
+		$maxPages = 50;
+		$nextLink = '';
+
+		for ($loop = 0; $loop < $maxPages; $loop++) {
+			if ($pages === 0) {
+				$response = $this->request(
+					'GET',
+					'/users/' . rawurlencode($userPrincipalName) . '/mailFolders/inbox/messages',
+					null,
+					[
+						'$top' => (string) $perPage,
+						'$orderby' => 'receivedDateTime ASC',
+						'$filter' => 'receivedDateTime ge ' . $sinceIsoUtc,
+						'$select' => 'id,subject,from,receivedDateTime,internetMessageId,conversationId,bodyPreview,body,hasAttachments,isRead',
+					],
+					['ConsistencyLevel: eventual']
+				);
+			} else {
+				$response = $this->requestAbsolute('GET', $nextLink);
+			}
+
+			if (!$response['ok']) {
+				return ['ok' => false, 'error' => $response['error'], 'emails' => $emails];
+			}
+
+			$body = is_array($response['body'] ?? null) ? $response['body'] : [];
+			$items = is_array($body['value'] ?? null) ? $body['value'] : [];
+			$nextLink = trim((string) ($body['@odata.nextLink'] ?? ''));
+
+			foreach ($items as $item) {
+				if (!is_array($item) || isset($item['@removed'])) {
+					continue;
+				}
+				$mapped = $this->mapDeltaMessageToTicketEmail($account, $item, $userPrincipalName);
+				if ($mapped !== null) {
+					$emails[] = $mapped;
+				}
+			}
+
+			if ($nextLink === '') {
+				break;
+			}
+
+			$pages++;
+			if ($pages >= $maxPages || count($emails) >= $max) {
+				break;
+			}
+		}
+
 		return ['ok' => true, 'error' => null, 'emails' => $emails];
 	}
 
@@ -968,7 +1039,6 @@ class GraphMailService
 		$body = is_array($response['body'] ?? null) ? $response['body'] : [];
 		$items = is_array($body['value'] ?? null) ? $body['value'] : [];
 		$newNextLink = trim((string) ($body['@odata.nextLink'] ?? ''));
-		error_log(print_r($body, true));
 		error_log('[GraphMailService] fetchHistoricalBootstrapForTicketing items=' . count($items) . ' nextLink=' . ($newNextLink !== '' ? 'yes' : 'no'));
 
 		$emails = [];

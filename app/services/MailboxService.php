@@ -197,6 +197,27 @@ class MailboxService
 		return $this->fetchUnreadForTicketing($accountAlias, $limit);
 	}
 
+	/**
+	 * Obtiene correos de la bandeja recibidos desde una fecha ISO UTC.
+	 * Solo disponible en modo Graph.
+	 */
+	public function fetchSinceForTicketing(?string $accountAlias, string $sinceIsoUtc, int $max = 200): array
+	{
+		$account = $this->resolveAccount($accountAlias);
+		if ($account === null) {
+			return ['ok' => false, 'error' => 'No hay cuentas de correo habilitadas.', 'emails' => []];
+		}
+
+		if ($this->isGraphMode()) {
+			if ($this->graphService === null) {
+				return ['ok' => false, 'error' => 'No se pudo inicializar servicio Graph.', 'emails' => []];
+			}
+			return $this->graphService->fetchSinceForTicketing($account, $sinceIsoUtc, $max);
+		}
+
+		return ['ok' => false, 'error' => 'La recuperacion por rango de fechas solo esta disponible en modo Graph.', 'emails' => []];
+	}
+
 	private function isHistoricalBootstrapEnabled(): bool
 	{
 		$value = strtolower(trim((string) env('MAIL_TICKET_HISTORY_BOOTSTRAP_ENABLED', 'true')));

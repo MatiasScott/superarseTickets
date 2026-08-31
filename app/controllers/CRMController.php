@@ -502,9 +502,22 @@ class CRMController extends Controller
 	{
 		Auth::requireAuth();
 
-		if (!verify_csrf($_POST['_token'] ?? null)) {
-			set_flash('error', 'Token CSRF invalido.');
+		// Si llega por AJAX (modal del CCI), respondemos JSON y no redirigimos,
+		// para que el frontend muestre errores reales en lugar de un falso éxito.
+		$isAjax = strtolower((string) ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '')) === 'xmlhttprequest';
+
+		$ajaxFail = static function (string $message) use ($isAjax): void {
+			if ($isAjax) {
+				header('Content-Type: application/json; charset=utf-8');
+				echo json_encode(['ok' => false, 'error' => $message]);
+				exit;
+			}
+			set_flash('error', $message);
 			redirect('crm/interesados?tab=prospects');
+		};
+
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			$ajaxFail('Token CSRF invalido. Recarga la pagina e intenta de nuevo.');
 		}
 
 		$nombres = trim((string) ($_POST['nombres'] ?? ''));
@@ -522,13 +535,11 @@ class CRMController extends Controller
 		$ciudad = trim((string) ($_POST['ciudad'] ?? ''));
 
 		if ($nombres === '') {
-			set_flash('error', 'El nombre es obligatorio.');
-			redirect('crm/interesados?tab=prospects');
+			$ajaxFail('El nombre es obligatorio.');
 		}
 
 		if ($celularRaw !== '' && $celular === '') {
-			set_flash('error', 'El celular debe tener el formato +593987654321.');
-			redirect('crm/interesados?tab=prospects');
+			$ajaxFail('El celular debe tener el formato +593987654321.');
 		}
 
 		$identificacionToStore = $identificacion !== '' ? mb_substr($identificacion, 0, 20) : null;
@@ -639,6 +650,18 @@ class CRMController extends Controller
 				// No interrumpir el flujo por el historial
 			}
 
+			if ($isAjax) {
+				header('Content-Type: application/json; charset=utf-8');
+				echo json_encode([
+					'ok' => true,
+					'message' => $isNew
+						? 'Cliente potencial creado correctamente.'
+						: 'Cliente potencial actualizado y vinculado correctamente.',
+					'contacto_id' => (int) $contactId,
+				]);
+				exit;
+			}
+
 			set_flash('success', $isNew
 				? 'Cliente potencial creado correctamente.'
 				: 'Cliente potencial actualizado y vinculado correctamente.');
@@ -646,6 +669,11 @@ class CRMController extends Controller
 		} catch (Throwable $e) {
 			if (isset($db) && $db instanceof PDO && $db->inTransaction()) {
 				$db->rollBack();
+			}
+			if ($isAjax) {
+				header('Content-Type: application/json; charset=utf-8');
+				echo json_encode(['ok' => false, 'error' => 'No se pudo crear el cliente potencial: ' . $e->getMessage()]);
+				exit;
 			}
 			set_flash('error', 'No se pudo crear el cliente potencial: ' . $e->getMessage());
 		}

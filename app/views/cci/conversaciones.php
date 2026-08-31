@@ -1325,14 +1325,21 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 				if (!response.ok) {
 					throw new Error('No se pudo crear el cliente potencial');
 				}
-				statusBox.innerHTML = '<div class="alert alert-success py-2 mb-2">Cliente potencial creado correctamente.</div>';
+				return response.json().catch(function() {
+					throw new Error('Respuesta inesperada del servidor.');
+				});
+			}).then(function(data) {
+				if (!data || data.ok !== true) {
+					throw new Error((data && data.error) ? data.error : 'No se pudo crear el cliente potencial');
+				}
+				statusBox.innerHTML = '<div class="alert alert-success py-2 mb-2">' + (data.message || 'Cliente potencial creado correctamente.') + '</div>';
 				setTimeout(function() {
 					if (modalEl && window.bootstrap && window.bootstrap.Modal) {
 						window.bootstrap.Modal.getOrCreateInstance(modalEl).hide();
 					}
 				}, 1200);
-			}).catch(function() {
-				statusBox.innerHTML = '<div class="alert alert-danger py-2 mb-2">No se pudo crear el cliente potencial. Intenta nuevamente.</div>';
+			}).catch(function(err) {
+				statusBox.innerHTML = '<div class="alert alert-danger py-2 mb-2">' + (err && err.message ? err.message : 'No se pudo crear el cliente potencial. Intenta nuevamente.') + '</div>';
 			});
 		});
 	})();
