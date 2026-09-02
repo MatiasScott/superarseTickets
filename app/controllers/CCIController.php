@@ -1267,7 +1267,7 @@ class CCIController extends Controller
 			$candidate = $translit;
 		}
 		$candidate = preg_replace('/[^A-Za-z0-9._ -]/', '_', $candidate) ?? $candidate;
-		$candidate = preg_replace('/\s+/', ' ', $candidate) ?? $candidate;
+		$candidate = preg_replace('/\s+/', '_', $candidate) ?? $candidate;
 		$candidate = trim($candidate, " ._-");
 
 		$base = pathinfo($candidate, PATHINFO_FILENAME);
@@ -2054,6 +2054,7 @@ class CCIController extends Controller
 		if (!is_dir($uploadDir)) @mkdir($uploadDir, 0755, true);
 		$originalBaseName = basename($filename);
 		$sanitized = preg_replace('/[\\\/:*?"<>|\x00-\x1F\x7F]/u', '_', $originalBaseName);
+		$sanitized = preg_replace('/\s+/', '_', (string) $sanitized);
 		$sanitized = trim((string) $sanitized);
 		if ($sanitized === '' || $sanitized === '.' || $sanitized === '..') {
 			$sanitized = 'archivo_adjunto';
@@ -2074,6 +2075,54 @@ class CCIController extends Controller
 			'name' => $unique,
 		];
 	}
+
+	/**
+	 * Sirve adjuntos de CCI con auto-reparación: si el archivo no está en public/ pero
+	 * sí existe en storage/uploads (ej. tras un despliegue que no preservó public/cci-attachments),
+	 * lo copia antes de servirlo. Evita el 404 genérico del router cuando Apache no encuentra el estático.
+	 */
+	public function serveAttachment(string $filename): void
+	{
+		Auth::requireAuth();
+		$safeName = basename(rawurldecode($filename));
+		if ($safeName === '' || $safeName === '.' || $safeName === '..' || str_contains($safeName, '..')) {
+			http_response_code(404);
+			header('Content-Type: text/plain; charset=utf-8');
+			echo 'Archivo no encontrado.';
+			return;
+		}
+
+		$publicPath = PUBLIC_PATH . '/cci-attachments/' . $safeName;
+		$storagePath = STORAGE_PATH . '/uploads/cci-attachments/' . $safeName;
+
+		if (!is_file($publicPath) && is_file($storagePath)) {
+			$publicDir = dirname($publicPath);
+			if (!is_dir($publicDir)) {
+				@mkdir($publicDir, 0755, true);
+			}
+			@copy($storagePath, $publicPath);
+			@chmod($publicPath, 0644);
+		}
+
+		if (!is_file($publicPath)) {
+			http_response_code(404);
+			header('Content-Type: text/plain; charset=utf-8');
+			echo 'El archivo adjunto no está disponible: pudo no haberse guardado localmente o haber expirado.';
+			return;
+		}
+
+		$mime = function_exists('mime_content_type') ? (string) (mime_content_type($publicPath) ?: '') : '';
+		if ($mime === '') {
+			$mime = 'application/octet-stream';
+		}
+
+		header('Content-Type: ' . $mime);
+		header('Content-Length: ' . (string) filesize($publicPath));
+		header('Content-Disposition: inline; filename="' . rawurlencode($safeName) . '"');
+		header('Cache-Control: public, max-age=86400');
+		readfile($publicPath);
+	}
+
 	public function whatsAppWebhook(): void
 	{
 		$this->whatchimpWebhook();
@@ -2144,6 +2193,7 @@ class CCIController extends Controller
 		$texts = [];
 		$mediaUrls = [];
 		$mediaNames = [];
+		$unresolvedNames = [];
 		foreach ($parts as $part) {
 			if (!is_array($part)) {
 				continue;
@@ -2154,16 +2204,17 @@ class CCIController extends Controller
 			}
 			foreach (['image', 'video', 'file', 'audio', 'document'] as $mediaType) {
 				$name = trim((string) ($part[$mediaType]['name'] ?? ''));
-				if ($name !== '' && !$this->isGenericAttachmentName($name)) {
-					$mediaNames[] = $name;
-				}
 				$url = trim((string) ($part[$mediaType]['url'] ?? ''));
 				if ($url !== '') {
 					$mediaUrls[] = $url;
+					if ($name !== '' && !$this->isGenericAttachmentName($name)) {
+						$mediaNames[] = $name;
+					}
 					continue;
 				}
+				// Sin URL de descarga no hay forma de servir el archivo localmente: no lo tratamos como ruta.
 				if ($name !== '') {
-					$mediaUrls[] = $name;
+					$unresolvedNames[] = $name;
 				}
 			}
 		}
@@ -2172,6 +2223,13 @@ class CCIController extends Controller
 				'text' => implode("\n", $mediaUrls),
 				'tipo' => 'archivo',
 				'media_name' => $mediaNames[0] ?? '',
+			];
+		}
+		if ($unresolvedNames !== []) {
+			return [
+				'text' => '📎 Archivo adjunto recibido (' . implode(', ', $unresolvedNames) . ') sin URL de descarga disponible.',
+				'tipo' => 'texto',
+				'media_name' => '',
 			];
 		}
 		return ['text' => implode("\n", $texts), 'tipo' => 'texto', 'media_name' => ''];
@@ -3220,11 +3278,11 @@ class CCIController extends Controller
 
 		$db = $this->db();
 		$this->ensureCciTables($db);
-		$before = $db->prepare('SELECT estado FROM bot_conversaciones WHERE id = :id AND canal = "freshchat" LIMIT 1');
+		$before = $db->prepare('SELECT estado FROM bot_conversaciones WHERE id = :id AND canal IN ("freshchat", "whatsapp") LIMIT 1');
 		$before->execute(['id' => $id]);
 		$estadoActual = $before->fetchColumn();
 		if ($estadoActual === false) {
-			set_flash('error', 'Conversación Freshchat no encontrada.');
+			set_flash('error', 'Conversación no encontrada.');
 			redirect('cci/conversaciones');
 		}
 
@@ -4343,11 +4401,11 @@ class CCIController extends Controller
 			set_flash('error', 'El asesor CRM seleccionado aún no está vinculado a un usuario activo.');
 			redirect('cci/asignaciones');
 		}
-		$conversation = $db->prepare('SELECT id, asignado_a FROM bot_conversaciones WHERE id = :id AND canal = "freshchat" LIMIT 1');
+		$conversation = $db->prepare('SELECT id, asignado_a FROM bot_conversaciones WHERE id = :id AND canal IN ("freshchat", "whatsapp") LIMIT 1');
 		$conversation->execute(['id' => $id]);
 		$row = $conversation->fetch() ?: null;
 		if ($row === null) {
-			set_flash('error', 'Conversación Freshchat no encontrada.');
+			set_flash('error', 'Conversación no encontrada.');
 			redirect('cci/conversaciones');
 		}
 		$userId = (int) $advisor['usuario_id'];
@@ -4905,7 +4963,7 @@ class CCIController extends Controller
 		}
 
 		$placeholders = implode(',', array_fill(0, count($validIds), '?'));
-		$stmt = $db->prepare("UPDATE bot_conversaciones SET estado = 'cerrado', updated_at = NOW() WHERE id IN ($placeholders) AND canal = 'freshchat'");
+		$stmt = $db->prepare("UPDATE bot_conversaciones SET estado = 'cerrado', updated_at = NOW() WHERE id IN ($placeholders) AND canal IN ('freshchat', 'whatsapp')");
 		try {
 			$stmt->execute(array_values($validIds));
 			$closed = $stmt->rowCount();
@@ -5148,7 +5206,8 @@ class CCIController extends Controller
 			COALESCE(tc.telefono, '') AS telefono,
 			COALESCE(u.nombre, 'Sin asignar') AS asesor,
 			lm.ultimo_mensaje_fecha,
-			lm.ultimo_mensaje
+			lm.ultimo_mensaje,
+			lm.ultimo_mensaje_es_bot
 		FROM bot_conversaciones bc
 		LEFT JOIN contactos c ON c.id = bc.contacto_id
 		LEFT JOIN usuarios u ON u.id = bc.asignado_a
@@ -5166,7 +5225,8 @@ class CCIController extends Controller
 		LEFT JOIN (
 			SELECT conversacion_id,
 				MAX(COALESCE(fecha, created_at)) AS ultimo_mensaje_fecha,
-				SUBSTRING_INDEX(GROUP_CONCAT(mensaje ORDER BY COALESCE(fecha, created_at) DESC, id DESC SEPARATOR '||'), '||', 1) AS ultimo_mensaje
+				SUBSTRING_INDEX(GROUP_CONCAT(mensaje ORDER BY COALESCE(fecha, created_at) DESC, id DESC SEPARATOR '||'), '||', 1) AS ultimo_mensaje,
+				SUBSTRING_INDEX(GROUP_CONCAT(es_bot ORDER BY COALESCE(fecha, created_at) DESC, id DESC SEPARATOR '||'), '||', 1) AS ultimo_mensaje_es_bot
 			FROM bot_mensajes
 			GROUP BY conversacion_id
 		) lm ON lm.conversacion_id = bc.id
@@ -5180,6 +5240,10 @@ class CCIController extends Controller
 		$monthNames = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 		foreach ($items as &$item) {
 			$item['_raw_ts'] = '';
+			// Última respuesta del cliente sin contestar: último mensaje entrante (es_bot=0).
+			$item['hay_nuevos'] = array_key_exists('ultimo_mensaje_es_bot', $item)
+				&& $item['ultimo_mensaje_es_bot'] !== null
+				&& (int) $item['ultimo_mensaje_es_bot'] === 0;
 			if (!empty($item['ultimo_mensaje_fecha'])) {
 				$timestamp = strtotime((string) $item['ultimo_mensaje_fecha']);
 				if ($timestamp !== false) {
@@ -5207,6 +5271,7 @@ class CCIController extends Controller
 				(string) ($item['_raw_ts'] ?? ''),
 				(string) ($item['estado'] ?? ''),
 				(string) ($item['asignado_a'] ?? ''),
+				(string) ($item['hay_nuevos'] ?? false ? '1' : '0'),
 				mb_substr((string) ($item['ultimo_mensaje'] ?? ''), 0, 60),
 			]);
 		}

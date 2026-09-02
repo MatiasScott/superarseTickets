@@ -118,6 +118,7 @@ return static function (Router $router): void {
 	$router->post('/cci/subetiquetas/toggle-estado/{id}', 'CCIController@toggleEstadoSubetiqueta');
 	$router->post('/cci/sync/whatsapp', 'CCIController@syncWhatsApp');
 	$router->get('/cci/freshchat-diagnostico', 'CCIController@freshchatDiagnostico');
+	$router->get('/cci-attachments/{filename}', 'CCIController@serveAttachment');
 	$router->get('/api/cci/whatsapp/webhook', 'CCIController@whatsAppWebhook');
 	$router->post('/api/cci/whatsapp/webhook', 'CCIController@whatsAppWebhook');
 	$router->post('/cci/sync/whatchimp', 'CCIController@syncWhatchimp');

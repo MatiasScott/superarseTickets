@@ -7,6 +7,9 @@ $thread = $thread ?? [];
 $notes = $notes ?? [];
 $numeroContacto = $numeroContacto ?? '';
 $nombreContacto = $nombreContacto ?? '';
+$estadoActual = 'activo';
+$asesorActual = 'Sin asignar';
+$selectedData = [];
 $advisors = $advisors ?? [];
 $estadoFilter = (string) ($estadoFilter ?? 'activo');
 $asesorFilter = (int) ($asesorFilter ?? 0);
@@ -35,50 +38,18 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 ?>
 
 <section class="module-page cci-page" style="height: 100%; display: flex; flex-direction: column; padding: 0;">
-	<div class="container-fluid py-3" style="flex-shrink: 0;">
-		<div class="d-flex flex-wrap justify-content-between align-items-center mb-2 gap-2">
-			<div>
-				<h1 class="h4 mb-0"><i class="bi bi-chat-square-text"></i> Conversaciones</h1>
-			</div>
-			<div class="d-flex align-items-center gap-2">
-				<form method="GET" class="d-flex align-items-center gap-2 flex-wrap">
-					<input type="text" class="form-control form-control-sm" id="cci-phone-search" name="phone_search" value="<?= e($phoneSearch) ?>" placeholder="Buscar por teléfono..." style="width: 180px;">
-					<label class="form-label mb-0" style="font-size: 0.9rem;"><i class="bi bi-funnel"></i> Estado</label>
-					<select class="form-select" style="width:130px; font-size: 0.9rem;" name="estado" onchange="this.form.submit()">
-						<?php foreach (['activo' => 'Activas', 'cerrado' => 'Cerradas', 'todos' => 'Todas'] as $value => $label): ?>
-							<option value="<?= e($value) ?>" <?= $estadoFilter === $value ? 'selected' : '' ?>><?= e($label) ?></option>
-						<?php endforeach; ?>
-					</select>
-					<label class="form-label mb-0" style="font-size: 0.9rem;"><i class="bi bi-person-badge"></i> Asesor</label>
-					<select class="form-select" style="width:180px; font-size: 0.9rem;" name="asesor" onchange="this.form.submit()">
-						<option value="0">Todos</option>
-						<?php foreach ($advisors as $advisor): ?>
-							<option value="<?= e((string) ($advisor['usuario_id'] ?? 0)) ?>" <?= $asesorFilter === (int) ($advisor['usuario_id'] ?? 0) ? 'selected' : '' ?>><?= e((string) ($advisor['nombre'] ?? 'Asesor')) ?></option>
-						<?php endforeach; ?>
-					</select>
-					<label class="form-label mb-0" style="font-size: 0.9rem;"><i class="bi bi-tags"></i> Etiqueta</label>
-					<select class="form-select" style="width:180px; font-size: 0.9rem;" name="etiqueta" onchange="this.form.submit()">
-						<option value="0">Todas</option>
-						<?php foreach ($todasLasEtiquetas as $etFiltro): ?>
-							<option value="<?= (int) ($etFiltro['id'] ?? 0) ?>" <?= $etiquetaFilter === (int) ($etFiltro['id'] ?? 0) ? 'selected' : '' ?>>🏷️ <?= e((string) ($etFiltro['nombre'] ?? '')) ?></option>
-						<?php endforeach; ?>
-					</select>
-					<label class="form-label mb-0" style="font-size: 0.9rem;"><i class="bi bi-calendar-range"></i></label>
-					<input type="date" class="form-control form-control-sm" name="fecha_inicio" value="<?= e($fechaInicio) ?>" style="width: 145px;" title="Fecha inicio">
-					<input type="date" class="form-control form-control-sm" name="fecha_fin" value="<?= e($fechaFin) ?>" style="width: 145px;" title="Fecha fin">
-					<button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-search"></i></button>
-					<a href="<?= e(base_url('cci/conversaciones')) ?>" class="btn btn-sm btn-outline-secondary"><i class="bi bi-x-lg"></i></a>
-				</form>
-			</div>
+	<?php
+	// Filtros (estado/asesor/etiqueta/fecha/búsqueda) se ocultaron de esta vista a pedido del usuario;
+	// la lógica de filtrado sigue intacta en el controlador y se aplica con sus valores por defecto.
+	$ok = get_flash('success');
+	unset($ok);
+	$err = get_flash('error');
+	?>
+	<?php if ($err): ?>
+		<div class="container-fluid py-2" style="flex-shrink: 0;">
+			<div class="alert alert-danger mb-0" style="font-size: 0.9rem;"><?= e($err) ?></div>
 		</div>
-		<?php if ($ok = get_flash('success')): ?>
-			<div class="alert alert-success" style="margin-bottom: 10px; font-size: 0.9rem;"><?= e($ok) ?></div>
-		<?php endif; ?>
-
-		<?php if ($err = get_flash('error')): ?>
-			<div class="alert alert-danger" style="margin-bottom: 10px; font-size: 0.9rem;"><?= e($err) ?></div>
-		<?php endif; ?>
-	</div>
+	<?php endif; ?>
 
 	<div class="cci-chat-shell" style="flex: 1; overflow: hidden; border-top: 1px solid #dbe6f2;">
 		<!-- LISTA DE CONVERSACIONES -->
@@ -116,99 +87,35 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 					</div>
 				</div>
 			<?php else: ?>
-				<?php $estadoActual = (string) ($selected['estado'] ?? 'activo'); ?>
-				<div class="cci-thread-head">
-					<div>
-						<?php
-						$nombreContacto = trim((string) (($selected['nombre'] ?? '') . ' ' . ($selected['apellido'] ?? '')));
-						if ($nombreContacto === '') {
-							$nombreContacto = 'Contacto sin nombre';
+				<?php
+				// Si $selected no tiene los datos del contacto, los rescatamos del arreglo $items
+				$selectedData = $selected ?? [];
+				if (empty($selectedData['nombre']) && !empty($items)) {
+					foreach ($items as $item) {
+						if ((int) ($item['id'] ?? 0) === $selectedId) {
+							$selectedData = array_merge($item, $selectedData);
+							break;
 						}
-						$numeroContacto = trim((string) ($selected['telefono'] ?? 'Sin número'));
-						?>
-						<div class="cci-thread-head">
-							<?php
-							// Si $selected no tiene los datos del contacto, los rescatamos del arreglo $items
-							$selectedData = $selected ?? [];
-							if (empty($selectedData['nombre']) && !empty($items)) {
-								foreach ($items as $item) {
-									if ((int) ($item['id'] ?? 0) === $selectedId) {
-										$selectedData = array_merge($item, $selectedData);
-										break;
-									}
-								}
-							}
+					}
+				}
 
-							$estadoActual = (string) ($selectedData['estado'] ?? 'activo');
+				$estadoActual = (string) ($selectedData['estado'] ?? 'activo');
 
-							// Construcción del Nombre
-							$nombreContacto = trim((string) (($selectedData['nombre'] ?? '') . ' ' . ($selectedData['apellido'] ?? '')));
-							if ($nombreContacto === '') {
-								$nombreContacto = 'Contacto #' . $selectedId;
-							}
+				// Construcción del Nombre
+				$nombreContacto = trim((string) (($selectedData['nombre'] ?? '') . ' ' . ($selectedData['apellido'] ?? '')));
+				if ($nombreContacto === '') {
+					$nombreContacto = 'Contacto #' . $selectedId;
+				}
 
-							// Construcción del Teléfono
-							$numeroContacto = trim((string) ($selectedData['telefono'] ?? ''));
-							if ($numeroContacto === '') {
-								$numeroContacto = 'Sin número';
-							}
+				// Construcción del Teléfono
+				$numeroContacto = trim((string) ($selectedData['telefono'] ?? ''));
+				if ($numeroContacto === '') {
+					$numeroContacto = 'Sin número';
+				}
 
-							// Asesor
-							$asesorActual = (string) ($selectedData['asesor'] ?? 'Sin asignar');
-							?>
-
-							<div>
-								<div class="cci-thread-title">
-									<span class="cci-status-dot" style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: <?= $estadoActual === 'activo' ? '#4caf50' : '#888888' ?>; margin-right: 8px;"></span>
-									<strong><?= e($nombreContacto) ?></strong>
-								</div>
-								<div class="cci-thread-subtitle"><?= e($numeroContacto) ?></div>
-								<div class="cci-thread-subtitle">
-									Estado: <?= e($estadoActual) ?> | <i class="bi bi-person-badge"></i> Asesor: <?= e($asesorActual) ?>
-								</div>
-							</div>
-
-							<div class="d-flex gap-2 align-items-center">
-								<!-- Formulario para Asignar Asesor (Se mantiene igual) -->
-								<?php if (!empty($advisors)): ?>
-									<form method="POST" action="<?= e(base_url('cci/conversaciones/' . $selectedId . '/assign')) ?>" class="d-flex gap-1">
-										<?= csrf_field() ?>
-										<select class="form-select form-select-sm" name="crm_asesor_id" required style="max-width: 150px;">
-											<option value="">Asignar a...</option>
-											<?php foreach ($advisors as $advisor): ?>
-												<option value="<?= e((string) ($advisor['id'] ?? 0)) ?>"><?= e((string) ($advisor['nombre'] ?? 'Asesor')) ?> — <?= e((string) ($advisor['usuario_nombre'] ?? 'Sin usuario')) ?></option>
-											<?php endforeach; ?>
-										</select>
-										<button class="btn btn-sm btn-outline-primary" type="submit" title="Asignar"><i class="bi bi-person-check"></i></button>
-									</form>
-								<?php endif; ?>
-
-								<!-- Combo de Selección de Etiqueta (Reemplaza a Cerrar/Contactos) -->
-								<form method="POST" action="<?= e(base_url('cci/conversaciones/' . $selectedId . '/etiqueta')) ?>" class="d-flex gap-1 align-items-center" id="form-asignar-etiqueta">
-									<?= csrf_field() ?>
-									<select class="form-select form-select-sm" name="etiqueta_id" id="select-etiquetas" onchange="confirmarYEnviarEtiqueta(this)" style="max-width: 200px;">
-										<option value="">-- Seleccionar Etiqueta --</option>
-										<?php foreach ($etiquetasActivas as $etiqueta): ?>
-											<option value="<?= $etiqueta['id'] ?>" <?= (isset($selectedData['etiqueta_id']) && $selectedData['etiqueta_id'] == $etiqueta['id']) ? 'selected' : '' ?>>
-												🏷️ <?= e($etiqueta['nombre']) ?>
-											</option>
-										<?php endforeach; ?>
-									</select>
-								</form>
-
-								<!-- Botón para Abrir Modal de Gestión / Creación de Etiquetas -->
-								<button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#modalEtiquetas" title="Administrar Etiquetas">
-									<i class="bi bi-tags-fill"></i>
-								</button>
-
-								<!-- Atajo para convertir el contacto en cliente potencial (CRM), sin salir de esta vista -->
-								<button type="button" class="btn btn-sm btn-outline-success" data-bs-toggle="modal" data-bs-target="#modalCrearPotencial" title="Crear cliente potencial en CRM">
-									<i class="bi bi-person-plus-fill"></i> Cliente potencial
-								</button>
-							</div>
-						</div>
-					</div>
-				</div>
+				// Asesor
+				$asesorActual = (string) ($selectedData['asesor'] ?? 'Sin asignar');
+				?>
 
 				<div class="cci-thread-body">
 					<div class="cci-messages-col">
@@ -228,11 +135,12 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 										$isRemoteUrl = str_starts_with($filename, 'http://') || str_starts_with($filename, 'https://');
 										$fileExt = strtolower(pathinfo(strtok($filename, '?'), PATHINFO_EXTENSION));
 										$knownExts = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'mp4', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'mp3', 'wav', 'aac', 'm4a', 'flac', 'ogg', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'zip', 'rar', 'txt', 'csv'];
-										$looksLikeFile = $isRemoteUrl || in_array($fileExt, $knownExts, true);
+										$isKnownLocalFile = preg_match('/^\d{14}_[a-f0-9]{8}_/i', $filename) === 1 || preg_match('/^freshchat_[a-f0-9]{16,64}\./i', $filename) === 1;
+										$looksLikeFile = $isRemoteUrl || ($isKnownLocalFile && in_array($fileExt, $knownExts, true));
 										$isImage = in_array($fileExt, ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'], true);
 										$isVideo = in_array($fileExt, ['mp4', 'avi', 'mov', 'mkv', 'flv', 'wmv'], true);
 										$isAudio = in_array($fileExt, ['mp3', 'wav', 'aac', 'm4a', 'flac', 'ogg'], true);
-										$fileUrl = $isRemoteUrl ? $filename : base_url('cci-attachments/' . urlencode($filename));
+										$fileUrl = $isRemoteUrl ? $filename : base_url('cci-attachments/' . rawurlencode($filename));
 										$displayName = $isRemoteUrl
 											? basename(strtok($filename, '?'))
 											: ((string) preg_replace('/^\d{14}_[a-f0-9]{8}_/', '', $filename) ?: $filename);
@@ -334,9 +242,6 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 
 							<textarea class="form-control mb-2" name="reply_text" rows="3" maxlength="10000" placeholder="Escribe tu mensaje aquí..." id="cci-reply-text" style="font-size: 0.9rem; resize: none;"></textarea>
 
-							<input type="file" name="audio_record" id="cci-audio-file" style="display: none;" accept="audio/*">
-							<input type="hidden" name="audio_record_b64" id="cci-audio-b64" value="">
-
 							<div class="d-flex gap-2 align-items-center w-100 flex-wrap">
 								<input type="file" id="cci-file-input" name="attachments[]" multiple accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.zip" style="display: none;">
 
@@ -347,14 +252,6 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 								<button type="button" class="btn btn-sm btn-outline-warning" id="cci-btn-emoji" title="Emojis" onclick="toggleEmojiPanel()">
 									<i class="bi bi-emoji-smile"></i>
 								</button>
-
-								<button type="button" class="btn btn-sm btn-outline-danger" id="cci-btn-mic" title="Grabar nota de audio">
-									<i class="bi bi-mic-fill"></i> Grabar Audio
-								</button>
-
-								<span id="cci-recording-status" style="display:none; align-items:center; gap:4px; color:#dc3545; font-size:0.8rem;">
-									<i class="bi bi-record-circle-fill"></i> Grabando <span id="cci-timer">00:00</span>
-								</span>
 
 								<span id="cci-file-count" class="badge text-bg-info" style="display:none; align-items:center; gap:4px;">
 									<i class="bi bi-paperclip"></i> <span id="cci-file-num"></span>
@@ -411,6 +308,75 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 					</div>
 				<?php endif; ?>
 				</div>
+		</div>
+
+		<!-- PANEL DE CONTACTO (tercera columna) -->
+		<?php if ($selectedId > 0): ?>
+		<div class="cci-contact-panel">
+			<div class="cci-contact-panel-body">
+				<div class="cci-contact-identity">
+					<div class="cci-contact-avatar"><?= e(mb_strtoupper(mb_substr($nombreContacto, 0, 1))) ?></div>
+					<div>
+						<div class="cci-contact-name"><?= e($nombreContacto) ?></div>
+						<div class="cci-contact-phone"><?= e($numeroContacto) ?></div>
+						<div class="cci-contact-meta">Estado: <?= e($estadoActual) ?> · <i class="bi bi-person-badge"></i> Asesor: <?= e($asesorActual) ?></div>
+					</div>
+				</div>
+
+				<?php if (!empty($advisors)): ?>
+					<form method="POST" action="<?= e(base_url('cci/conversaciones/' . $selectedId . '/assign')) ?>" class="d-flex flex-column gap-1">
+						<?= csrf_field() ?>
+						<label class="form-label mb-0" style="font-size:0.78rem; color:#6c757d;">Asignar a</label>
+						<select class="form-select form-select-sm" name="crm_asesor_id" required onchange="this.form.submit()">
+							<option value="">Asignar a...</option>
+							<?php foreach ($advisors as $advisor): ?>
+								<option value="<?= e((string) ($advisor['id'] ?? 0)) ?>"><?= e((string) ($advisor['nombre'] ?? 'Asesor')) ?> — <?= e((string) ($advisor['usuario_nombre'] ?? 'Sin usuario')) ?></option>
+							<?php endforeach; ?>
+						</select>
+					</form>
+				<?php endif; ?>
+
+				<form method="POST" action="<?= e(base_url('cci/conversaciones/' . $selectedId . '/etiqueta')) ?>" class="d-flex flex-column gap-1" id="form-asignar-etiqueta">
+					<?= csrf_field() ?>
+					<label class="form-label mb-0" style="font-size:0.78rem; color:#6c757d;">Etiqueta</label>
+					<select class="form-select form-select-sm" name="etiqueta_id" id="select-etiquetas" onchange="confirmarYEnviarEtiqueta(this)">
+						<option value="">-- Seleccionar Etiqueta --</option>
+						<?php foreach ($etiquetasActivas as $etiqueta): ?>
+							<option value="<?= $etiqueta['id'] ?>" <?= (isset($selectedData['etiqueta_id']) && $selectedData['etiqueta_id'] == $etiqueta['id']) ? 'selected' : '' ?>>
+								🏷️ <?= e($etiqueta['nombre']) ?>
+							</option>
+						<?php endforeach; ?>
+					</select>
+				</form>
+
+				<button type="button" class="btn btn-sm btn-outline-secondary w-100" data-bs-toggle="modal" data-bs-target="#modalEtiquetas" title="Administrar Etiquetas">
+					<i class="bi bi-tags-fill"></i> Administrar etiquetas
+				</button>
+
+				<button type="button" class="btn btn-lg btn-success w-100" data-bs-toggle="modal" data-bs-target="#modalCrearPotencial" title="Crear cliente potencial en CRM">
+					<i class="bi bi-person-plus-fill"></i> Cliente potencial
+				</button>
+			</div>
+		</div>
+		<?php endif; ?>
+
+		<!-- MODAL: CONFIRMAR ETIQUETA Y CIERRE DE CONVERSACIÓN -->
+		<div class="modal fade" id="modalConfirmarEtiqueta" tabindex="-1" aria-labelledby="modalConfirmarEtiquetaLabel" aria-hidden="true">
+			<div class="modal-dialog modal-dialog-centered">
+				<div class="modal-content">
+					<div class="modal-header">
+						<h5 class="modal-title" id="modalConfirmarEtiquetaLabel"><i class="bi bi-exclamation-triangle text-warning"></i> Confirmar etiqueta</h5>
+						<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+					</div>
+					<div class="modal-body">
+						<p class="mb-0">Al asignar la etiqueta <strong id="cci-modal-etiqueta-nombre"></strong>, la conversación se marcará como <strong>CERRADA</strong> automáticamente. ¿Deseas continuar?</p>
+					</div>
+					<div class="modal-footer">
+						<button type="button" class="btn btn-outline-secondary btn-sm" id="cci-btn-etiqueta-cancelar" data-bs-dismiss="modal">Cancelar</button>
+						<button type="button" class="btn btn-warning btn-sm" id="cci-btn-etiqueta-confirmar">Sí, cerrar conversación</button>
+					</div>
+				</div>
+			</div>
 		</div>
 
 		<!-- Modal para Gestión de Etiquetas -->
@@ -670,7 +636,8 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 										var cleanName = filename.split('?')[0];
 										var ext = cleanName.substring(cleanName.lastIndexOf('.') + 1).toLowerCase();
 										var knownExts = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'mp4', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'mp3', 'wav', 'aac', 'm4a', 'flac', 'ogg', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'zip', 'rar', 'txt', 'csv'];
-										var looksLikeFile = isRemoteUrl || knownExts.indexOf(ext) !== -1;
+										var isKnownLocalFile = /^\d{14}_[a-f0-9]{8}_/i.test(filename) || /^freshchat_[a-f0-9]{16,64}\./i.test(filename);
+										var looksLikeFile = isRemoteUrl || (isKnownLocalFile && knownExts.indexOf(ext) !== -1);
 										var isImage = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].indexOf(ext) !== -1;
 										var isVideo = ['mp4', 'avi', 'mov', 'mkv', 'flv', 'wmv'].indexOf(ext) !== -1;
 										var isAudio = ['mp3', 'wav', 'aac', 'm4a', 'flac', 'ogg'].indexOf(ext) !== -1;
@@ -822,10 +789,6 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 
 			if (fileInput) {
 				fileInput.addEventListener('change', function() {
-					var audioB64Input = document.getElementById('cci-audio-b64');
-					if (audioB64Input) {
-						audioB64Input.value = '';
-					}
 					removedFileIndices = [];
 					if (fileInput.files && fileInput.files.length > MAX_FILES) {
 						alert('Solo puedes adjuntar hasta ' + MAX_FILES + ' archivos por mensaje.');
@@ -841,11 +804,6 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 				var form = fileInput.closest('form');
 				if (form) {
 					form.addEventListener('submit', function(event) {
-						if ((window.__cciAudioPreparing === true) || (window.__cciMediaRecorder && window.__cciMediaRecorder.state === 'recording')) {
-							event.preventDefault();
-							alert('Espera a que termine de procesarse la nota de audio antes de enviar.');
-							return;
-						}
 						var dt = new DataTransfer();
 						var files = fileInput.files;
 						for (var j = 0; j < files.length; j++) {
@@ -892,130 +850,6 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 						fileInput.files = dtDrop.files;
 						removedFileIndices = [];
 						updateFileGallery();
-					}
-				});
-			}
-
-			// --- FUNCIONALIDAD 2: GRABATORA DE NOTA DE AUDIO (Microfono) ---
-			var btnMic = document.getElementById('cci-btn-mic');
-			var recStatus = document.getElementById('cci-recording-status');
-			var timerEl = document.getElementById('cci-timer');
-			var mediaRecorder = null;
-			var audioChunks = [];
-			var recTimer = null;
-			var seconds = 0;
-			window.__cciAudioPreparing = false;
-			window.__cciMediaRecorder = null;
-
-			function guessAudioExtension(mime) {
-				var clean = String(mime || '').toLowerCase();
-				if (clean.indexOf('mpeg') !== -1 || clean.indexOf('mp3') !== -1) return 'mp3';
-				if (clean.indexOf('ogg') !== -1) return 'ogg';
-				if (clean.indexOf('wav') !== -1) return 'wav';
-				if (clean.indexOf('aac') !== -1) return 'aac';
-				if (clean.indexOf('mp4') !== -1 || clean.indexOf('m4a') !== -1) return 'm4a';
-				if (clean.indexOf('webm') !== -1) return 'webm';
-				return 'webm';
-			}
-
-			if (btnMic) {
-				btnMic.addEventListener('click', function() {
-					if (!mediaRecorder || mediaRecorder.state === 'inactive') {
-						navigator.mediaDevices.getUserMedia({
-								audio: true
-							})
-							.then(function(stream) {
-								var preferredAudioMimes = [
-									'audio/ogg;codecs=opus',
-									'audio/webm;codecs=opus',
-									'audio/ogg',
-									'audio/webm'
-								];
-								var recorderOptions = {};
-								for (var m = 0; m < preferredAudioMimes.length; m++) {
-									if (window.MediaRecorder && typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported(preferredAudioMimes[m])) {
-										recorderOptions.mimeType = preferredAudioMimes[m];
-										break;
-									}
-								}
-								mediaRecorder = Object.keys(recorderOptions).length > 0 ? new MediaRecorder(stream, recorderOptions) : new MediaRecorder(stream);
-								window.__cciMediaRecorder = mediaRecorder;
-								audioChunks = [];
-
-								mediaRecorder.ondataavailable = function(e) {
-									audioChunks.push(e.data);
-								};
-
-								mediaRecorder.onstop = function() {
-									window.__cciAudioPreparing = true;
-									var audioBlob = new Blob(audioChunks, {
-										type: mediaRecorder && mediaRecorder.mimeType ? mediaRecorder.mimeType : ((audioChunks[0] && audioChunks[0].type) ? audioChunks[0].type : 'audio/webm')
-									});
-									var blobMime = audioBlob.type || 'audio/webm';
-									var audioExt = guessAudioExtension(blobMime);
-									var file = new File([audioBlob], 'audio_note_' + Date.now() + '.' + audioExt, {
-										type: blobMime
-									});
-									var audioB64Input = document.getElementById('cci-audio-b64');
-
-									var container = new DataTransfer();
-									container.items.add(file);
-									document.getElementById('cci-audio-file').files = container.files;
-
-									if (audioB64Input) {
-										var reader = new FileReader();
-										reader.onload = function(ev) {
-											audioB64Input.value = typeof ev.target.result === 'string' ? ev.target.result : '';
-											window.__cciAudioPreparing = false;
-											var fileCountReady = document.getElementById('cci-file-count');
-											var fileNumReady = document.getElementById('cci-file-num');
-											if (fileCountReady && fileNumReady) {
-												fileNumReady.textContent = 'Nota de audio lista';
-												fileCountReady.style.display = 'inline-flex';
-											}
-										};
-										reader.onerror = function() {
-											window.__cciAudioPreparing = false;
-										};
-										reader.onabort = function() {
-											window.__cciAudioPreparing = false;
-										};
-										reader.readAsDataURL(audioBlob);
-									} else {
-										window.__cciAudioPreparing = false;
-									}
-
-									var fileCountEl = document.getElementById('cci-file-count');
-									var fileNumEl = document.getElementById('cci-file-num');
-									if (fileCountEl && fileNumEl) {
-										fileNumEl.textContent = 'Procesando audio...';
-										fileCountEl.style.display = 'inline-flex';
-									}
-								};
-
-								mediaRecorder.start();
-								btnMic.classList.replace('btn-outline-danger', 'btn-danger');
-								if (recStatus) recStatus.style.display = 'inline-flex';
-
-								seconds = 0;
-								recTimer = setInterval(function() {
-									seconds++;
-									var mins = String(Math.floor(seconds / 60)).padStart(2, '0');
-									var secs = String(seconds % 60).padStart(2, '0');
-									if (timerEl) timerEl.textContent = mins + ':' + secs;
-								}, 1000);
-							})
-							.catch(function(err) {
-								alert('No se pudo acceder al micrófono: ' + err.message);
-							});
-					} else if (mediaRecorder.state === 'recording') {
-						mediaRecorder.stop();
-						mediaRecorder.stream.getTracks().forEach(function(track) {
-							track.stop();
-						});
-						clearInterval(recTimer);
-						btnMic.classList.replace('btn-danger', 'btn-outline-danger');
-						if (recStatus) recStatus.style.display = 'none';
 					}
 				});
 			}
@@ -1180,15 +1014,51 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 			updateBulkUi();
 		})();
 
+		var cciEtiquetaSelectPendiente = null;
 		function confirmarYEnviarEtiqueta(select) {
-			if (select.value !== "") {
-				if (confirm("Al seleccionar una etiqueta, la conversación se marcará como CERRADA automáticamente. ¿Deseas continuar?")) {
-					document.getElementById('form-asignar-etiqueta').submit();
-				} else {
-					select.value = ""; // Revertir selección si cancela
-				}
+			if (select.value === "") {
+				return;
+			}
+			cciEtiquetaSelectPendiente = select;
+			var nombreEl = document.getElementById('cci-modal-etiqueta-nombre');
+			if (nombreEl) {
+				nombreEl.textContent = select.options[select.selectedIndex].text.trim();
+			}
+			var modalEl = document.getElementById('modalConfirmarEtiqueta');
+			if (modalEl && window.bootstrap && window.bootstrap.Modal) {
+				window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
 			}
 		}
+
+		(function() {
+			var modalEl = document.getElementById('modalConfirmarEtiqueta');
+			var btnConfirmar = document.getElementById('cci-btn-etiqueta-confirmar');
+			var btnCancelar = document.getElementById('cci-btn-etiqueta-cancelar');
+			if (btnConfirmar) {
+				btnConfirmar.addEventListener('click', function() {
+					if (modalEl && window.bootstrap && window.bootstrap.Modal) {
+						window.bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+					}
+					document.getElementById('form-asignar-etiqueta').submit();
+				});
+			}
+			if (btnCancelar) {
+				btnCancelar.addEventListener('click', function() {
+					if (cciEtiquetaSelectPendiente) {
+						cciEtiquetaSelectPendiente.value = "";
+						cciEtiquetaSelectPendiente = null;
+					}
+				});
+			}
+			if (modalEl) {
+				modalEl.addEventListener('hidden.bs.modal', function() {
+					if (cciEtiquetaSelectPendiente) {
+						cciEtiquetaSelectPendiente.value = "";
+						cciEtiquetaSelectPendiente = null;
+					}
+				});
+			}
+		})();
 
 		// Cambio dinámico entre pestañas de Respuesta y Notas Privadas
 		function switchTab(button, tabId) {

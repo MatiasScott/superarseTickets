@@ -24,9 +24,9 @@ $filterQuery = (string) ($filterQuery ?? '');
 	$asesor = (string) ($row['asesor'] ?? 'Sin asignar');
 	$hayNuevos = $active ? false : (bool) ($row['hay_nuevos'] ?? false);
 	?>
-	<a class="cci-thread-item<?= $active ? ' active' : '' ?>" href="<?= e(base_url('cci/conversaciones?' . $filterQuery . '&selected_id=' . $id)) ?>" style="position: relative;" data-phone="<?= e($numero) ?>">
+	<a class="cci-thread-item<?= $active ? ' active' : '' ?><?= $hayNuevos ? ' has-new' : '' ?>" href="<?= e(base_url('cci/conversaciones?' . $filterQuery . '&selected_id=' . $id)) ?>" style="position: relative;" data-phone="<?= e($numero) ?>">
 		<?php if ($hayNuevos): ?>
-			<span class="cci-badge-unread">•</span>
+			<span class="cci-badge-unread" title="Respuesta del cliente sin contestar">•</span>
 		<?php endif; ?>
 		<div style="position: absolute; left: 8px; top: 8px; z-index: 2;">
 			<input type="checkbox" class="form-check-input cci-conv-checkbox" value="<?= e((string) $id) ?>" onclick="event.stopPropagation();" onchange="event.stopPropagation();">
@@ -44,7 +44,7 @@ $filterQuery = (string) ($filterQuery ?? '');
 					<span class="badge text-bg-secondary" style="font-size: 0.65rem;">Cerrada</span>
 				<?php endif; ?>
 			</div>
-			<div class="cci-thread-snippet"><?= e(mb_substr($ultimo, 0, 50)) ?></div>
+			<div class="cci-thread-snippet"><?= $hayNuevos ? '<strong>' . e(mb_substr($ultimo, 0, 50)) . '</strong>' : e(mb_substr($ultimo, 0, 50)) ?></div>
 		</div>
 	</a>
 <?php endforeach; ?>

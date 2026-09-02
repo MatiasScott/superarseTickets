@@ -65,11 +65,87 @@
 
 .cci-chat-shell {
     display: grid;
-    grid-template-columns: 280px 1fr;
+    grid-template-columns: 280px 1fr 260px;
     flex: 1;
     overflow: hidden;
     gap: 0;
     border-top: 1px solid var(--wa-border);
+}
+
+.cci-chat-shell:not(:has(.cci-contact-panel)) {
+    grid-template-columns: 280px 1fr;
+}
+
+/* ====================
+   PANEL DE CONTACTO (Tercera columna, compacto)
+   ==================== */
+
+.cci-contact-panel {
+    border-left: 2px solid var(--wa-border);
+    background: #fbfdff;
+    height: 100%;
+    overflow-y: auto;
+}
+
+.cci-contact-panel-body {
+    padding: 16px 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 10px;
+}
+
+.cci-contact-panel-body hr {
+    display: block;
+    width: 100%;
+    margin: 4px 0;
+}
+
+.cci-contact-panel-body form,
+.cci-contact-panel-body .d-flex.flex-column,
+.cci-contact-panel-body .d-flex.flex-row {
+    width: 100%;
+    min-width: 0;
+    text-align: left;
+}
+
+.cci-contact-identity {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    text-align: center;
+}
+
+.cci-contact-avatar {
+    width: 56px;
+    height: 56px;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    font-weight: 700;
+    font-size: 1.3rem;
+    color: #1c4f84;
+    background: #d9ebff;
+    flex-shrink: 0;
+}
+
+.cci-contact-name {
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: #222;
+}
+
+.cci-contact-phone {
+    font-size: 0.82rem;
+    color: #555;
+}
+
+.cci-contact-meta {
+    font-size: 0.76rem;
+    color: #888;
 }
 
 /* ====================
@@ -137,6 +213,16 @@
     background: #e9f2ff;
     border-left: 4px solid var(--wa-accent);
     padding-left: 8px;
+}
+
+.cci-thread-item.has-new {
+    background: #fff8f0;
+    border-left: 4px solid #ff5252;
+    padding-left: 8px;
+}
+
+.cci-thread-item.has-new .cci-thread-name {
+    color: #d3390b;
 }
 
 .cci-avatar {
@@ -677,11 +763,15 @@
     .cci-chat-shell {
         grid-template-columns: 1fr;
     }
-    
+
     .cci-chat-list {
         display: none;
     }
-    
+
+    .cci-contact-panel {
+        display: none;
+    }
+
     .cci-bubble {
         max-width: 85%;
     }
