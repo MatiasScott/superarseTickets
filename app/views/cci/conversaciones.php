@@ -56,7 +56,49 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 		<div class="cci-chat-list">
 			<div class="cci-chat-list-head">
 				<strong style="font-size: 0.95rem;">Conversaciones</strong>
-				<span class="badge text-bg-secondary" style="font-size: 0.8rem;"><?= e((string) $total) ?></span>
+				<div class="d-flex align-items-center gap-2">
+					<div class="dropdown">
+						<button class="btn btn-sm btn-outline-secondary cci-filter-button" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Filtrar conversaciones">
+							<i class="bi bi-funnel"></i>
+						</button>
+						<form method="GET" class="dropdown-menu dropdown-menu-end p-3 cci-filter-menu">
+							<input type="hidden" name="selected_id" value="<?= e((string) $selectedId) ?>">
+							<label class="form-label" for="cci-filter-estado">Estado</label>
+							<select class="form-select form-select-sm mb-2" id="cci-filter-estado" name="estado">
+								<?php foreach (['activo' => 'Activas', 'cerrado' => 'Cerradas', 'todos' => 'Todas'] as $value => $label): ?>
+									<option value="<?= e($value) ?>" <?= $estadoFilter === $value ? 'selected' : '' ?>><?= e($label) ?></option>
+								<?php endforeach; ?>
+							</select>
+							<label class="form-label" for="cci-filter-asesor">Asesor</label>
+							<select class="form-select form-select-sm mb-2" id="cci-filter-asesor" name="asesor">
+								<option value="0">Todos</option>
+								<?php foreach ($advisors as $advisor): ?>
+									<option value="<?= e((string) ($advisor['usuario_id'] ?? 0)) ?>" <?= $asesorFilter === (int) ($advisor['usuario_id'] ?? 0) ? 'selected' : '' ?>><?= e((string) ($advisor['nombre'] ?? 'Asesor')) ?></option>
+								<?php endforeach; ?>
+							</select>
+							<label class="form-label" for="cci-filter-etiqueta">Etiqueta</label>
+							<select class="form-select form-select-sm mb-2" id="cci-filter-etiqueta" name="etiqueta">
+								<option value="0">Todas</option>
+								<?php foreach ($todasLasEtiquetas as $etFiltro): ?>
+									<option value="<?= (int) ($etFiltro['id'] ?? 0) ?>" <?= $etiquetaFilter === (int) ($etFiltro['id'] ?? 0) ? 'selected' : '' ?>><?= e((string) ($etFiltro['nombre'] ?? '')) ?></option>
+								<?php endforeach; ?>
+							</select>
+							<div class="row g-2 mb-3">
+								<div class="col-6"><label class="form-label" for="cci-filter-fecha-inicio">Desde</label><input type="date" class="form-control form-control-sm" id="cci-filter-fecha-inicio" name="fecha_inicio" value="<?= e($fechaInicio) ?>"></div>
+								<div class="col-6"><label class="form-label" for="cci-filter-fecha-fin">Hasta</label><input type="date" class="form-control form-control-sm" id="cci-filter-fecha-fin" name="fecha_fin" value="<?= e($fechaFin) ?>"></div>
+							</div>
+							<div class="d-flex gap-2">
+								<a href="<?= e(base_url('cci/conversaciones')) ?>" class="btn btn-sm btn-outline-secondary flex-fill">Limpiar</a>
+								<button type="submit" class="btn btn-sm btn-primary flex-fill"><i class="bi bi-check-lg"></i> Aplicar</button>
+							</div>
+						</form>
+					</div>
+					<span class="badge text-bg-secondary" style="font-size: 0.8rem;"><?= e((string) $total) ?></span>
+				</div>
+			</div>
+			<div class="cci-phone-search">
+				<i class="bi bi-search"></i>
+				<input type="search" id="cci-phone-search" value="<?= e($phoneSearch) ?>" placeholder="Buscar por teléfono..." autocomplete="off">
 			</div>
 			<div id="cci-bulk-actions" class="px-2 py-2" style="display:none; border-bottom: 1px solid #e9ecef; background: #f8fbff;">
 				<div class="d-flex align-items-center gap-2 flex-wrap">
