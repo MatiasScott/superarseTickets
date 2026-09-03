@@ -1064,23 +1064,24 @@ document.addEventListener('DOMContentLoaded', () => {
 		const searchValue = String(prospectSearchInput?.value || '').trim();
 		if (searchValue !== '') {
 			params.set('q', searchValue);
-		}
-		const selectedOrigins = getCheckedProspectFilterValues('prospect-origin');
-		const selectedStages = getCheckedProspectFilterValues('prospect-stage');
-		const selectedCareers = getCheckedProspectFilterValues('prospect-career');
-		const selectedCreatedBy = getCheckedProspectFilterValues('prospect-created-by');
-		if (selectedOrigins.length > 0) params.set('origen', selectedOrigins.join(','));
-		if (selectedStages.length > 0) params.set('etapa', selectedStages.join(','));
-		if (selectedCareers.length > 0) params.set('carrera', selectedCareers.join(','));
-		if (selectedCreatedBy.length > 0) params.set('creado_por', selectedCreatedBy.join(','));
-		const createdPreset = String(prospectCreatedPreset?.value || '').trim();
-		if (createdPreset !== '') {
-			params.set('created_preset', createdPreset);
-			if (createdPreset === 'custom') {
-				const fromDate = String(prospectDateFromInput?.value || '').trim();
-				const toDate = String(prospectDateToInput?.value || '').trim();
-				if (fromDate !== '') params.set('date_from', fromDate);
-				if (toDate !== '') params.set('date_to', toDate);
+		} else {
+			const selectedOrigins = getCheckedProspectFilterValues('prospect-origin');
+			const selectedStages = getCheckedProspectFilterValues('prospect-stage');
+			const selectedCareers = getCheckedProspectFilterValues('prospect-career');
+			const selectedCreatedBy = getCheckedProspectFilterValues('prospect-created-by');
+			if (selectedOrigins.length > 0) params.set('origen', selectedOrigins.join(','));
+			if (selectedStages.length > 0) params.set('etapa', selectedStages.join(','));
+			if (selectedCareers.length > 0) params.set('carrera', selectedCareers.join(','));
+			if (selectedCreatedBy.length > 0) params.set('creado_por', selectedCreatedBy.join(','));
+			const createdPreset = String(prospectCreatedPreset?.value || '').trim();
+			if (createdPreset !== '') {
+				params.set('created_preset', createdPreset);
+				if (createdPreset === 'custom') {
+					const fromDate = String(prospectDateFromInput?.value || '').trim();
+					const toDate = String(prospectDateToInput?.value || '').trim();
+					if (fromDate !== '') params.set('date_from', fromDate);
+					if (toDate !== '') params.set('date_to', toDate);
+				}
 			}
 		}
 		const sortDirection = String(prospectSortButton?.getAttribute('data-sort-direction') || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';

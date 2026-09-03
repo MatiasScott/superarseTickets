@@ -28,7 +28,7 @@ $filterQuery = (string) ($filterQuery ?? '');
 		<?php if ($hayNuevos): ?>
 			<span class="cci-badge-unread" title="Respuesta del cliente sin contestar">•</span>
 		<?php endif; ?>
-		<div style="position: absolute; left: 8px; top: 8px; z-index: 2;">
+		<div class="cci-selection-control" onclick="event.stopPropagation();">
 			<input type="checkbox" class="form-check-input cci-conv-checkbox" value="<?= e((string) $id) ?>" onclick="event.stopPropagation();" onchange="event.stopPropagation();">
 		</div>
 		<div class="cci-avatar"><?= e(strtoupper(substr($nombre, 0, 1))) ?></div>

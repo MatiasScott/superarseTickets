@@ -2185,8 +2185,14 @@ class CCIController extends Controller
 	private function extractFreshchatMessage(string $messageParts): array
 	{
 		$parts = json_decode($messageParts, true);
+		if (is_string($parts)) {
+			$parts = json_decode($parts, true);
+		}
 		if (!is_array($parts)) {
 			$text = trim($messageParts);
+			if (preg_match('/sla\s+policy.*breach/i', $text) === 1) {
+				return ['text' => '', 'tipo' => 'sistema', 'media_name' => ''];
+			}
 			return ['text' => $text, 'tipo' => preg_match('#^https?://#i', $text) ? 'archivo' : 'texto', 'media_name' => ''];
 		}
 
@@ -2200,7 +2206,12 @@ class CCIController extends Controller
 			}
 			$text = trim((string) ($part['text']['content'] ?? ''));
 			if ($text !== '') {
-				$texts[] = $text;
+				if (preg_match('/sla\s+policy.*breach/i', $text) === 1) {
+					continue;
+				}
+				$texts[] = preg_match('/^SLA\s+Policy\b/i', $text) === 1
+					? '[SLA] ' . trim((string) preg_replace('/^SLA\s+Policy\s*:?\s*/i', '', $text))
+					: $text;
 			}
 			foreach (['image', 'video', 'file', 'audio', 'document'] as $mediaType) {
 				$name = trim((string) ($part[$mediaType]['name'] ?? ''));
@@ -5044,15 +5055,6 @@ class CCIController extends Controller
 					WHERE bc.id = :id AND bc.canal IN ("freshchat", "whatsapp") LIMIT 1');
 				$selStmt->execute(['id' => $selectedId]);
 				$selected = $selStmt->fetch() ?: null;
-
-				if (is_array($selected) && (string) ($selected['canal'] ?? '') === 'freshchat') {
-					$refStmt = $db->prepare('SELECT external_conversation_id FROM cci_conversacion_refs WHERE provider_code = "freshchat" AND conversacion_id = :id LIMIT 1');
-					$refStmt->execute(['id' => $selectedId]);
-					$externalConversationId = trim((string) ($refStmt->fetchColumn() ?: ''));
-					if ($externalConversationId !== '') {
-						$this->syncFreshchatConversationLive($db, $selectedId, $externalConversationId);
-					}
-				}
 
 				// En algunos entornos bot_mensajes no tiene columna tipo/fecha: seleccionar solo lo disponible.
 				$msgColumns = $this->getTableColumnsSafe($db, 'bot_mensajes');

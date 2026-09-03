@@ -195,13 +195,27 @@
 
 .cci-thread-item {
     display: grid;
-    grid-template-columns: 40px 1fr;
+    grid-template-columns: 24px 40px minmax(0, 1fr);
     gap: 10px;
     padding: 10px 12px;
     text-decoration: none;
     color: inherit;
     border-bottom: 1px solid #edf3f9;
     transition: background 0.2s;
+    cursor: pointer;
+}
+
+.cci-selection-control {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 2px;
+    position: relative;
+    z-index: 2;
+}
+
+.cci-selection-control .cci-conv-checkbox {
+    margin: 0;
     cursor: pointer;
 }
 
@@ -381,6 +395,15 @@
 
 .cci-bubble.out {
     align-self: flex-end;
+}
+
+.cci-bubble.system {
+    align-self: center;
+    max-width: 85%;
+    background: #f2f4f7;
+    border: 1px dashed #aab4c0;
+    color: #657181;
+    font-size: 0.8rem;
 }
 
 .cci-bubble-text {

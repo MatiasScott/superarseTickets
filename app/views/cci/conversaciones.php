@@ -166,11 +166,18 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 								<?php
 								$isOut = ((int) ($msg['es_bot'] ?? 0)) === 1;
 								$text = (string) ($msg['mensaje'] ?? '');
+								if (preg_match('/sla\s+policy.*breach/i', $text) === 1) {
+									continue;
+								}
+								$isSystemMessage = str_starts_with(trim($text), '[SLA]');
+								if ($isSystemMessage) {
+									$text = 'SLA: ' . trim((string) preg_replace('/^\[SLA\]\s*/', '', $text));
+								}
 								$fecha = (string) ($msg['fecha'] ?? ($msg['created_at'] ?? ''));
 								$msgType = (string) ($msg['tipo'] ?? 'texto');
 								$msgId = (int) ($msg['id'] ?? 0);
 								?>
-								<div class="cci-bubble <?= $isOut ? 'out' : 'in' ?>" data-id="<?= e((string) $msgId) ?>">
+								<div class="cci-bubble <?= $isSystemMessage ? 'system' : ($isOut ? 'out' : 'in') ?>" data-id="<?= e((string) $msgId) ?>">
 									<?php if ($msgType === 'archivo'): ?>
 										<?php
 										$filename = $text;
@@ -661,6 +668,9 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 						var added = false;
 
 						data.messages.forEach(function(msg) {
+							if (/sla\s+policy.*breach/i.test(String(msg.texto || ''))) {
+								return;
+							}
 							if (!knownIds.has(msg.id)) {
 								knownIds.add(msg.id);
 								if (scrollEl) {
@@ -668,7 +678,9 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 									if (placeholder) placeholder.remove();
 
 									var bubble = document.createElement('div');
-									bubble.className = 'cci-bubble ' + (msg.es_bot === 1 || msg.es_bot === true ? 'out' : 'in');
+									var isSystemMessage = /^\[SLA\]/.test(String(msg.texto || '').trim());
+									var displayText = isSystemMessage ? 'SLA: ' + String(msg.texto || '').replace(/^\[SLA\]\s*/, '') : String(msg.texto || '');
+									bubble.className = 'cci-bubble ' + (isSystemMessage ? 'system' : (msg.es_bot === 1 || msg.es_bot === true ? 'out' : 'in'));
 									bubble.setAttribute('data-id', msg.id);
 
 									var content = '';
@@ -721,7 +733,7 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 												'</a>';
 										}
 									} else {
-										content = '<div class="cci-bubble-text">' + escHtml(msg.texto) + '</div>';
+										content = '<div class="cci-bubble-text">' + escHtml(displayText) + '</div>';
 									}
 
 									bubble.innerHTML = content +
