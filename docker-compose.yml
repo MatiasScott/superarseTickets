@@ -6,6 +6,9 @@ services:
 
     restart: unless-stopped
 
+    environment:
+      TZ: America/Guayaquil
+
     ports:
       - "8086:80"
 
@@ -15,6 +18,7 @@ services:
     volumes:
       - ./storage:/var/www/html/storage
       - ./public/cci-attachments:/var/www/html/public/cci-attachments
+      - ./timezone.ini:/usr/local/etc/php/conf.d/99-timezone.ini:ro
 
     networks:
       - moodle_net
