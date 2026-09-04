@@ -661,6 +661,9 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 								if (typeof window.__cciRebindBulkCheckboxes === 'function') {
 									window.__cciRebindBulkCheckboxes();
 								}
+								if (typeof window.__cciRefreshNewTimers === 'function') {
+									window.__cciRefreshNewTimers();
+								}
 							}
 						}
 
@@ -987,6 +990,29 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 				updateBulkUi();
 			};
 			window.__cciRebindBulkCheckboxes();
+
+			// Contador "hace X min" solo para conversaciones con respuesta nueva del cliente (pintadas en rojo)
+			window.__cciRefreshNewTimers = function() {
+				var nowSec = Math.floor(Date.now() / 1000);
+				document.querySelectorAll('.cci-new-timer[data-ts]').forEach(function(el) {
+					var ts = parseInt(el.getAttribute('data-ts'), 10);
+					if (!ts) return;
+					var diffMin = Math.max(0, Math.floor((nowSec - ts) / 60));
+					var label;
+					if (diffMin < 1) {
+						label = 'Hace un momento';
+					} else if (diffMin < 60) {
+						label = 'Hace ' + diffMin + ' min';
+					} else {
+						var hours = Math.floor(diffMin / 60);
+						var mins = diffMin % 60;
+						label = 'Hace ' + hours + ' h' + (mins > 0 ? ' ' + mins + ' min' : '');
+					}
+					el.textContent = label;
+				});
+			};
+			window.__cciRefreshNewTimers();
+			setInterval(window.__cciRefreshNewTimers, 30000);
 
 			if (btnBulkClear) {
 				btnBulkClear.addEventListener('click', function() {

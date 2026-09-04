@@ -198,6 +198,7 @@
     grid-template-columns: 24px 40px minmax(0, 1fr);
     gap: 10px;
     padding: 10px 12px;
+    border-left: 4px solid transparent;
     text-decoration: none;
     color: inherit;
     border-bottom: 1px solid #edf3f9;
@@ -225,18 +226,25 @@
 
 .cci-thread-item.active {
     background: #e9f2ff;
-    border-left: 4px solid var(--wa-accent);
-    padding-left: 8px;
+    border-left-color: var(--wa-accent);
 }
 
 .cci-thread-item.has-new {
     background: #fff8f0;
-    border-left: 4px solid #ff5252;
-    padding-left: 8px;
+    border-left-color: #ff5252;
 }
 
 .cci-thread-item.has-new .cci-thread-name {
     color: #d3390b;
+}
+
+.cci-new-timer {
+    display: block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #ff5252;
+    margin-top: 2px;
+    white-space: nowrap;
 }
 
 .cci-avatar {

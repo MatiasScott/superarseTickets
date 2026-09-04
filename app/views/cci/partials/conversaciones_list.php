@@ -23,6 +23,7 @@ $filterQuery = (string) ($filterQuery ?? '');
 	$estado = (string) ($row['estado'] ?? 'activo');
 	$asesor = (string) ($row['asesor'] ?? 'Sin asignar');
 	$hayNuevos = $active ? false : (bool) ($row['hay_nuevos'] ?? false);
+	$ultimoTs = (string) ($row['_raw_ts'] ?? '');
 	?>
 	<a class="cci-thread-item<?= $active ? ' active' : '' ?><?= $hayNuevos ? ' has-new' : '' ?>" href="<?= e(base_url('cci/conversaciones?' . $filterQuery . '&selected_id=' . $id)) ?>" style="position: relative;" data-phone="<?= e($numero) ?>">
 		<?php if ($hayNuevos): ?>
@@ -37,6 +38,9 @@ $filterQuery = (string) ($filterQuery ?? '');
 				<span class="cci-thread-name"><?= e($nombre) ?></span>
 				<small style="font-size: 0.8rem;"><?= e($fecha) ?></small>
 			</div>
+			<?php if ($hayNuevos && $ultimoTs !== ''): ?>
+				<span class="cci-new-timer" data-ts="<?= e($ultimoTs) ?>">Hace un momento</span>
+			<?php endif; ?>
 			<div class="cci-thread-meta" style="font-size: 0.8rem;"><?= e($numero !== '' ? $numero : 'Sin número') ?></div>
 			<div class="cci-thread-meta" style="font-size: 0.78rem;">
 				<i class="bi bi-person-badge"></i> <?= e($asesor) ?>

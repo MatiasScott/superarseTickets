@@ -2,11 +2,22 @@
 
 declare(strict_types=1);
 
-// Extender sesión inactiva a 60 minutos.
-ini_set('session.gc_maxlifetime', '3600');
-ini_set('session.cookie_lifetime', '3600');
+// Sesión mínima de 1 hora, tomando el valor de SESSION_LIFETIME (minutos) del .env.
+$envPath = dirname(__DIR__) . '/.env';
+$sessionLifetimeMinutes = 60;
+if (is_file($envPath)) {
+	foreach (file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $envLine) {
+		if (str_starts_with(trim($envLine), 'SESSION_LIFETIME=')) {
+			$sessionLifetimeMinutes = (int) trim(explode('=', $envLine, 2)[1] ?? '60');
+			break;
+		}
+	}
+}
+$sessionLifetimeSeconds = max(60, $sessionLifetimeMinutes) * 60;
+ini_set('session.gc_maxlifetime', (string) $sessionLifetimeSeconds);
+ini_set('session.cookie_lifetime', (string) $sessionLifetimeSeconds);
 session_set_cookie_params([
-	'lifetime' => 3600,
+	'lifetime' => $sessionLifetimeSeconds,
 	'path' => '/',
 	'domain' => '',
 	'secure' => !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off',

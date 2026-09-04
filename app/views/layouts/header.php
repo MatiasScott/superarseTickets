@@ -13,7 +13,8 @@
 	<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 	<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
 	<?php foreach ($styles as $style): ?>
-		<link rel="stylesheet" href="<?= e(asset('css/' . $style)) ?>">
+		<?php $stylePath = ROOT_PATH . '/public/css/' . $style; ?>
+		<link rel="stylesheet" href="<?= e(asset('css/' . $style) . '?v=' . (is_file($stylePath) ? (string) filemtime($stylePath) : (string) time())) ?>">
 	<?php endforeach; ?>
 	<script>
 		window.BASE_URL = <?= json_encode(rtrim(base_url(''), '/') . '/', JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
