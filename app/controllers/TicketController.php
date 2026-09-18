@@ -475,13 +475,14 @@ class TicketController extends Controller
 				if (!isset($attachmentsByMessage[$messageId])) {
 					$attachmentsByMessage[$messageId] = [];
 				}
+				$attachmentPath = (string) ($attRow['storage_path'] ?? '');
 				$attachmentsByMessage[$messageId][] = [
 					'id' => (int) ($attRow['id'] ?? 0),
 					'filename' => (string) ($attRow['filename_original'] ?? 'Adjunto'),
 					'mime' => (string) ($attRow['mime'] ?? 'application/octet-stream'),
 					'size' => (int) ($attRow['size_bytes'] ?? 0),
 					'is_inline' => !empty($attRow['is_inline']),
-					'missing' => !is_file((string) ($attRow['storage_path'] ?? '')),
+					'missing' => $attachmentPath === '' || !is_file($attachmentPath),
 				];
 			}
 
@@ -1238,13 +1239,15 @@ class TicketController extends Controller
 			}
 
 			$basePath = realpath(ROOT_PATH . '/uploads/tickets');
+			$incomingBasePath = realpath(STORAGE_PATH . '/tickets');
 			$legacyBasePath = realpath(STORAGE_PATH . '/uploads/ticket_reply_attachments');
 			$legacyRootBasePath = realpath(ROOT_PATH . '/uploads/ticket_reply_attachments');
 			$realFile = realpath($fullPath);
 			$insideNewBase = $this->pathStartsWith($realFile, $basePath);
+			$insideIncomingBase = $this->pathStartsWith($realFile, $incomingBasePath);
 			$insideLegacyBase = $this->pathStartsWith($realFile, $legacyBasePath);
 			$insideLegacyRootBase = $this->pathStartsWith($realFile, $legacyRootBasePath);
-			if (!$insideNewBase && !$insideLegacyBase && !$insideLegacyRootBase) {
+			if (!$insideNewBase && !$insideIncomingBase && !$insideLegacyBase && !$insideLegacyRootBase) {
 				http_response_code(403);
 				echo 'Acceso denegado al adjunto.';
 				return;
