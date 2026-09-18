@@ -34,7 +34,17 @@ date_default_timezone_set($appConfig['timezone'] ?? 'UTC');
 
 header('Content-Type: application/json; charset=UTF-8');
 
-$providedToken = trim((string) ($_GET['token'] ?? $_POST['token'] ?? ''));
+$cliOptions = [];
+if (PHP_SAPI === 'cli') {
+    foreach (array_slice($argv ?? [], 1) as $argument) {
+        if (str_contains($argument, '=')) {
+            [$key, $value] = explode('=', $argument, 2);
+            $cliOptions[trim($key)] = $value;
+        }
+    }
+}
+
+$providedToken = trim((string) ($cliOptions['token'] ?? $_GET['token'] ?? $_POST['token'] ?? ''));
 $expectedToken = trim((string) env('MAIL_AUTO_SYNC_INTERNAL_TOKEN', ''));
 if ($expectedToken === '' || $providedToken === '' || !hash_equals($expectedToken, $providedToken)) {
     http_response_code(403);
@@ -42,7 +52,7 @@ if ($expectedToken === '' || $providedToken === '' || !hash_equals($expectedToke
     exit;
 }
 
-$limit = max(1, min(20, (int) ($_GET['limit'] ?? $_POST['limit'] ?? 20)));
+$limit = max(1, min(200, (int) ($cliOptions['limit'] ?? $_GET['limit'] ?? $_POST['limit'] ?? 20)));
 
 $db = Database::getInstance()->connection();
 $db->exec("CREATE TABLE IF NOT EXISTS cola_procesos (
