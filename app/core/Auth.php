@@ -314,6 +314,8 @@ class Auth
 				return false;
 			}
 
+			(new Usuario())->registrarUltimoAcceso((int) $user['id']);
+
 			self::login([
 				'id' => (int) ($user['id'] ?? 0),
 				'nombre' => $user['nombre'] ?? 'Usuario',

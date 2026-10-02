@@ -4,6 +4,12 @@ class Usuario extends Model
 {
 	protected string $table = 'usuarios';
 
+	public function registrarUltimoAcceso(int $usuarioId): void
+	{
+		$stmt = $this->db->prepare("UPDATE {$this->table} SET last_login_at = NOW() WHERE id = :id");
+		$stmt->execute(['id' => $usuarioId]);
+	}
+
 	public function findByUsername(string $credential): ?array
 	{
 		$sql = "SELECT u.*, r.nombre AS rol_nombre

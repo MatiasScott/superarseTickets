@@ -36,13 +36,14 @@
 							<th>Rol</th>
 							<th>Estado</th>
 							<th>Fecha de Registro</th>
+							<th>Último inicio de sesión</th>
 							<th>Acciones</th>
 						</tr>
 					</thead>
 					<tbody>
 						<?php if (empty($usuarios)): ?>
 							<tr>
-								<td colspan="6" class="text-center py-4 text-muted">
+								<td colspan="7" class="text-center py-4 text-muted">
 									No hay cuentas registradas. <a href="<?= base_url('usuarios/create') ?>">Crear una</a>
 								</td>
 							</tr>
@@ -69,6 +70,7 @@
 										<span class="badge bg-<?= e($estado_class) ?>"><?= e(ucfirst($usuario['estado'] ?? 'activo')) ?></span>
 									</td>
 									<td><?= e(date('d/m/Y H:i', strtotime($usuario['created_at'] ?? 'now'))) ?></td>
+									<td><?= !empty($usuario['last_login_at']) ? e(date('d/m/Y H:i:s', strtotime($usuario['last_login_at']))) : 'Sin accesos registrados' ?></td>
 									<td>
 										<div class="btn-group btn-group-sm">
 											<a href="<?= base_url('usuarios/' . $usuario['id']) ?>" class="btn btn-outline-secondary" title="Ver">

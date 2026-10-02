@@ -454,6 +454,19 @@ Funciones:
 3. Ver detalle.
 4. Editar cuenta.
 5. Eliminar cuenta (según reglas).
+6. Consultar el último inicio de sesión en la lista y en el detalle de cada cuenta.
+
+Último inicio de sesión:
+- Se registra al validar correctamente las credenciales, no al navegar ni al cerrar sesión.
+- Se muestra la fecha y hora en la zona horaria de Ecuador (UTC-5).
+- "Sin accesos registrados" indica que no se ha registrado un inicio de sesión desde que se habilitó esta función; no reconstruye accesos anteriores.
+- Se conserva únicamente el acceso más reciente, no un historial.
+
+Requisito técnico:
+- La tabla `usuarios` de la base configurada en la aplicación debe tener la columna `last_login_at DATETIME NULL DEFAULT NULL`.
+- Si la columna todavía no existe, ejecutar en esa base: `ALTER TABLE usuarios ADD COLUMN last_login_at DATETIME NULL DEFAULT NULL AFTER estado;`.
+- La aplicación actualiza el campo directamente mediante PDO y `NOW()`, sin utilizar un procedimiento almacenado ni fijar un nombre de base de datos.
+- Si falla el registro del acceso, no se establece la sesión; el error se registra en el log del servidor y se muestra el aviso de fallo de inicio de sesión.
 
 Crear cuenta (paso a paso):
 1. Ingrese a Usuarios > Crear.

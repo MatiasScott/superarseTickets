@@ -69,6 +69,10 @@
 										<p class="mb-1"><strong>Última Actualización:</strong></p>
 										<p><?= e(date('d/m/Y H:i:s', strtotime($usuario['updated_at'] ?? 'now'))) ?></p>
 									</div>
+									<div class="col-md-6">
+										<p class="mb-1"><strong>Último inicio de sesión:</strong></p>
+										<p><?= !empty($usuario['last_login_at']) ? e(date('d/m/Y H:i:s', strtotime($usuario['last_login_at']))) : 'Sin accesos registrados' ?></p>
+									</div>
 								</div>
 							</div>
 						</div>
