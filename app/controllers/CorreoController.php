@@ -1217,6 +1217,7 @@ class CorreoController extends Controller
 		// Mapeo local-de-email -> nombre(s) de grupo (en orden de preferencia)
 		$map = [
 			'becas' => ['bienestar institucional'],
+			'informacion' => ['bienestar institucional'],
 			'matriculas' => ['contabilidad y facturacion'],
 			'direcciondocencia' => ['docencia'],
 			'docencia' => ['docencia'],
