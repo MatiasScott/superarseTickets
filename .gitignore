@@ -19,3 +19,5 @@ Thumbs.db
 
 # Dependencias (si se añade Composer en el futuro)
 vendor/
+
+/storage/logs/.auto_sync_last_run
