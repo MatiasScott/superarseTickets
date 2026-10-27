@@ -143,8 +143,21 @@ class InternalApiController extends Controller
 
         try {
             $controller = new CCIController();
+
+            // Freshchat continúa sincronizando automáticamente.
             $fcResult = $controller->runFreshchatSyncBackground();
-            $waResult = $controller->runWhatchimpSyncBackground(100);
+
+            // Whatchimp: sincronización automática temporalmente deshabilitada.
+            // Se conserva su implementación para una futura reactivación.
+            // $waResult = $controller->runWhatchimpSyncBackground(100);
+
+            $waResult = [
+                'ok' => true,
+                'status' => 'disabled',
+                'created' => 0,
+                'skipped' => 0,
+                'error' => '',
+            ];
 
             $this->jsonResponse([
                 'ok' => true,

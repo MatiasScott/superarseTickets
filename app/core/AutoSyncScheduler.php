@@ -170,8 +170,18 @@ class AutoSyncScheduler
 			]);
 		}
 
-		// Sincronización automática de WhatsApp (CCI)
-		try {
+		/*
+		|--------------------------------------------------------------------------
+		| Sincronización automática de Whatchimp
+		|--------------------------------------------------------------------------
+		| TEMPORALMENTE DESHABILITADA.
+		|
+		| Motivo: Whatchimp devuelve HTTP 401.
+		| Se conserva el código para una futura reactivación.
+		| No afecta a Microsoft Graph, adjuntos ni Freshchat.
+		|--------------------------------------------------------------------------
+		*/
+		/*try {
 			$cciController = new CCIController();
 			$waResult  = $cciController->runWhatchimpSyncBackground(50);
 			$waSummary = 'WhatsApp-sync: ' . ($waResult['ok']
@@ -181,7 +191,7 @@ class AutoSyncScheduler
 			self::appendRunLog($waSummary, $waResult);
 		} catch (Throwable $e) {
 			error_log('AutoSyncScheduler WhatsApp error: ' . $e->getMessage());
-		}
+		}*/
 
 		// Sincronización automática de Freshchat (CCI)
 		try {
