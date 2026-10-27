@@ -735,6 +735,11 @@ class CorreoController extends Controller
 
 		foreach ($emails as $email) {
 			try {
+				if (!MailTicketPolicy::acceptsDate($email, (string) ($email['date'] ?? ''))) {
+					$skipped++;
+					continue;
+				}
+
 				if ($this->alreadyProcessedEmail($db, $email)) {
 					$skipped++;
 					$omittedBreakdown['ya_procesado'] = (int) ($omittedBreakdown['ya_procesado'] ?? 0) + 1;
@@ -892,6 +897,9 @@ class CorreoController extends Controller
 			$accountEmail = (string) ($accountEmailByAlias[$alias] ?? '');
 
 			if ($ticketId <= 0 || $accountEmail === '') {
+				continue;
+			}
+			if (MailTicketPolicy::startDate(['email' => $accountEmail]) !== null) {
 				continue;
 			}
 
@@ -1174,16 +1182,15 @@ class CorreoController extends Controller
 	private function guessGroupIdFromEmail(PDO $db, array $email, ?int $fallbackGroupId): ?int
 	{
 		$groups = $this->loadTicketGroups($db);
-		if (empty($groups)) {
-			return $fallbackGroupId;
-		}
-
 		// 1) Mapeo directo por prefijo de email de la cuenta destino (más fiable)
 		$accountEmail = trim((string) ($email['account_email'] ?? ''));
 		if ($accountEmail !== '') {
 			$byDirect = $this->resolveGroupByDirectEmailMap($groups, $accountEmail);
 			if ($byDirect !== null) {
 				return $byDirect;
+			}
+			if (MailTicketPolicy::startDate($email) !== null) {
+				throw new RuntimeException('No existe el grupo activo Comunicacion y Marketing para solucionesnexo@superarse.edu.ec.');
 			}
 		}
 
@@ -1235,6 +1242,7 @@ class CorreoController extends Controller
 			'mesadeayuda' => ['soporte tecnico'],
 			'helpdesk' => ['soporte tecnico'],
 			'admisiones' => ['admisiones'],
+			'solucionesnexo' => ['comunicacion y marketing'],
 		];
 
 		$candidates = $map[$local] ?? null;
@@ -1261,6 +1269,7 @@ class CorreoController extends Controller
 		$searchText = $this->normalizeCatalogText($searchText);
 
 		$rules = [
+			'comunicacion_marketing' => ['marketing', 'comunicacion institucional', 'diseno', 'disenos', 'arte', 'artes', 'fotografia', 'fotografias', 'foto', 'fotos', 'video', 'videos', 'audiovisual', 'audiovisuales', 'redes sociales', 'publicidad', 'campana publicitaria', 'identidad visual'],
 			'admisiones' => ['admisiones', 'admision', 'matricula', 'matriculas', 'inscripcion', 'postulacion', 'reingreso'],
 			'contabilidad_facturacion' => ['factura', 'facturacion', 'contabilidad', 'contable', 'retencion', 'comprobante', 'cuota', 'cuotas'],
 			'proveedores_pagos' => ['proveedor', 'proveedores', 'orden de compra', 'ordenes de compra', 'pago', 'pagos'],
@@ -1280,7 +1289,11 @@ class CorreoController extends Controller
 		foreach ($rules as $ruleIntent => $keywords) {
 			$score = 0;
 			foreach ($keywords as $keyword) {
-				if (str_contains($searchText, $this->normalizeCatalogText($keyword))) {
+				$normalizedKeyword = $this->normalizeCatalogText($keyword);
+				$matches = $ruleIntent === 'comunicacion_marketing'
+					? preg_match('/(?<![a-z0-9])' . preg_quote($normalizedKeyword, '/') . '(?![a-z0-9])/u', $searchText) === 1
+					: str_contains($searchText, $normalizedKeyword);
+				if ($matches) {
 					$score++;
 				}
 			}
@@ -1297,6 +1310,7 @@ class CorreoController extends Controller
 	private function resolveGroupIdByIntent(array $groups, string $intent): ?int
 	{
 		$intentToGroupNames = [
+			'comunicacion_marketing' => ['comunicacion y marketing'],
 			'admisiones' => ['admisiones'],
 			'contabilidad_facturacion' => ['contabilidad y facturacion', 'contabilidad', 'facturacion'],
 			'proveedores_pagos' => ['proveedores y pagos'],

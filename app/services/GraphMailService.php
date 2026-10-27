@@ -669,7 +669,7 @@ class GraphMailService
 			[
 				'$top' => (string) $limit,
 				'$orderby' => 'receivedDateTime DESC',
-				'$filter' => 'isRead eq false',
+				'$filter' => 'isRead eq false' . (MailTicketPolicy::startDate($account) !== null ? ' and receivedDateTime ge ' . MailTicketPolicy::startDate($account) : ''),
 				'$select' => 'id,subject,from,receivedDateTime,internetMessageId,conversationId,bodyPreview,body,hasAttachments',
 			]
 		);
@@ -682,6 +682,10 @@ class GraphMailService
 		$emails = [];
 		foreach ($items as $item) {
 			if (!is_array($item)) {
+				continue;
+			}
+
+			if (!MailTicketPolicy::acceptsDate($account, (string) ($item['receivedDateTime'] ?? ''))) {
 				continue;
 			}
 
@@ -743,7 +747,8 @@ class GraphMailService
 		}
 
 		$limit = max(1, min(20, $limit));
-		if ($this->isHistoricalBootstrapEnabled()) {
+		$startDate = MailTicketPolicy::startDate($account);
+		if ($startDate === null && $this->isHistoricalBootstrapEnabled()) {
 			$historical = $this->fetchHistoricalBootstrapForTicketing($account, $userPrincipalName, $alias, $limit);
 			if (!$historical['ok']) {
 				return $historical;
@@ -763,14 +768,18 @@ class GraphMailService
 		if ($deltaUrl !== '') {
 			$response = $this->requestAbsolute('GET', $deltaUrl);
 		} else {
+			$query = [
+				'$top' => (string) $limit,
+				'$select' => 'id,subject,from,receivedDateTime,internetMessageId,conversationId,bodyPreview,body,hasAttachments,isRead',
+			];
+			if ($startDate !== null) {
+				$query['$filter'] = 'receivedDateTime ge ' . $startDate;
+			}
 			$response = $this->request(
 				'GET',
 				'/users/' . rawurlencode($userPrincipalName) . '/mailFolders/inbox/messages/delta',
 				null,
-				[
-					'$top' => (string) $limit,
-					'$select' => 'id,subject,from,receivedDateTime,internetMessageId,conversationId,bodyPreview,body,hasAttachments,isRead',
-				]
+				$query
 			);
 		}
 
@@ -850,6 +859,11 @@ class GraphMailService
 	 */
 	public function fetchSinceForTicketing(array $account, string $sinceIsoUtc, int $max = 200): array
 	{
+		$startDate = MailTicketPolicy::startDate($account);
+		if ($startDate !== null && strtotime($sinceIsoUtc) < strtotime($startDate)) {
+			$sinceIsoUtc = $startDate;
+		}
+
 		$userPrincipalName = trim((string) ($account['email'] ?? ''));
 		if ($userPrincipalName === '') {
 			return ['ok' => false, 'error' => 'La cuenta no tiene email configurado para Graph.', 'emails' => []];
@@ -1373,6 +1387,9 @@ class GraphMailService
 		}
 
 		$receivedAt = (string) ($item['receivedDateTime'] ?? '');
+		if (!MailTicketPolicy::acceptsDate($account, $receivedAt)) {
+			return null;
+		}
 		if (!$this->isWithinHistoryWindow($receivedAt)) {
 			error_log('[GraphMailService] mapDeltaMessageToTicketEmail discard: out of history window id=' . $rawId . ' received=' . $receivedAt);
 			return null;

@@ -117,7 +117,12 @@ class MailboxService
 
 		$this->clearImapFailure($alias);
 
-		$uids = imap_search($imap, 'UNSEEN', SE_UID);
+		$startDate = MailTicketPolicy::startDate($account);
+		$criteria = 'UNSEEN';
+		if ($startDate !== null) {
+			$criteria .= ' SINCE "' . gmdate('d-M-Y', strtotime($startDate)) . '"';
+		}
+		$uids = imap_search($imap, $criteria, SE_UID);
 		if (!is_array($uids)) {
 			$uids = [];
 		}
@@ -137,6 +142,13 @@ class MailboxService
 				continue;
 			}
 
+			$receivedAt = $startDate !== null
+				? (isset($overview->udate) ? gmdate('c', (int) $overview->udate) : '')
+				: (string) ($overview->date ?? '');
+			if (!MailTicketPolicy::acceptsDate($account, $receivedAt)) {
+				continue;
+			}
+
 			$headerInfo = imap_headerinfo($imap, $msgNo);
 			$bodyData = $this->extractBody($imap, (int) $uid);
 
@@ -151,7 +163,7 @@ class MailboxService
 				'account_email' => (string) ($account['email'] ?? ''),
 				'uid' => (int) $uid,
 				'message_id' => trim((string) ($overview->message_id ?? '')),
-				'date' => (string) ($overview->date ?? ''),
+				'date' => $receivedAt,
 				'subject' => $this->decodeMime((string) ($overview->subject ?? '(Sin asunto)')),
 				'from_email' => $fromEmail,
 				'from_name' => $fromName,
@@ -179,7 +191,7 @@ class MailboxService
 			return $this->graphService->fetchDeltaForTicketing($account, $limit);
 		}
 
-		if ($this->isHistoricalBootstrapEnabled()) {
+		if (MailTicketPolicy::startDate($account) === null && $this->isHistoricalBootstrapEnabled()) {
 			$historical = $this->fetchImapHistoricalForTicketing($account, $limit);
 			if (!$historical['ok']) {
 				return $historical;

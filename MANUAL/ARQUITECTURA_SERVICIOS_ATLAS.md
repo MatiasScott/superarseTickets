@@ -50,6 +50,21 @@ Health:
 - REDIS_PREFIX
 - QUEUE_WORKER_MAX_JOBS
 
+## Buzon de Comunicacion y Marketing
+
+La cuenta `solucionesnexo@superarse.edu.ec` (`MAIL_ACCOUNT_16`) se asigna
+directamente al grupo activo **Comunicacion y Marketing**, independientemente
+del asunto. CorreoController tambien reconoce solicitudes de marketing,
+diseno, artes, fotografia, videos y comunicacion institucional por contenido
+cuando no existe un mapeo directo del buzon a otro grupo.
+
+MailTicketPolicy fija el inicio de importacion al **27 de octubre de 2026,
+00:00 America/Guayaquil** (`2026-10-27T05:00:00Z`). No es una fecha movil:
+los correos de ese dia y posteriores siguen siendo elegibles en futuras
+sincronizaciones. Para este buzon se omiten el bootstrap y la reclasificacion
+historicos; Graph, IMAP y la recuperacion por fechas respetan el limite.
+Las demas cuentas conservan su comportamiento. No se eliminan tickets previos.
+
 ## Colas Redis
 
 - mail_queue
