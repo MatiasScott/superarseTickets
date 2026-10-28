@@ -320,7 +320,11 @@ document.addEventListener('DOMContentLoaded', () => {
 	};
 
 	const normalizeText = (value) => String(value || '').toLowerCase().trim();
-	const normalizeEcuadorPhoneValue = (value) => {
+	const normalizeProspectPhoneValue = (value) => {
+		if (window.AtlasPhone && typeof window.AtlasPhone.normalize === 'function') {
+			return window.AtlasPhone.normalize(value);
+		}
+
 		const raw = String(value || '').trim();
 		if (raw === '') {
 			return '';
@@ -345,6 +349,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
 		return '';
 	};
+
+	const prospectCreatorMap = Object.assign({}, window.CRM_CREATOR_MAP || {});
 
 	const parseCommaValues = (raw) => String(raw || '')
 		.split(',')
@@ -529,10 +535,10 @@ document.addEventListener('DOMContentLoaded', () => {
 			return true;
 		}
 
-		const normalized = normalizeEcuadorPhoneValue(rawValue);
+		const normalized = normalizeProspectPhoneValue(rawValue);
 		if (normalized === '') {
 			if (!silent) {
-				setProspectCreateStatus('warning', 'El celular debe tener el formato +593987654321.');
+				setProspectCreateStatus('warning', window.AtlasPhone?.invalidMessage || 'El celular debe incluir el código de país y un número válido (Ej: +593987654321).');
 			}
 			return false;
 		}
@@ -599,8 +605,9 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 
 		input.dataset.phoneNormalized = '1';
+		window.AtlasPhone?.enhance(input);
 		const normalizeField = () => {
-			const normalized = normalizeEcuadorPhoneValue(input.value);
+			const normalized = normalizeProspectPhoneValue(input.value);
 			if (normalized !== '') {
 				input.value = normalized;
 			}
@@ -612,27 +619,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
 	bindProspectPhoneInput(prospectCreatePhoneInput);
 	if (prospectCreateForm) {
-		// Función para mapear Asesor -> Creado por automáticamente
-		const mapAsesorToCreador = (asesor) => {
+		// Función para mapear Asesor -> Creado por automáticamente (equipos configurables en Administración)
+		const mapAsesorToCreador = (asesor, option = null) => {
 			asesor = String(asesor || '').trim();
 			if (asesor === '') return '';
-			
-			// Regla A: Lizbeth Ochoa, Jennifer Betancourt, Melany Artieda -> EQUIPO MAÑANA
-			if (['Lizbeth Ochoa', 'Jennifer Betancourt', 'Melany Artieda'].includes(asesor)) {
-				return 'EQUIPO MAÑANA';
+
+			const fromOption = option?.dataset?.creadoPor;
+			if (typeof fromOption === 'string') {
+				return fromOption;
 			}
-			
-			// Regla B: Melany Vásquez -> EQUIPO NOCHE
-			if (asesor === 'Melany Vásquez') {
-				return 'EQUIPO NOCHE';
-			}
-			
-			// Regla C: Luis Granja, Mayra Segarra, Noemi Toro -> mismo asesor
-			if (['Luis Granja', 'Mayra Segarra', 'Noemi Toro'].includes(asesor)) {
-				return asesor;
-			}
-			
-			return '';
+
+			return String(prospectCreatorMap[asesor] || '');
 		};
 
 		// Event listener para mapear automáticamente creado_por cuando cambia asesor
@@ -642,7 +639,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		if (prospectOrigenSelect && prospectCreadoPorInput) {
 			const updateCreadoPor = () => {
 				const asesorValue = String(prospectOrigenSelect.value || '').trim();
-				const creadoPorValue = mapAsesorToCreador(asesorValue);
+				const creadoPorValue = mapAsesorToCreador(asesorValue, prospectOrigenSelect.selectedOptions?.[0] || null);
 				prospectCreadoPorInput.value = creadoPorValue;
 			};
 			
@@ -662,7 +659,7 @@ document.addEventListener('DOMContentLoaded', () => {
 			}
 
 			if (prospectCreatePhoneInput) {
-				const normalized = normalizeEcuadorPhoneValue(prospectCreatePhoneInput.value);
+				const normalized = normalizeProspectPhoneValue(prospectCreatePhoneInput.value);
 				if (normalized !== '') {
 					prospectCreatePhoneInput.value = normalized;
 				}
@@ -1434,6 +1431,9 @@ document.addEventListener('DOMContentLoaded', () => {
 				throw new Error(data.error || 'No se pudo cargar el cliente potencial');
 			}
 
+			if (data.creado_por_map && typeof data.creado_por_map === 'object') {
+				Object.assign(prospectCreatorMap, data.creado_por_map);
+			}
 			renderProspectModal(data.prospect || {}, data.estados || [], data.asesores || [], data.creadores || []);
 		} catch (error) {
 			body.innerHTML = `<div class="alert alert-danger">${escapeHtml(error.message || 'Error al cargar el cliente potencial')}</div>`;
@@ -1561,6 +1561,17 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 
 		bindProspectPhoneInput(document.getElementById('prospectEditCelular'));
+
+		const editAdvisorSelect = document.getElementById('prospectEditPropietario');
+		editAdvisorSelect?.addEventListener('change', () => {
+			const asesor = String(editAdvisorSelect.value || '').trim();
+			const creadoPor = asesor === '' ? '' : String(prospectCreatorMap[asesor] || '');
+			const readonlyInput = document.getElementById('prospectEditCreadoPorReadonly');
+			const hiddenInput = document.getElementById('prospectEditCreadoPor');
+			if (readonlyInput) readonlyInput.value = creadoPor;
+			if (hiddenInput) hiddenInput.value = creadoPor;
+		});
+
 		bindProspectAutosaveFields();
 	};
 
@@ -1612,6 +1623,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
 		renderDynamicFields('extraEmailsList', parseCommaValues(student.extra_emails), 'correo@dominio.com');
 		renderDynamicFields('extraPhonesList', parseCommaValues(student.extra_phones), '0999999999');
+
+		const contactCellInput = document.getElementById('contactCell');
+		if (contactCellInput) {
+			contactCellInput.dataset.originalValue = String(student.celular || '').trim();
+			window.AtlasPhone?.enhance(contactCellInput);
+		}
 
 		document.getElementById('addExtraEmailBtn')?.addEventListener('click', () => {
 			addDynamicField('extraEmailsList', 'correo@dominio.com');
@@ -3014,12 +3031,24 @@ document.addEventListener('DOMContentLoaded', () => {
 				statusBox.textContent = '';
 			}
 
+			const contactCellInput = document.getElementById('contactCell');
+			const cellValue = String(contactCellInput?.value || '').trim();
+			const originalCell = String(contactCellInput?.dataset.originalValue || '').trim();
+			const cellChanged = cellValue !== originalCell && normalizeProspectPhoneValue(cellValue) !== normalizeProspectPhoneValue(originalCell);
+			if (cellValue !== '' && cellChanged && normalizeProspectPhoneValue(cellValue) === '') {
+				if (statusBox) {
+					statusBox.className = 'alert alert-warning py-2 mb-3';
+					statusBox.textContent = window.AtlasPhone?.invalidMessage || 'El celular debe incluir el código de país y un número válido (Ej: +593987654321).';
+				}
+				return;
+			}
+
 			const payload = new URLSearchParams({
 				student_id: String(studentId),
 				contacto_id: contactId > 0 ? String(contactId) : '',
 				email: String(document.getElementById('contactEmail')?.value || ''),
 				telefono: String(document.getElementById('contactPhone')?.value || ''),
-				celular: String(document.getElementById('contactCell')?.value || ''),
+				celular: cellChanged ? cellValue : originalCell,
 				extra_emails: getDynamicValuesAsCsv('extraEmailsList'),
 				extra_phones: getDynamicValuesAsCsv('extraPhonesList'),
 			});
@@ -3042,6 +3071,9 @@ document.addEventListener('DOMContentLoaded', () => {
 					if (emailCol) {
 						emailCol.textContent = String(document.getElementById('contactEmail')?.value || '-');
 					}
+				}
+				if (contactCellInput) {
+					contactCellInput.dataset.originalValue = String(data.celular ?? payload.get('celular') ?? '');
 				}
 				if (statusBox) {
 					statusBox.className = 'alert alert-success py-2 mb-3';
@@ -3067,7 +3099,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 	const buildProspectUpdatePayload = (contactId) => {
 		const phoneInput = document.getElementById('prospectEditCelular');
-		const normalizedCell = normalizeEcuadorPhoneValue(phoneInput?.value || '');
+		const normalizedCell = normalizeProspectPhoneValue(phoneInput?.value || '');
 		if (phoneInput && normalizedCell !== '') {
 			phoneInput.value = normalizedCell;
 		}
@@ -3098,7 +3130,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		const apellidos = String(document.getElementById('prospectEditApellidos')?.value || '').trim();
 		const newName = `${nombres} ${apellidos}`.replace(/\s+/g, ' ').trim();
 		const newPhoneRaw = String(document.getElementById('prospectEditCelular')?.value || '').trim();
-		const normalizedPhone = normalizeEcuadorPhoneValue(newPhoneRaw);
+		const normalizedPhone = normalizeProspectPhoneValue(newPhoneRaw);
 		let digitsPhone = normalizedPhone.replace(/\D+/g, '');
 		if (digitsPhone === '' && newPhoneRaw !== '') {
 			digitsPhone = newPhoneRaw.replace(/\D+/g, '');
@@ -3273,8 +3305,13 @@ document.addEventListener('DOMContentLoaded', () => {
 		if (nombresInput && prefillNombre) {
 			nombresInput.value = prefillNombre;
 		}
-		if (celularInput && prefillCelular && /^\+5939\d{8}$/.test(prefillCelular)) {
-			celularInput.value = prefillCelular;
+		if (celularInput && prefillCelular && normalizeProspectPhoneValue(prefillCelular) !== '') {
+			const prefillNormalized = normalizeProspectPhoneValue(prefillCelular);
+			if (window.AtlasPhone) {
+				window.AtlasPhone.setValue(celularInput, prefillNormalized);
+			} else {
+				celularInput.value = prefillNormalized;
+			}
 		}
 		const createModalEl = document.getElementById('createProspectModal');
 		if (createModalEl && window.bootstrap?.Modal) {

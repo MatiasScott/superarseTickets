@@ -499,9 +499,17 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 									<input type="text" name="identificacion" class="form-control form-control-sm" maxlength="30" placeholder="Opcional">
 								</div>
 								<div class="col-md-4">
-								<label class="form-label">Celular</label>
-								<input type="text" name="celular" id="cci-potencial-celular" class="form-control form-control-sm" placeholder="Ej: +593987654321" maxlength="30" inputmode="tel" pattern="^\+5939[0-9]{8}$" title="Usa el formato +593987654321" value="<?= e(preg_match('/^\+5939\d{8}$/', (string) ($numeroContacto ?? '')) ? $numeroContacto : '') ?>">
-								<div class="form-text">Se completa automáticamente el prefijo +593 cuando es posible.</div>
+								<label class="form-label" for="cci-potencial-celular">Celular</label>
+								<?php
+								$cciPrefillPhone = PhoneNumberPolicy::normalize((string) ($numeroContacto ?? ''));
+								if ($cciPrefillPhone === '') {
+									// Los números de WhatsApp suelen llegar con código de país pero sin "+".
+									$cciPhoneDigits = preg_replace('/\D+/', '', (string) ($numeroContacto ?? '')) ?: '';
+									$cciPrefillPhone = strlen($cciPhoneDigits) >= 8 ? PhoneNumberPolicy::normalize('+' . $cciPhoneDigits) : '';
+								}
+								?>
+								<input type="text" name="celular" id="cci-potencial-celular" class="form-control form-control-sm" placeholder="Ej: 987654321" maxlength="30" inputmode="tel" title="Selecciona el país y escribe el número" value="<?= e($cciPrefillPhone) ?>">
+								<div class="form-text">Selecciona el país (código) y escribe el número celular.</div>
 								</div>
 								<div class="col-md-4">
 									<label class="form-label">Asesor</label>
@@ -510,7 +518,7 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 										<?php foreach (($asesoresCrm ?? []) as $asesorCrm): ?>
 											<?php $asesorNombre = trim((string) ($asesorCrm['nombre'] ?? '')); ?>
 											<?php if ($asesorNombre === '') continue; ?>
-											<option value="<?= e($asesorNombre) ?>"><?= e($asesorNombre) ?></option>
+											<option value="<?= e($asesorNombre) ?>" data-creado-por="<?= e((string) ($asesorCrm['creado_por'] ?? CrmAdvisorTeamService::creatorForTeam($asesorCrm['equipo'] ?? null, $asesorNombre))) ?>"><?= e($asesorNombre) ?></option>
 										<?php endforeach; ?>
 									</select>
 								</div>
@@ -1164,6 +1172,7 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 	</script>
 <?php endif; ?>
 
+<?php require APP_PATH . '/views/layouts/phone_country_assets.php'; ?>
 <script>
 	(function() {
 		var form = document.getElementById('cci-form-potencial');
@@ -1177,16 +1186,9 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 
 		function mapAsesorToCreador(asesor) {
 			var clean = (asesor || '').trim();
-			if (clean === '') return '';
-
-			var equipoManana = ['Lizbeth Ochoa', 'Jennifer Betancourt', 'Melany Artieda'];
-			if (equipoManana.indexOf(clean) !== -1) return 'EQUIPO MAÑANA';
-			if (clean === 'Melany Vásquez') return 'EQUIPO NOCHE';
-
-			var equipoPropio = ['Luis Granja', 'Mayra Segarra', 'Noemi Toro'];
-			if (equipoPropio.indexOf(clean) !== -1) return clean;
-
-			return '';
+			if (clean === '' || !asesorSelect) return '';
+			var option = asesorSelect.selectedOptions ? asesorSelect.selectedOptions[0] : null;
+			return option && option.value === clean ? (option.getAttribute('data-creado-por') || '') : '';
 		}
 
 		function refreshCreadoPor() {
@@ -1195,22 +1197,12 @@ if (!isset($todasLasEtiquetas) || !is_array($todasLasEtiquetas)) {
 		}
 
 		function normalizePhoneValue(raw) {
-			var digits = String(raw || '').replace(/\D+/g, '');
-			if (digits === '') return '';
-			if (digits.indexOf('593') === 0) {
-				var rest = digits.slice(3);
-				if (rest.length === 9 && rest.charAt(0) === '9') return '+593' + rest;
-			}
-			if (digits.length === 10 && digits.charAt(0) === '0' && digits.charAt(1) === '9') {
-				return '+593' + digits.slice(1);
-			}
-			if (digits.length === 9 && digits.charAt(0) === '9') {
-				return '+593' + digits;
-			}
-			if (digits.length === 12 && digits.indexOf('593') === 0 && digits.charAt(3) === '9') {
-				return '+' + digits;
-			}
-			return raw;
+			var normalized = window.AtlasPhone ? window.AtlasPhone.normalize(raw) : '';
+			return normalized || String(raw || '').trim();
+		}
+
+		if (celularInput && window.AtlasPhone) {
+			window.AtlasPhone.enhance(celularInput);
 		}
 
 		function loadModalidades() {

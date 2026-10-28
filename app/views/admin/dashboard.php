@@ -238,6 +238,10 @@ CRM
 									class="btn btn-outline-secondary btn-sm">
 									Administrar creado por
 								</a>
+								<a href="<?= base_url('admin/crm-equipos') ?>"
+									class="btn btn-outline-success btn-sm">
+									Administrar equipos (mañana / noche)
+								</a>
 								<a href="<?= base_url('crm/modalidades') ?>"
 									class="btn btn-outline-info btn-sm">
 									Administrar modalidades

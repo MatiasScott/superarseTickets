@@ -5037,7 +5037,17 @@ class CCIController extends Controller
 
 		// Para modal de cliente potencial (Req 5)
 		$carreras = $this->fetchCciCareerOptions($db);
-		$asesoresCrm = $db->query("SELECT id, nombre FROM crm_prospect_asesores WHERE estado = 'activo' ORDER BY nombre ASC LIMIT 50")->fetchAll() ?: [];
+		try {
+			CrmAdvisorTeamService::ensureSchema($db);
+			$asesoresCrm = $db->query("SELECT id, nombre, equipo FROM crm_prospect_asesores WHERE estado = 'activo' ORDER BY nombre ASC LIMIT 50")->fetchAll() ?: [];
+		} catch (Throwable $e) {
+			$asesoresCrm = $db->query("SELECT id, nombre FROM crm_prospect_asesores WHERE estado = 'activo' ORDER BY nombre ASC LIMIT 50")->fetchAll() ?: [];
+			foreach ($asesoresCrm as &$asesorCrmRow) {
+				$asesorCrmRow['equipo'] = null;
+				$asesorCrmRow['creado_por'] = CrmAdvisorTeamService::legacyCreatorFor((string) ($asesorCrmRow['nombre'] ?? ''));
+			}
+			unset($asesorCrmRow);
+		}
 
 		try {
 			$items = $this->fetchConversationListItems($db, $estadoFilter, $asesorFilter, $etiquetaFilter, $fechaInicio, $fechaFin);

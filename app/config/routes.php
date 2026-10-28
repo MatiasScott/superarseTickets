@@ -37,6 +37,10 @@ return static function (Router $router): void {
 	$router->post('/admin/catalogo/{type}/{id}', 'AdminController@catalogUpdate');
 	$router->post('/admin/catalogo/{type}/{id}/delete', 'AdminController@catalogDelete');
 
+	// Admin - Equipos CRM (mañana / noche)
+	$router->get('/admin/crm-equipos', 'AdminController@crmEquiposIndex');
+	$router->post('/admin/crm-equipos', 'AdminController@crmEquiposUpdate');
+
 	// Admin - SLA Tickets
 	$router->get('/admin/sla', 'AdminController@slaIndex');
 	$router->post('/admin/sla/update', 'AdminController@slaUpdate');

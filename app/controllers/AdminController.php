@@ -612,6 +612,8 @@ class AdminController extends Controller
 			updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			UNIQUE KEY uniq_crm_prospect_creador_nombre (nombre)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+		CrmAdvisorTeamService::ensureSchema($db);
 	}
 
 	private function ensureCatalogInfraByType(PDO $db, string $type): void
@@ -850,6 +852,78 @@ class AdminController extends Controller
 			set_flash('error', 'Error al desactivar: ' . $e->getMessage());
 		}
 		redirect('admin/catalogo/' . $type);
+	}
+
+	// ============ EQUIPOS CRM (MAÑANA / NOCHE) ============
+	public function crmEquiposIndex(): void
+	{
+		Auth::requireAuth();
+		$asesores = [];
+		try {
+			$db = Database::getInstance()->connection();
+			$this->ensureCrmProspectSelectorCatalogTables($db);
+			$asesores = $db->query("SELECT id, nombre, equipo FROM crm_prospect_asesores WHERE estado = 'activo' ORDER BY nombre ASC, id ASC")->fetchAll() ?: [];
+		} catch (Throwable $e) {
+			set_flash('error', 'No se pudieron cargar los asesores: ' . $e->getMessage());
+		}
+
+		$this->view('admin/crm_equipos', [
+			'asesores' => $asesores,
+			'teamOptions' => CrmAdvisorTeamService::teamOptions(),
+		], ['title' => 'CRM - Equipos de asesores']);
+	}
+
+	public function crmEquiposUpdate(): void
+	{
+		Auth::requireAuth();
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			set_flash('error', 'La sesión expiró. Intenta nuevamente.');
+			redirect('admin/crm-equipos');
+		}
+
+		$teams = is_array($_POST['equipo'] ?? null) ? $_POST['equipo'] : [];
+		try {
+			$db = Database::getInstance()->connection();
+			$this->ensureCrmProspectSelectorCatalogTables($db);
+
+			$select = $db->prepare("SELECT * FROM crm_prospect_asesores WHERE id = :id AND estado = 'activo'");
+			$update = $db->prepare('UPDATE crm_prospect_asesores SET equipo = :equipo WHERE id = :id');
+			$addCreator = $db->prepare("INSERT INTO crm_prospect_creadores (nombre, estado) VALUES (:nombre, 'activo') ON DUPLICATE KEY UPDATE estado = 'activo'");
+			$changed = 0;
+
+			foreach ($teams as $rawId => $rawTeam) {
+				$id = (int) $rawId;
+				if ($id <= 0) {
+					continue;
+				}
+				$select->execute(['id' => $id]);
+				$before = $select->fetch();
+				if (!$before) {
+					continue;
+				}
+
+				$team = CrmAdvisorTeamService::normalizeTeam((string) $rawTeam);
+				if (($before['equipo'] ?? null) === $team) {
+					continue;
+				}
+
+				$update->execute(['equipo' => $team, 'id' => $id]);
+				$creator = CrmAdvisorTeamService::creatorForTeam($team, (string) $before['nombre']);
+				if ($creator !== '') {
+					$addCreator->execute(['nombre' => $creator]);
+				}
+
+				$select->execute(['id' => $id]);
+				$this->audit('UPDATE', 'crm_prospect_asesores', $id, $before, $select->fetch());
+				$changed++;
+			}
+
+			set_flash('success', $changed > 0 ? "Equipos actualizados ({$changed} asesor(es))." : 'No hubo cambios en los equipos.');
+		} catch (Throwable $e) {
+			set_flash('error', 'Error al guardar los equipos: ' . $e->getMessage());
+		}
+
+		redirect('admin/crm-equipos');
 	}
 
 	// ============ HERRAMIENTAS DE MANTENIMIENTO ============

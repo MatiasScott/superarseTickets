@@ -461,6 +461,7 @@ class CRMController extends Controller
 			$prospectAdvisorOptions = [];
 			$prospectCreatorOptions = [];
 		}
+		$prospectCreatorMap = CrmAdvisorTeamService::map($db);
 
 		try {
 			$prospectFilterOptions = $this->fetchDistinctProspectFilterOptions();
@@ -486,6 +487,7 @@ class CRMController extends Controller
 			'pipelineEstadosEstudiantes' => $pipelineEstadosEstudiantes,
 			'prospectAdvisorOptions' => $prospectAdvisorOptions,
 			'prospectCreatorOptions' => $prospectCreatorOptions,
+			'prospectCreatorMap' => $prospectCreatorMap,
 			'prospectFilterOptions' => $prospectFilterOptions,
 			'sourceLabel' => (string) ($studentsData['source'] ?? 'No disponible'),
 			'sourceError' => (string) ($studentsData['error'] ?? ''),
@@ -539,7 +541,7 @@ class CRMController extends Controller
 		}
 
 		if ($celularRaw !== '' && $celular === '') {
-			$ajaxFail('El celular debe tener el formato +593987654321.');
+			$ajaxFail(PhoneNumberPolicy::INVALID_MESSAGE);
 		}
 
 		$identificacionToStore = $identificacion !== '' ? mb_substr($identificacion, 0, 20) : null;
@@ -2687,6 +2689,18 @@ class CRMController extends Controller
 			if ($remote instanceof PDO) {
 				$sourceTable = $this->resolveSuperarseStudentTable($remote);
 				if ($sourceTable === 'users') {
+					$currentCellStmt = $remote->prepare('SELECT celular FROM users WHERE id = :id LIMIT 1');
+					$currentCellStmt->execute([':id' => $studentId]);
+					$currentCell = trim((string) ($currentCellStmt->fetchColumn() ?: ''));
+					$celularNormalized = $celular !== $currentCell ? PhoneNumberPolicy::normalize($celular) : '';
+					if ($celularNormalized !== '') {
+						$celular = $this->formatStudentCellForSuperarse($celularNormalized);
+					} elseif ($celular !== '' && $celular !== $currentCell) {
+						// Solo se valida cuando el usuario cambia el número: los datos históricos no bloquean el guardado.
+						http_response_code(400);
+						echo json_encode(['success' => false, 'error' => PhoneNumberPolicy::INVALID_MESSAGE], JSON_UNESCAPED_UNICODE);
+						exit;
+					}
 					$updateSql = "UPDATE users
 							 SET correo_electronico = :email,
 								 telefono = :telefono,
@@ -2815,6 +2829,7 @@ class CRMController extends Controller
 			echo json_encode([
 				'success' => true,
 				'message' => 'Contacto actualizado correctamente',
+				'celular' => $celular,
 			]);
 		} catch (Throwable $e) {
 			http_response_code(500);
@@ -3011,6 +3026,7 @@ class CRMController extends Controller
 				'estados' => $pipelineEstados,
 				'asesores' => $prospectAdvisorOptions,
 				'creadores' => $prospectCreatorOptions,
+				'creado_por_map' => (object) CrmAdvisorTeamService::map($db),
 			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 		} catch (Throwable $e) {
 			http_response_code(500);
@@ -3051,7 +3067,7 @@ class CRMController extends Controller
 
 		if ($celularRaw !== '' && $celular === '') {
 			http_response_code(400);
-			echo json_encode(['success' => false, 'error' => 'El celular debe tener el formato +593987654321.']);
+			echo json_encode(['success' => false, 'error' => PhoneNumberPolicy::INVALID_MESSAGE]);
 			exit;
 		}
 
@@ -3213,7 +3229,7 @@ class CRMController extends Controller
 			http_response_code(400);
 			echo json_encode([
 				'success' => false,
-				'error' => 'El celular debe tener el formato +593987654321.',
+				'error' => PhoneNumberPolicy::INVALID_MESSAGE,
 			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 			exit;
 		}
@@ -5125,29 +5141,13 @@ class CRMController extends Controller
 
 	private function normalizeProspectPhoneValue(string $value): string
 	{
-		$value = trim($value);
-		if ($value === '') {
-			return '';
-		}
+		return PhoneNumberPolicy::normalize($value);
+	}
 
-		$digits = preg_replace('/\D+/', '', $value) ?: '';
-		if ($digits === '') {
-			return '';
-		}
-
-		if (preg_match('/^5939\d{8}$/', $digits) === 1) {
-			return '+' . $digits;
-		}
-
-		if (preg_match('/^09\d{8}$/', $digits) === 1) {
-			return '+593' . substr($digits, 1);
-		}
-
-		if (preg_match('/^9\d{8}$/', $digits) === 1) {
-			return '+593' . $digits;
-		}
-
-		return '';
+	/** Superarse guarda los celulares de Ecuador como 9 dígitos (987654321); los extranjeros van con +código. */
+	private function formatStudentCellForSuperarse(string $e164): string
+	{
+		return str_starts_with($e164, '+593') ? substr($e164, 4) : $e164;
 	}
 
 	private function hasActiveMatriculaForContact(PDO $db, int $contactId, string $careerName = ''): bool
@@ -5181,30 +5181,8 @@ class CRMController extends Controller
 
 	private function mapAsesorToCreador(string $asesor): string
 	{
-		$asesor = trim($asesor);
-		if ($asesor === '') {
-			return '';
-		}
-
-		// Regla A: Si asesor IN (Lizbeth Ochoa, Jennifer Betancourt, Melany Artieda) -> creado_por = "EQUIPO MAÑANA"
-		$equipoManana = ['Lizbeth Ochoa', 'Jennifer Betancourt', 'Melany Artieda'];
-		if (in_array($asesor, $equipoManana, true)) {
-			return 'EQUIPO MAÑANA';
-		}
-
-		// Regla B: Si asesor = "Melany Vásquez" -> creado_por = "EQUIPO NOCHE"
-		if ($asesor === 'Melany Vásquez') {
-			return 'EQUIPO NOCHE';
-		}
-
-		// Regla C: Si asesor IN (Luis Granja, Mayra Segarra, Noemi Toro) -> creado_por = mismo asesor
-		$equipoPropio = ['Luis Granja', 'Mayra Segarra', 'Noemi Toro'];
-		if (in_array($asesor, $equipoPropio, true)) {
-			return $asesor;
-		}
-
-		// Por defecto, retornar vacío
-		return '';
+		// Equipo configurable desde Administración > Clientes Potenciales > Administrar equipos.
+		return CrmAdvisorTeamService::creatorFor(Database::getInstance()->connection(), $asesor);
 	}
 
 	private function normalizeCreatedByValue(string $value): string

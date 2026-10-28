@@ -18,6 +18,9 @@
 	<?php $prospectSort = (string) ($prospectSort ?? 'desc'); ?>
 	<?php $prospectAdvisorOptions = $prospectAdvisorOptions ?? []; ?>
 	<?php $prospectCreatorOptions = $prospectCreatorOptions ?? []; ?>
+	<?php $prospectCreatorMap = is_array($prospectCreatorMap ?? null) ? $prospectCreatorMap : []; ?>
+	<script>window.CRM_CREATOR_MAP = <?= json_encode((object) $prospectCreatorMap, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;</script>
+	<?php require APP_PATH . '/views/layouts/phone_country_assets.php'; ?>
 	<?php
 	$prospectFilterOptions = $prospectFilterOptions ?? ['origins' => [], 'stages' => [], 'careers' => [], 'createdBy' => []];
 	$prospectOrigins = $prospectFilterOptions['origins'];
@@ -513,8 +516,8 @@ ksort($prospectOrigins, SORT_NATURAL | SORT_FLAG_CASE);
 						</div>
 						<div class="col-md-4">
 							<label for="prospectCelular" class="form-label">Celular</label>
-							<input type="text" id="prospectCelular" name="celular" class="form-control" maxlength="30" placeholder="Ej: +593987654321" inputmode="tel" pattern="^\+5939[0-9]{8}$" title="Usa el formato +593987654321">
-							<div class="form-text">Se completa automáticamente el prefijo +593 cuando es posible.</div>
+							<input type="text" id="prospectCelular" name="celular" class="form-control" maxlength="30" placeholder="Ej: 987654321" inputmode="tel" title="Selecciona el país y escribe el número">
+							<div class="form-text">Selecciona el país (código) y escribe el número celular.</div>
 						</div>
 						<div class="col-md-4">
 							<label for="prospectCorreoPersonal" class="form-label">Correo personal</label>
@@ -527,7 +530,7 @@ ksort($prospectOrigins, SORT_NATURAL | SORT_FLAG_CASE);
 								<?php foreach ($prospectAdvisorOptions as $advisorOption): ?>
 									<?php $advisorOption = trim((string) $advisorOption); ?>
 									<?php if ($advisorOption === '') continue; ?>
-									<option value="<?= e($advisorOption) ?>"><?= e($advisorOption) ?></option>
+									<option value="<?= e($advisorOption) ?>" data-creado-por="<?= e((string) ($prospectCreatorMap[$advisorOption] ?? '')) ?>"><?= e($advisorOption) ?></option>
 								<?php endforeach; ?>
 							</select>
 						</div>
