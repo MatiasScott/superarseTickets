@@ -1160,34 +1160,43 @@ class GraphMailService
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 	}
 
-	private function readHistoryState(string $accountAlias, string $accountEmail): array
-	{
+
+	private function readHistoryState(
+		string $accountAlias,
+		string $accountEmail
+	): array {
 		$this->ensureHistoryStateTable();
+
 		$db = Database::getInstance()->connection();
 
-		$stmt = $db->prepare('SELECT next_link, completed FROM mail_history_bootstrap_state WHERE account_alias = :alias LIMIT 1');
-		$stmt->execute(['alias' => $accountAlias]);
-		$row = $stmt->fetch();
+		$stmt = $db->prepare(
+			'SELECT next_link, completed
+         FROM mail_history_bootstrap_state
+         WHERE account_alias = :alias
+         LIMIT 1'
+		);
+
+		$stmt->execute([
+			'alias' => $accountAlias,
+		]);
+
+		$row = $stmt->fetch(PDO::FETCH_ASSOC);
 
 		if (!$row) {
-			if (str_contains($accountAlias, ':folder:')) {
-				return ['next_link' => '', 'completed' => false];
-			}
-
-			$stmtFallback = $db->prepare('SELECT next_link, completed FROM mail_history_bootstrap_state WHERE account_email = :email LIMIT 1');
-			$stmtFallback->execute(['email' => $accountEmail]);
-			$row = $stmtFallback->fetch();
-		}
-
-		if (!$row) {
-			return ['next_link' => '', 'completed' => false];
+			return [
+				'next_link' => '',
+				'completed' => false,
+			];
 		}
 
 		return [
-			'next_link' => trim((string) ($row['next_link'] ?? '')),
+			'next_link' => trim(
+				(string) ($row['next_link'] ?? '')
+			),
 			'completed' => ((int) ($row['completed'] ?? 0)) === 1,
 		];
 	}
+
 
 	private function writeHistoryState(string $accountAlias, string $accountEmail, string $nextLink, bool $completed): void
 	{
@@ -1657,27 +1666,73 @@ class GraphMailService
 	}
 
 
+
 	private function resolveTicketingFolders(string $userPrincipalName): array
 	{
-		// Descubrir todas las carpetas y subcarpetas. No alterar cursores.
 		$base = '/users/' . rawurlencode($userPrincipalName) . '/mailFolders';
-		$folders = [['name' => 'inbox', 'id' => 'inbox', 'is_inbox' => true]];
-		$seen = ['inbox' => true];
 
-		$excluded = [
+		// Conservamos el identificador lógico "inbox" para no alterar
+		// los cursores Delta existentes de cada cuenta.
+		$folders = [
+			['name' => 'inbox', 'id' => 'inbox', 'is_inbox' => true],
+		];
+
+		$seen = [];
+
+		// Resolver los IDs reales de las carpetas especiales.
+		// No depender del idioma de displayName.
+		$specialNames = [
+			'inbox',
 			'sentitems',
 			'drafts',
 			'deleteditems',
 			'junkemail',
 			'outbox',
-			'recoverableitemsdeletions',
-			'recoverableitemspurges',
 			'conversationhistory',
 			'syncissues',
-			'conflicts',
-			'localfailures',
-			'serverfailures'
+			'recoverableitemsdeletions',
+			'recoverableitemspurges',
 		];
+
+		$specialIds = [];
+
+		foreach ($specialNames as $specialName) {
+			$result = $this->request(
+				'GET',
+				$base . '/' . rawurlencode($specialName),
+				null,
+				['$select' => 'id,displayName']
+			);
+
+
+			if (empty($result['ok'])) {
+				$error = (string) ($result['error'] ?? 'Error Graph');
+
+				// Algunas carpetas especiales no existen en todos los buzones.
+				// Solo se tolera la ausencia confirmada por Microsoft Graph.
+				if (stripos($error, 'ErrorFolderNotFound') !== false) {
+					error_log(
+						'[GraphMailService] Carpeta especial no encontrada: '
+							. $specialName . ' (' . $userPrincipalName . ')'
+					);
+					continue;
+				}
+
+				throw new RuntimeException(
+					'No se pudo identificar la carpeta especial '
+						. $specialName . ' de '
+						. $userPrincipalName . ': '
+						. $error
+				);
+			}
+
+
+			$id = trim((string) ($result['body']['id'] ?? ''));
+
+			if ($id !== '') {
+				$specialIds[$id] = $specialName;
+			}
+		}
 
 		$queue = [[$base, 0]];
 		$scanned = 0;
@@ -1729,18 +1784,20 @@ class GraphMailService
 
 					$seen[$id] = true;
 
-					$normalized = preg_replace(
-						'/[^a-z0-9]/',
-						'',
-						strtolower(
-							iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $name)
-								?: $name
-						)
-					);
+					// La bandeja de entrada ya está incluida con el ID lógico.
+					if (($specialIds[$id] ?? '') === 'inbox') {
+						if ((int) ($item['childFolderCount'] ?? 0) > 0) {
+							$queue[] = [
+								$base . '/' . rawurlencode($id) . '/childFolders',
+								$depth + 1,
+							];
+						}
+						continue;
+					}
 
-					$isExcluded = in_array($normalized, $excluded, true);
-
-					if ($isExcluded) {
+					// No convertir mensajes de carpetas del sistema en tickets.
+					// Se excluyen también sus descendientes.
+					if (isset($specialIds[$id])) {
 						continue;
 					}
 
@@ -1753,7 +1810,7 @@ class GraphMailService
 					if ((int) ($item['childFolderCount'] ?? 0) > 0) {
 						$queue[] = [
 							$base . '/' . rawurlencode($id) . '/childFolders',
-							$depth + 1
+							$depth + 1,
 						];
 					}
 				}
@@ -1770,7 +1827,6 @@ class GraphMailService
 
 		return $folders;
 	}
-
 
 	private function ticketingFolderStateAlias(
 		string $accountAlias,

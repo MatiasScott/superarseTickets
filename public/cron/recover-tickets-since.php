@@ -2,25 +2,31 @@
 
 declare(strict_types=1);
 
-session_start();
+if (PHP_SAPI !== 'cli') {
+    http_response_code(403);
+    exit('Este procedimiento solo puede ejecutarse desde CLI.');
+}
 
 define('ROOT_PATH', dirname(__DIR__, 2));
 define('APP_PATH', ROOT_PATH . '/app');
 define('PUBLIC_PATH', ROOT_PATH . '/public');
 define('STORAGE_PATH', ROOT_PATH . '/storage');
 
-$composerAutoload = ROOT_PATH . '/vendor/autoload.php';
-if (is_file($composerAutoload)) {
-    require_once $composerAutoload;
+$autoload = ROOT_PATH . '/vendor/autoload.php';
+
+if (is_file($autoload)) {
+    require_once $autoload;
 }
 
 spl_autoload_register(static function (string $class): void {
-    foreach ([
-        APP_PATH . '/core/' . $class . '.php',
-        APP_PATH . '/controllers/' . $class . '.php',
-        APP_PATH . '/models/' . $class . '.php',
-        APP_PATH . '/services/' . $class . '.php',
-    ] as $path) {
+    foreach (
+        [
+            APP_PATH . '/core/' . $class . '.php',
+            APP_PATH . '/controllers/' . $class . '.php',
+            APP_PATH . '/models/' . $class . '.php',
+            APP_PATH . '/services/' . $class . '.php',
+        ] as $path
+    ) {
         if (is_file($path)) {
             require_once $path;
             return;
@@ -29,108 +35,259 @@ spl_autoload_register(static function (string $class): void {
 });
 
 require_once APP_PATH . '/core/Helpers.php';
+
 $appConfig = require APP_PATH . '/config/app.php';
 date_default_timezone_set($appConfig['timezone'] ?? 'UTC');
 
-header('Content-Type: application/json; charset=UTF-8');
+$options = getopt('', [
+    'since:',
+    'until:',
+    'account:',
+    'max:',
+    'execute',
+]);
 
-$providedToken = trim((string) ($_GET['token'] ?? $_POST['token'] ?? ''));
-$expectedToken = trim((string) env('MAIL_AUTO_SYNC_INTERNAL_TOKEN', ''));
-if ($expectedToken === '' || $providedToken === '' || !hash_equals($expectedToken, $providedToken)) {
-    http_response_code(403);
-    echo json_encode(['ok' => false, 'error' => 'Token invalido o faltante.']);
-    exit;
+$sinceRaw = (string) ($options['since'] ?? '2026-10-27T05:00:00Z');
+$untilRaw = (string) ($options['until'] ?? '2026-10-29T05:00:00Z');
+$accountFilter = trim((string) ($options['account'] ?? ''));
+$max = max(1, min(10000, (int) ($options['max'] ?? 500)));
+
+$execute = array_key_exists('execute', $options);
+
+function printResult(array $data): void
+{
+    echo json_encode(
+        $data,
+        JSON_PRETTY_PRINT
+            | JSON_UNESCAPED_UNICODE
+            | JSON_UNESCAPED_SLASHES
+            | JSON_INVALID_UTF8_SUBSTITUTE
+    ), PHP_EOL;
 }
-
-// Fecha desde la cual recuperar tickets. Por defecto: martes 2026-08-25.
-$sinceRaw = trim((string) ($_GET['since'] ?? $_POST['since'] ?? ''));
-if ($sinceRaw === '') {
-    $sinceRaw = '2026-08-25T00:00:00Z';
-}
-$sinceTs = strtotime($sinceRaw);
-if ($sinceTs === false) {
-    http_response_code(400);
-    echo json_encode(['ok' => false, 'error' => 'Fecha `since` invalida. Usa formato ISO UTC, p.ej. 2026-08-25T00:00:00Z.']);
-    exit;
-}
-$sinceIso = gmdate('Y-m-d\TH:i:s\Z', $sinceTs);
-
-// Limite de correos por cuenta en una ejecucion.
-$maxPerAccount = max(1, min(500, (int) ($_GET['max'] ?? $_POST['max'] ?? 200)));
-
-// Cuentas opcionales a incluir (por defecto todas habilitadas).
-$accountFilter = trim((string) ($_GET['account_alias'] ?? $_POST['account_alias'] ?? ''));
 
 try {
-    $db = Database::getInstance()->connection();
-    $controller = new CorreoController();
-    $reflection = new ReflectionClass('CorreoController');
+    $since = new DateTimeImmutable($sinceRaw);
+    $until = new DateTimeImmutable($untilRaw);
 
-    $resolveDefaults = $reflection->getMethod('resolveTicketDefaults');
-    $resolveDefaults->setAccessible(true);
-    $ticketCfg = (array) $resolveDefaults->invoke($controller, $db);
-
-    $syncMethod = $reflection->getMethod('syncEmailsIntoTickets');
-    $syncMethod->setAccessible(true);
+    if ($until <= $since) {
+        throw new RuntimeException(
+            'La fecha final debe ser posterior a la inicial.'
+        );
+    }
 
     $mailbox = new MailboxService();
     $accounts = $mailbox->getAvailableAccounts();
 
-    $perAccount = [];
-    $totals = ['created' => 0, 'updated' => 0, 'skipped' => 0, 'fetched' => 0];
+    if ($accountFilter !== '') {
+        $accounts = array_values(array_filter(
+            $accounts,
+            static fn(array $account): bool =>
+            (string) ($account['alias'] ?? '') === $accountFilter
+        ));
+    }
+
+    if (empty($accounts)) {
+        throw new RuntimeException(
+            'No se encontraron cuentas habilitadas para la consulta.'
+        );
+    }
+
+    $db = null;
+    $controller = null;
+    $ticketCfg = [];
+    $syncMethod = null;
+
+    if ($execute) {
+        $db = Database::getInstance()->connection();
+        $controller = new CorreoController();
+
+        $reflection = new ReflectionClass($controller);
+
+        foreach (
+            [
+                'ensureMailSyncTable',
+                'ensureTicketMensajesThreadColumns',
+                'ensureTicketMensajesMessageCapacity',
+                'ensureReplyAttachmentsTable',
+                'ensureAttachmentQueueTable',
+                'ensureProcessQueueTable',
+            ] as $methodName
+        ) {
+            $method = $reflection->getMethod($methodName);
+            $method->invoke($controller, $db);
+        }
+
+        $defaultsMethod = $reflection->getMethod(
+            'resolveTicketDefaults'
+        );
+
+        $ticketCfg = (array) $defaultsMethod->invoke(
+            $controller,
+            $db
+        );
+
+        $syncMethod = $reflection->getMethod(
+            'syncEmailsIntoTickets'
+        );
+    }
+
+    $results = [];
+    $totals = [
+        'fetched' => 0,
+        'created' => 0,
+        'updated' => 0,
+        'skipped' => 0,
+        'errors' => 0,
+    ];
 
     foreach ($accounts as $account) {
         $alias = trim((string) ($account['alias'] ?? ''));
+
         if ($alias === '') {
             continue;
         }
-        if ($accountFilter !== '' && $alias !== $accountFilter) {
-            continue;
+
+        $entry = [
+            'account' => $alias,
+            'complete' => false,
+            'folders_scanned' => 0,
+            'fetched' => 0,
+            'created' => 0,
+            'updated' => 0,
+            'skipped' => 0,
+            'errors' => [],
+        ];
+
+        $lockAcquired = false;
+        $lockName = substr(
+            'atlas:mail:' . hash('sha256', $alias),
+            0,
+            64
+        );
+
+        try {
+            if ($execute) {
+                $stmt = $db->prepare(
+                    'SELECT GET_LOCK(:lock_name, 0)'
+                );
+                $stmt->execute(['lock_name' => $lockName]);
+
+                $lockAcquired = (int) $stmt->fetchColumn() === 1;
+
+                if (!$lockAcquired) {
+                    throw new RuntimeException(
+                        'Buzon ocupado por otra sincronizacion.'
+                    );
+                }
+            }
+
+            $fetch = $mailbox->fetchSinceForTicketing(
+                $alias,
+                $since->format('Y-m-d\TH:i:s\Z'),
+                $max,
+                $until->format('Y-m-d\TH:i:s\Z')
+            );
+
+            $entry['complete'] = !empty($fetch['complete']);
+            $entry['folders_scanned'] =
+                (int) ($fetch['folders_scanned'] ?? 0);
+
+            $emails = is_array($fetch['emails'] ?? null)
+                ? $fetch['emails']
+                : [];
+
+            $entry['fetched'] = count($emails);
+            $totals['fetched'] += count($emails);
+
+            if (empty($fetch['ok']) || !$entry['complete']) {
+                throw new RuntimeException(
+                    (string) ($fetch['error']
+                        ?? 'Consulta de carpetas incompleta.')
+                );
+            }
+
+            if ($execute && !empty($emails)) {
+
+                $counts = (array) $syncMethod->invoke(
+                    $controller,
+                    $db,
+                    $mailbox,
+                    $emails,
+                    $ticketCfg,
+                    [],
+                    [],
+                    [],
+                    false
+                );
+
+
+                $entry['created'] =
+                    (int) ($counts['created'] ?? 0);
+
+                $entry['updated'] =
+                    (int) ($counts['updated'] ?? 0);
+
+                $entry['skipped'] =
+                    (int) ($counts['skipped'] ?? 0);
+
+                $errorCount =
+                    (int) ($counts['error_count'] ?? 0);
+
+                $entry['omitted'] =
+                    (array) ($counts['omitted_breakdown'] ?? []);
+
+                $totals['created'] += $entry['created'];
+                $totals['updated'] += $entry['updated'];
+                $totals['skipped'] += $entry['skipped'];
+
+                if ($errorCount > 0) {
+                    $totals['errors'] += $errorCount;
+                    $entry['errors'][] =
+                        $errorCount . ' mensaje(s) fallaron al procesarse.';
+                }
+            }
+        } catch (Throwable $e) {
+            $entry['errors'][] = $e->getMessage();
+            $totals['errors']++;
+        } finally {
+            if ($lockAcquired) {
+                try {
+                    $release = $db->prepare(
+                        'SELECT RELEASE_LOCK(:lock_name)'
+                    );
+
+                    $release->execute([
+                        'lock_name' => $lockName,
+                    ]);
+                } catch (Throwable $e) {
+                    $entry['errors'][] =
+                        'Error liberando bloqueo: ' . $e->getMessage();
+                    $totals['errors']++;
+                }
+            }
         }
 
-        $entry = ['fetched' => 0, 'created' => 0, 'updated' => 0, 'skipped' => 0, 'error' => null];
-
-        $fetch = $mailbox->fetchSinceForTicketing($alias, $sinceIso, $maxPerAccount);
-        if (!$fetch['ok']) {
-            $entry['error'] = (string) ($fetch['error'] ?? 'No se pudo consultar la bandeja.');
-            $perAccount[$alias] = $entry;
-            continue;
-        }
-
-        $emails = is_array($fetch['emails'] ?? null) ? $fetch['emails'] : [];
-        $entry['fetched'] = count($emails);
-        $totals['fetched'] += count($emails);
-
-        if (!empty($emails)) {
-            $counts = (array) $syncMethod->invoke($controller, $db, $mailbox, $emails, $ticketCfg);
-
-            $entry['created'] = (int) ($counts['created'] ?? 0);
-            $entry['updated'] = (int) ($counts['updated'] ?? 0);
-            $entry['skipped'] = (int) ($counts['skipped'] ?? 0);
-            $entry['omitted'] = (array) ($counts['omitted_breakdown'] ?? [
-                'ya_procesado' => 0,
-                'grupo_actualizado' => 0,
-                'contacto_invalido' => 0,
-                'error' => 0,
-            ]);
-
-            $totals['created'] += $entry['created'];
-            $totals['updated'] += $entry['updated'];
-            $totals['skipped'] += $entry['skipped'];
-        }
-
-        $perAccount[$alias] = $entry;
+        $results[] = $entry;
     }
 
-    echo json_encode([
-        'ok' => true,
-        'service' => 'recover-tickets-since',
-        'since' => $sinceIso,
-        'max_per_account' => $maxPerAccount,
+    printResult([
+        'ok' => $totals['errors'] === 0,
+        'mode' => $execute ? 'EXECUTE' : 'DIAGNOSTIC',
+        'since' => $sinceRaw,
+        'until' => $untilRaw,
+        'accounts' => count($results),
         'totals' => $totals,
-        'per_account' => $perAccount,
-    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), PHP_EOL;
+        'results' => $results,
+    ]);
+
+    if ($totals['errors'] > 0) {
+        exit(1);
+    }
 } catch (Throwable $e) {
-    http_response_code(500);
-    echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+    printResult([
+        'ok' => false,
+        'error' => $e->getMessage(),
+    ]);
+
+    exit(1);
 }
