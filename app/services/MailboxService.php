@@ -60,7 +60,7 @@ class MailboxService
 		if (!$ignoreLocalCooldown) {
 			$waitSeconds = $this->getImapBlockSeconds($alias);
 			if ($waitSeconds > 0) {
-					return ['ok' => false, 'error' => 'Proteccion local activa para evitar mas intentos fallidos. Espera ' . $waitSeconds . ' segundos y vuelve a intentar.'];
+				return ['ok' => false, 'error' => 'Proteccion local activa para evitar mas intentos fallidos. Espera ' . $waitSeconds . ' segundos y vuelve a intentar.'];
 			}
 		}
 
@@ -176,6 +176,21 @@ class MailboxService
 		return ['ok' => true, 'error' => null, 'emails' => $emails];
 	}
 
+	public function acknowledgeTicketingCursor(?string $accountAlias, array $cursor): void
+	{
+		if (!$this->isGraphMode()) {
+			return;
+		}
+
+		$account = $this->resolveAccount($accountAlias);
+
+		if ($account === null || $this->graphService === null) {
+			throw new RuntimeException('No se pudo resolver la cuenta para confirmar el cursor.');
+		}
+
+		$this->graphService->acknowledgeTicketingCursor($account, $cursor);
+	}
+
 	public function fetchForTicketing(?string $accountAlias, int $limit = 20): array
 	{
 		$account = $this->resolveAccount($accountAlias);
@@ -188,7 +203,7 @@ class MailboxService
 				return ['ok' => false, 'error' => 'No se pudo inicializar servicio Graph.', 'emails' => []];
 			}
 
-			return $this->graphService->fetchDeltaForTicketing($account, $limit);
+			return $this->graphService->fetchFoldersForTicketing($account, $limit);
 		}
 
 		if (MailTicketPolicy::startDate($account) === null && $this->isHistoricalBootstrapEnabled()) {
@@ -209,26 +224,41 @@ class MailboxService
 		return $this->fetchUnreadForTicketing($accountAlias, $limit);
 	}
 
-	/**
-	 * Obtiene correos de la bandeja recibidos desde una fecha ISO UTC.
-	 * Solo disponible en modo Graph.
-	 */
-	public function fetchSinceForTicketing(?string $accountAlias, string $sinceIsoUtc, int $max = 200): array
-	{
+
+	public function fetchSinceForTicketing(
+		?string $accountAlias,
+		string $sinceIsoUtc,
+		int $max = 200,
+		?string $untilIsoUtc = null
+	): array {
 		$account = $this->resolveAccount($accountAlias);
+
 		if ($account === null) {
-			return ['ok' => false, 'error' => 'No hay cuentas de correo habilitadas.', 'emails' => []];
+			return [
+				'ok' => false,
+				'error' => 'Cuenta de correo no disponible.',
+				'emails' => [],
+				'complete' => false,
+			];
 		}
 
-		if ($this->isGraphMode()) {
-			if ($this->graphService === null) {
-				return ['ok' => false, 'error' => 'No se pudo inicializar servicio Graph.', 'emails' => []];
-			}
-			return $this->graphService->fetchSinceForTicketing($account, $sinceIsoUtc, $max);
+		if (!$this->isGraphMode() || $this->graphService === null) {
+			return [
+				'ok' => false,
+				'error' => 'La recuperacion por fechas requiere Microsoft Graph.',
+				'emails' => [],
+				'complete' => false,
+			];
 		}
 
-		return ['ok' => false, 'error' => 'La recuperacion por rango de fechas solo esta disponible en modo Graph.', 'emails' => []];
+		return $this->graphService->fetchSinceForTicketing(
+			$account,
+			$sinceIsoUtc,
+			$max,
+			$untilIsoUtc
+		);
 	}
+
 
 	private function isHistoricalBootstrapEnabled(): bool
 	{
@@ -770,22 +800,45 @@ class MailboxService
 		return $default !== '' ? $default : null;
 	}
 
+
 	private function resolveAccount(?string $accountAlias): ?array
 	{
 		$accounts = $this->config['accounts'] ?? [];
+
 		if (!is_array($accounts) || empty($accounts)) {
 			return null;
 		}
 
-		$enabled = array_values(array_filter($accounts, fn($a) => $this->isAccountEnabled($a['enabled'] ?? false)));
+		$enabled = array_values(array_filter(
+			$accounts,
+			fn($account) => is_array($account)
+				&& $this->isAccountEnabled($account['enabled'] ?? false)
+		));
+
 		if (empty($enabled)) {
 			return null;
 		}
 
-		$alias = $this->resolveAliasOrDefault($accountAlias);
-		if ($alias !== null) {
+		$requestedAlias = trim((string) $accountAlias);
+
+		if ($requestedAlias !== '') {
 			foreach ($enabled as $account) {
-				if (($account['alias'] ?? '') === $alias) {
+				if (trim((string) ($account['alias'] ?? '')) === $requestedAlias) {
+					return $account;
+				}
+			}
+
+			// Nunca utilizar otro buzon si el alias solicitado no existe.
+			return null;
+		}
+
+		$defaultAlias = trim((string) (
+			$this->config['default_account_alias'] ?? ''
+		));
+
+		if ($defaultAlias !== '') {
+			foreach ($enabled as $account) {
+				if (trim((string) ($account['alias'] ?? '')) === $defaultAlias) {
 					return $account;
 				}
 			}
@@ -793,6 +846,7 @@ class MailboxService
 
 		return $enabled[0];
 	}
+
 
 	private function openInbox(array $account)
 	{

@@ -679,34 +679,126 @@ class CorreoController extends Controller
 			$this->markHistoricalReclassifyRun();
 		}
 
-		$emails = [];
 		$syncErrors = [];
+
 		foreach ($aliasesToSync as $aliasToSync) {
-			$sync = $mailbox->fetchForTicketing($aliasToSync, $batchLimit);
-			if (!$sync['ok']) {
-				$syncErrors[] = '[' . $aliasToSync . '] ' . (string) ($sync['error'] ?? 'No se pudo sincronizar la bandeja.');
-				continue;
-			}
+			$lockName = substr('atlas:mail:' . hash('sha256', $aliasToSync), 0, 64);
+			$lockAcquired = false;
 
-			$emailsBatch = is_array($sync['emails'] ?? null) ? $sync['emails'] : [];
-			if (!empty($emailsBatch)) {
-				$emails = array_merge($emails, $emailsBatch);
-			}
-		}
+			try {
+				$stmtLock = $db->prepare('SELECT GET_LOCK(:lock_name, 0)');
+				$stmtLock->execute(['lock_name' => $lockName]);
+				$lockAcquired = (int) $stmtLock->fetchColumn() === 1;
 
-		if (!empty($emails)) {
-			$counts = $this->syncEmailsIntoTickets($db, $mailbox, $emails, $ticketCfg, $createdByGroup, $updatedByGroup, $omittedBreakdown);
-			$created += (int) ($counts['created'] ?? 0);
-			$updated += (int) ($counts['updated'] ?? 0);
-			$skipped += (int) ($counts['skipped'] ?? 0);
-			foreach ((array) ($counts['created_by_group'] ?? []) as $groupKey => $count) {
-				$createdByGroup[(string) $groupKey] = (int) ($createdByGroup[(string) $groupKey] ?? 0) + (int) $count;
-			}
-			foreach ((array) ($counts['updated_by_group'] ?? []) as $groupKey => $count) {
-				$updatedByGroup[(string) $groupKey] = (int) ($updatedByGroup[(string) $groupKey] ?? 0) + (int) $count;
-			}
-			foreach ((array) ($counts['omitted_breakdown'] ?? []) as $reason => $count) {
-				$omittedBreakdown[(string) $reason] = (int) ($omittedBreakdown[(string) $reason] ?? 0) + (int) $count;
+				if (!$lockAcquired) {
+					$syncErrors[] = '[' . $aliasToSync . '] Buzon ocupado por otra sincronizacion.';
+					continue;
+				}
+
+				$sync = $mailbox->fetchForTicketing($aliasToSync, $batchLimit);
+
+				if (empty($sync['ok'])) {
+					$syncErrors[] = '[' . $aliasToSync . '] ' .
+						(string) ($sync['error'] ?? 'Error al consultar el buzon.');
+					continue;
+				}
+
+				$batches = isset($sync['batches']) && is_array($sync['batches'])
+					? $sync['batches']
+					: [$sync];
+
+				foreach ($batches as $batch) {
+					try {
+						if (!is_array($batch)) {
+							throw new RuntimeException('Lote de sincronizacion invalido.');
+						}
+
+						if (empty($batch['ok'])) {
+							$syncErrors[] = '[' . $aliasToSync . '] ' .
+								(string) ($batch['error'] ?? 'Error al consultar una carpeta.');
+							continue;
+						}
+
+						$emailsBatch = is_array($batch['emails'] ?? null)
+							? $batch['emails']
+							: [];
+
+						if (empty($emailsBatch)) {
+							$pendingCursor = $batch['pending_cursor'] ?? null;
+							if (is_array($pendingCursor)) {
+								$mailbox->acknowledgeTicketingCursor($aliasToSync, $pendingCursor);
+							}
+							continue;
+						}
+
+						$counts = $this->syncEmailsIntoTickets(
+							$db,
+							$mailbox,
+							$emailsBatch,
+							$ticketCfg,
+							[],
+							[],
+							[]
+						);
+
+						$created += (int) ($counts['created'] ?? 0);
+						$updated += (int) ($counts['updated'] ?? 0);
+						$skipped += (int) ($counts['skipped'] ?? 0);
+
+						$batchErrors = (int) ($counts['error_count'] ?? 0);
+
+						if ($batchErrors > 0) {
+							$syncErrors[] = '[' . $aliasToSync . '] ' .
+								$batchErrors . ' correo(s) no pudieron procesarse. ' .
+								'Cursor del lote sin confirmar.';
+						} else {
+							$pendingCursor = $batch['pending_cursor'] ?? null;
+							if (is_array($pendingCursor)) {
+								$mailbox->acknowledgeTicketingCursor($aliasToSync, $pendingCursor);
+							}
+						}
+
+						foreach ((array) ($counts['created_by_group'] ?? []) as $groupKey => $count) {
+							$createdByGroup[(string) $groupKey] =
+								(int) ($createdByGroup[(string) $groupKey] ?? 0) + (int) $count;
+						}
+
+						foreach ((array) ($counts['updated_by_group'] ?? []) as $groupKey => $count) {
+							$updatedByGroup[(string) $groupKey] =
+								(int) ($updatedByGroup[(string) $groupKey] ?? 0) + (int) $count;
+						}
+
+						foreach ((array) ($counts['omitted_breakdown'] ?? []) as $reason => $count) {
+							$omittedBreakdown[(string) $reason] =
+								(int) ($omittedBreakdown[(string) $reason] ?? 0) + (int) $count;
+						}
+					} catch (Throwable $batchException) {
+						$folderName = is_array($batch)
+							? (string) ($batch['folder_name'] ?? 'desconocida')
+							: 'desconocida';
+
+						$syncErrors[] = '[' . $aliasToSync . '] '
+							. 'Error procesando carpeta ' . $folderName
+							. ': ' . $batchException->getMessage();
+
+						error_log(
+							'Atlas mail sync folder: '
+								. $batchException->getMessage()
+						);
+					}
+				}
+			} catch (Throwable $e) {
+				$syncErrors[] = '[' . $aliasToSync . '] ' . $e->getMessage();
+				error_log('Atlas mail sync: ' . $e->getMessage());
+			} finally {
+				if ($lockAcquired) {
+					try {
+						$stmtRelease = $db->prepare('SELECT RELEASE_LOCK(:lock_name)');
+						$stmtRelease->execute(['lock_name' => $lockName]);
+					} catch (Throwable $e) {
+						error_log('Atlas mail lock release: ' . $e->getMessage());
+					}
+				}
 			}
 		}
 
@@ -727,11 +819,21 @@ class CorreoController extends Controller
 	 * convierte en tickets, reutilizando la logica de sincronizacion para que
 	 * no duplique los mensajes ya procesados en mail_ticket_sync.
 	 */
-	private function syncEmailsIntoTickets(PDO $db, MailboxService $mailbox, array $emails, array $ticketCfg, array $createdByGroup = [], array $updatedByGroup = [], array $omittedBreakdown = []): array
-	{
+	private function syncEmailsIntoTickets(
+		PDO $db,
+		MailboxService $mailbox,
+		array $emails,
+		array $ticketCfg,
+		array $createdByGroup = [],
+		array $updatedByGroup = [],
+		array $omittedBreakdown = [],
+		bool $markAsSeen = false
+	): array {
 		$created = 0;
 		$updated = 0;
 		$skipped = 0;
+
+		$errorCount = 0;
 
 		foreach ($emails as $email) {
 			try {
@@ -740,37 +842,59 @@ class CorreoController extends Controller
 					continue;
 				}
 
+
 				if ($this->alreadyProcessedEmail($db, $email)) {
 					$skipped++;
-					$omittedBreakdown['ya_procesado'] = (int) ($omittedBreakdown['ya_procesado'] ?? 0) + 1;
 
-					$ticketId = $this->findProcessedTicketId($db, $email);
-					$fallbackGroupId = isset($ticketCfg['grupo_id']) ? (int) $ticketCfg['grupo_id'] : null;
-					$guessedGroupId = $this->guessGroupIdFromEmail($db, $email, $fallbackGroupId);
-					if ($ticketId !== null && $guessedGroupId !== null && ($fallbackGroupId === null || $guessedGroupId !== $fallbackGroupId)) {
-						if ($this->updateTicketGroupIfNeeded($db, $ticketId, $guessedGroupId)) {
-							$updated++;
-							$omittedBreakdown['grupo_actualizado'] = (int) ($omittedBreakdown['grupo_actualizado'] ?? 0) + 1;
-							$updatedGroupName = $this->resolveGroupNameByTicketId($db, $ticketId);
-							$updatedGroupKey = $updatedGroupName !== '' ? $updatedGroupName : 'Sin asignar';
-							$updatedByGroup[$updatedGroupKey] = (int) ($updatedByGroup[$updatedGroupKey] ?? 0) + 1;
-						}
-					}
+					$omittedBreakdown['ya_procesado'] =
+						(int) ($omittedBreakdown['ya_procesado'] ?? 0) + 1;
+
 					continue;
 				}
 
+
+				$existingMessageTicketId = $this->findExistingIncomingMessageTicketId($db, $email);
+				if ($existingMessageTicketId !== null) {
+					$this->markEmailProcessed($db, $email, $existingMessageTicketId);
+					$skipped++;
+					$omittedBreakdown['mensaje_recuperado'] =
+						(int) ($omittedBreakdown['mensaje_recuperado'] ?? 0) + 1;
+					continue;
+				}
+
+				$preparedAttachmentHeaders = $this->prepareIncomingAttachmentHeaders($email);
+
+				$db->beginTransaction();
+
 				$contactId = $this->findOrCreateContactFromEmail($db, $email);
 				if ($contactId <= 0) {
+					$db->rollBack();
 					$skipped++;
+					$errorCount++;
 					$omittedBreakdown['contacto_invalido'] = (int) ($omittedBreakdown['contacto_invalido'] ?? 0) + 1;
 					continue;
 				}
 
 				$existingTicketId = $this->findThreadTicketId($db, $email);
 				if ($existingTicketId !== null) {
-					$this->appendIncomingMessageToTicket($db, $existingTicketId, $email);
+					$this->appendIncomingMessageToTicket($db, $existingTicketId, $email, $preparedAttachmentHeaders);
 					$this->markEmailProcessed($db, $email, $existingTicketId);
-					$mailbox->markMessageAsSeen((string) ($email['account_alias'] ?? ''), (string) ($email['uid'] ?? ''));
+					$db->commit();
+
+					if ($markAsSeen) {
+						try {
+							$mailbox->markMessageAsSeen(
+								(string) ($email['account_alias'] ?? ''),
+								(string) ($email['uid'] ?? '')
+							);
+						} catch (Throwable $seenError) {
+							error_log(
+								'Atlas: no se pudo marcar el correo como leido: '
+									. $seenError->getMessage()
+							);
+						}
+					}
+
 					$updated++;
 					continue;
 				}
@@ -798,13 +922,32 @@ class CorreoController extends Controller
 				$groupKey = $grupoNombre !== '' ? $grupoNombre : 'Sin asignar';
 				$createdByGroup[$groupKey] = (int) ($createdByGroup[$groupKey] ?? 0) + 1;
 
-				$this->appendIncomingMessageToTicket($db, $ticketId, $email);
+				$this->appendIncomingMessageToTicket($db, $ticketId, $email, $preparedAttachmentHeaders);
 
 				$this->markEmailProcessed($db, $email, $ticketId);
-				$mailbox->markMessageAsSeen((string) ($email['account_alias'] ?? ''), (string) ($email['uid'] ?? ''));
+				$db->commit();
+
+				if ($markAsSeen) {
+					try {
+						$mailbox->markMessageAsSeen(
+							(string) ($email['account_alias'] ?? ''),
+							(string) ($email['uid'] ?? '')
+						);
+					} catch (Throwable $seenError) {
+						error_log(
+							'Atlas: no se pudo marcar el correo como leido: '
+								. $seenError->getMessage()
+						);
+					}
+				}
+
 				$created++;
 			} catch (Throwable $e) {
+				if ($db->inTransaction()) {
+					$db->rollBack();
+				}
 				$skipped++;
+				$errorCount++;
 				$omittedBreakdown['error'] = (int) ($omittedBreakdown['error'] ?? 0) + 1;
 				error_log('Sync correo->ticket error: ' . $e->getMessage());
 			}
@@ -814,6 +957,7 @@ class CorreoController extends Controller
 			'created' => $created,
 			'updated' => $updated,
 			'skipped' => $skipped,
+			'error_count' => $errorCount,
 			'created_by_group' => $createdByGroup,
 			'updated_by_group' => $updatedByGroup,
 			'omitted_breakdown' => $omittedBreakdown,
@@ -1197,9 +1341,9 @@ class CorreoController extends Controller
 		// 2) Detección por palabras clave en asunto + cuerpo
 		$searchText = $this->normalizeCatalogText(
 			(string) ($email['subject'] ?? '') . ' ' .
-			(string) ($email['body_text'] ?? '') . ' ' .
-			(string) ($email['from_name'] ?? '') . ' ' .
-			(string) ($email['from_email'] ?? '')
+				(string) ($email['body_text'] ?? '') . ' ' .
+				(string) ($email['from_name'] ?? '') . ' ' .
+				(string) ($email['from_email'] ?? '')
 		);
 
 		if ($searchText !== '') {
@@ -1363,7 +1507,13 @@ class CorreoController extends Controller
 	{
 		$value = mb_strtolower(trim($value), 'UTF-8');
 		$replacements = [
-			'á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u', 'ü' => 'u', 'ñ' => 'n',
+			'á' => 'a',
+			'é' => 'e',
+			'í' => 'i',
+			'ó' => 'o',
+			'ú' => 'u',
+			'ü' => 'u',
+			'ñ' => 'n',
 		];
 		$value = strtr($value, $replacements);
 		$value = preg_replace('/\s+/', ' ', $value) ?? $value;
@@ -1407,6 +1557,76 @@ class CorreoController extends Controller
 		}
 
 		return (int) $rows[0]['id'];
+	}
+
+	private function findExistingIncomingMessageTicketId(PDO $db, array $email): ?int
+	{
+		$alias = trim((string) ($email['account_alias'] ?? ''));
+		$graphId = trim((string) ($email['graph_message_id'] ?? ''));
+		$internetId = trim((string) ($email['internet_message_id'] ?? ''));
+
+		if ($alias === '' || ($graphId === '' && $internetId === '')) {
+			return null;
+		}
+
+		if ($graphId !== '') {
+			$stmt = $db->prepare(
+				'SELECT ticket_id
+                                 FROM ticket_mensajes
+                                 WHERE cuenta_alias = :alias
+                                   AND graph_message_id = :graph_id
+                                 ORDER BY id DESC LIMIT 1'
+			);
+			$stmt->execute([
+				'alias' => $alias,
+				'graph_id' => $graphId,
+			]);
+
+			$ticketId = (int) $stmt->fetchColumn();
+			if ($ticketId > 0) {
+				return $ticketId;
+			}
+		}
+
+		if ($internetId !== '') {
+			$stmtSync = $db->prepare(
+				'SELECT ticket_id
+                                 FROM mail_ticket_sync
+                                 WHERE account_alias = :alias
+                                   AND internet_message_id = :internet_id
+                                 ORDER BY id DESC LIMIT 1'
+			);
+			$stmtSync->execute([
+				'alias' => $alias,
+				'internet_id' => $internetId,
+			]);
+
+			$ticketId = (int) $stmtSync->fetchColumn();
+			if ($ticketId > 0) {
+				return $ticketId;
+			}
+		}
+
+		if ($internetId !== '') {
+			$stmt = $db->prepare(
+				'SELECT ticket_id
+                                 FROM ticket_mensajes
+                                 WHERE cuenta_alias = :alias
+                                   AND internet_message_id = :internet_id
+                                 ORDER BY id DESC LIMIT 1'
+			);
+			$stmt->execute([
+				'alias' => $alias,
+				'internet_id' => $internetId,
+			]);
+
+			$ticketId = (int) $stmt->fetchColumn();
+			if ($ticketId > 0) {
+				return $ticketId;
+			}
+		}
+
+		return null;
 	}
 
 	private function alreadyProcessedEmail(PDO $db, array $email): bool
@@ -1543,29 +1763,72 @@ class CorreoController extends Controller
 
 	private function markEmailProcessed(PDO $db, array $email, int $ticketId): void
 	{
-		$stmt = $db->prepare('INSERT INTO mail_ticket_sync (account_alias, email_uid, graph_message_id, conversation_id, internet_message_id, message_id, ticket_id, created_at) VALUES (:alias, :uid, :graph_message_id, :conversation_id, :internet_message_id, :message_id, :ticket_id, NOW())');
-		$uid = trim((string) ($email['uid'] ?? ''));
-		$stmt->execute([
+		$stmt = $db->prepare(
+			'INSERT INTO mail_ticket_sync
+                     (account_alias, email_uid, graph_message_id, conversation_id,
+                      internet_message_id, message_id, ticket_id, created_at)
+                     VALUES
+                     (:alias, :uid, :graph_message_id, :conversation_id,
+                      :internet_message_id, :message_id, :ticket_id, NOW())'
+		);
+
+		$params = [
 			'alias' => (string) ($email['account_alias'] ?? ''),
-			'uid' => $uid,
+			'uid' => trim((string) ($email['uid'] ?? '')),
 			'graph_message_id' => trim((string) ($email['graph_message_id'] ?? '')),
 			'conversation_id' => trim((string) ($email['conversation_id'] ?? '')),
 			'internet_message_id' => trim((string) ($email['internet_message_id'] ?? ($email['message_id'] ?? ''))),
 			'message_id' => (string) ($email['message_id'] ?? ''),
 			'ticket_id' => $ticketId,
-		]);
+		];
+
+		try {
+			$stmt->execute($params);
+		} catch (PDOException $e) {
+			if ((string) $e->getCode() !== '23000') {
+				throw $e;
+			}
+
+			$existingTicketId = $this->findProcessedTicketId($db, $email);
+
+			if ($existingTicketId === null || $existingTicketId !== $ticketId) {
+				throw $e;
+			}
+		}
 	}
 
-	private function appendIncomingMessageToTicket(PDO $db, int $ticketId, array $email): void
+	private function prepareIncomingAttachmentHeaders(array $email): array
+	{
+		$headers = is_array($email['attachment_headers'] ?? null)
+			? $email['attachment_headers']
+			: [];
+
+		if (!empty($headers)) {
+			return $headers;
+		}
+
+		$bodyHtml = (string) ($email['body_html'] ?? '');
+		$needsAttachments = !empty($email['has_attachments'])
+			|| !empty($email['has_cid_body'])
+			|| stripos($bodyHtml, 'cid:') !== false;
+
+		return $needsAttachments
+			? $this->loadIncomingAttachmentHeaders($email)
+			: [];
+	}
+
+	private function appendIncomingMessageToTicket(PDO $db, int $ticketId, array $email, ?array $preparedAttachmentHeaders = null): void
 	{
 		$subject = trim((string) ($email['subject'] ?? ''));
 		$fromEmail = trim((string) ($email['from_email'] ?? ''));
 		$fromName = trim((string) ($email['from_name'] ?? ''));
 		$bodyHtml = trim((string) ($email['body_html'] ?? ''));
 		$bodyText = trim((string) ($email['body_text'] ?? ''));
-		$attachmentHeaders = is_array($email['attachment_headers'] ?? null) ? $email['attachment_headers'] : [];
+		$attachmentHeaders = $preparedAttachmentHeaders !== null
+			? $preparedAttachmentHeaders
+			: (is_array($email['attachment_headers'] ?? null) ? $email['attachment_headers'] : []);
 		$hasCidInBody = stripos($bodyHtml, 'cid:') !== false;
-		if (empty($attachmentHeaders) && (!empty($email['has_attachments']) || !empty($email['has_cid_body']) || $hasCidInBody)) {
+		if ($preparedAttachmentHeaders === null && empty($attachmentHeaders) && (!empty($email['has_attachments']) || !empty($email['has_cid_body']) || $hasCidInBody)) {
 			$attachmentHeaders = $this->loadIncomingAttachmentHeaders($email);
 		}
 
@@ -1733,7 +1996,7 @@ class CorreoController extends Controller
 		}
 
 		$queue = new AttachmentQueueService($db);
-		$queue->ensureTable();
+		// La tabla se prepara antes de iniciar la transaccion.
 		$queue->enqueueIncomingAttachments($ticketId, $mensajeId, $alias, $uid, $attachmentHeaders);
 	}
 
@@ -1798,8 +2061,23 @@ class CorreoController extends Controller
 
 		$sql = "INSERT INTO contactos ({$columnList}) VALUES ({$placeholderList})";
 		$stmt = $db->prepare($sql);
-		$stmt->execute($payload);
-		return (int) $db->lastInsertId();
+		try {
+			$stmt->execute($payload);
+			return (int) $db->lastInsertId();
+		} catch (PDOException $e) {
+			if ((string) $e->getCode() !== '23000' || $emailColumn === null) {
+				throw $e;
+			}
+			$stmtFind = $db->prepare(
+				"SELECT id FROM contactos WHERE LOWER({$emailColumn}) = :email LIMIT 1"
+			);
+			$stmtFind->execute(['email' => $fromEmail]);
+			$existingId = (int) $stmtFind->fetchColumn();
+			if ($existingId > 0) {
+				return $existingId;
+			}
+			throw $e;
+		}
 	}
 
 	private function resolveDefaultContactoTipo(PDO $db, array $columns): string

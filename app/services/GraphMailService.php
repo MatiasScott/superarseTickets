@@ -730,7 +730,68 @@ class GraphMailService
 		return ['ok' => true, 'error' => null, 'emails' => $emails];
 	}
 
-	public function fetchDeltaForTicketing(array $account, int $limit = 20): array
+	public function fetchFoldersForTicketing(array $account, int $limit = 20): array
+	{
+		$email = trim((string) ($account['email'] ?? ''));
+
+		if ($email === '') {
+			return [
+				'ok' => false,
+				'error' => 'La cuenta no tiene email configurado para Graph.',
+				'batches' => [],
+			];
+		}
+
+		try {
+			$folders = $this->resolveTicketingFolders($email);
+		} catch (\Throwable $e) {
+			return [
+				'ok' => false,
+				'error' => $e->getMessage(),
+				'batches' => [],
+			];
+		}
+
+		$batches = [];
+
+		foreach ($folders as $folder) {
+			$folderId = (string) ($folder['id'] ?? '');
+			$folderName = (string) ($folder['name'] ?? $folderId);
+
+			if ($folderId === '') {
+				continue;
+			}
+
+			try {
+				$batch = $this->fetchDeltaForTicketing(
+					$account,
+					$limit,
+					$folderId
+				);
+
+				$batch['folder_name'] = $folderName;
+				$batch['folder_id'] = $folderId;
+
+				$batches[] = $batch;
+			} catch (\Throwable $e) {
+				$batches[] = [
+					'ok' => false,
+					'error' => $e->getMessage(),
+					'emails' => [],
+					'folder_name' => $folderName,
+					'folder_id' => $folderId,
+				];
+			}
+		}
+
+		return [
+			'ok' => true,
+			'error' => null,
+			'batches' => $batches,
+		];
+	}
+
+	public function fetchDeltaForTicketing(array $account, int $limit = 20, string $folderId = 'inbox'): array
 	{
 		$receivedCount = 0;
 		$discardedCount = 0;
@@ -746,24 +807,30 @@ class GraphMailService
 			$alias = strtolower($userPrincipalName);
 		}
 
+		$stateAlias = $this->ticketingFolderStateAlias(
+			$alias,
+			$folderId,
+			strcasecmp($folderId, 'inbox') === 0
+		);
+
 		$limit = max(1, min(20, $limit));
 		$startDate = MailTicketPolicy::startDate($account);
 		if ($startDate === null && $this->isHistoricalBootstrapEnabled()) {
-			$historical = $this->fetchHistoricalBootstrapForTicketing($account, $userPrincipalName, $alias, $limit);
+			$historical = $this->fetchHistoricalBootstrapForTicketing($account, $userPrincipalName, $stateAlias, $limit, $folderId);
 			if (!$historical['ok']) {
 				return $historical;
 			}
-			if (!empty($historical['emails'])) {
+			if (isset($historical['pending_cursor'])) {
+				// La confirmacion historica debe ocurrir antes de iniciar Delta.
 				return $historical;
 			}
 
-			// Mientras no termine bootstrap historico, no pasar a delta (correos nuevos).
 			if (empty($historical['history_completed'])) {
-				return ['ok' => true, 'error' => null, 'emails' => []];
+				return $historical;
 			}
 		}
 
-		$deltaUrl = $this->readDeltaState($alias, $userPrincipalName);
+		$deltaUrl = $this->readDeltaState($stateAlias, $userPrincipalName);
 
 		if ($deltaUrl !== '') {
 			$response = $this->requestAbsolute('GET', $deltaUrl);
@@ -777,7 +844,7 @@ class GraphMailService
 			}
 			$response = $this->request(
 				'GET',
-				'/users/' . rawurlencode($userPrincipalName) . '/mailFolders/inbox/messages/delta',
+				'/users/' . rawurlencode($userPrincipalName) . '/mailFolders/' . rawurlencode($folderId) . '/messages/delta',
 				null,
 				$query
 			);
@@ -788,8 +855,9 @@ class GraphMailService
 		}
 
 		$emails = [];
+		$pendingCursor = null;
 		$pages = 0;
-			$maxPages = 10;
+		$maxPages = 10;
 
 		for ($loop = 0; $loop < $maxPages; $loop++) {
 			$body = is_array($response['body'] ?? null) ? $response['body'] : [];
@@ -818,27 +886,24 @@ class GraphMailService
 
 				$emails[] = $email;
 				$addedCount++;
-				if (count($emails) >= $limit) {
-					if ($nextLink !== '') {
-						$this->writeDeltaState($alias, $userPrincipalName, $nextLink);
-					} elseif ($newDeltaLink !== '') {
-						$this->writeDeltaState($alias, $userPrincipalName, $newDeltaLink);
-					}
-					error_log('[GraphMailService] fetchDeltaForTicketing summary received=' . $receivedCount . ' discarded=' . $discardedCount . ' added=' . $addedCount . ' emails=' . count($emails));
-					return ['ok' => true, 'error' => null, 'emails' => $emails];
-				}
+			}
+
+			// Respetar el limite al finalizar una pagina completa.
+			if ($nextLink !== '' && count($emails) >= $limit) {
+				$pendingCursor = ['type' => 'delta', 'folder_id' => $folderId, 'link' => $nextLink];
+				break;
 			}
 
 			if ($nextLink === '') {
-				if ($newDeltaLink !== '') {
-					$this->writeDeltaState($alias, $userPrincipalName, $newDeltaLink);
-				}
+				$pendingCursor = $newDeltaLink !== ''
+					? ['type' => 'delta', 'folder_id' => $folderId, 'link' => $newDeltaLink]
+					: null;
 				break;
 			}
 
 			$pages++;
 			if ($pages >= $maxPages) {
-				$this->writeDeltaState($alias, $userPrincipalName, $nextLink);
+				$pendingCursor = ['type' => 'delta', 'folder_id' => $folderId, 'link' => $nextLink];
 				break;
 			}
 
@@ -849,85 +914,201 @@ class GraphMailService
 		}
 
 		error_log('[GraphMailService] fetchDeltaForTicketing summary received=' . $receivedCount . ' discarded=' . $discardedCount . ' added=' . $addedCount . ' emails=' . count($emails));
-		return ['ok' => true, 'error' => null, 'emails' => $emails];
+		return ['ok' => true, 'error' => null, 'emails' => $emails, 'pending_cursor' => $pendingCursor];
 	}
 
-	/**
-	 * Obtiene los correos de la bandeja recibidos desde una fecha (ISO UTC),
-	 * paginando hasta agotar la lista. Usado por la recuperacion de tickets
-	 * de correos atrasados en un rango de fechas.
-	 */
-	public function fetchSinceForTicketing(array $account, string $sinceIsoUtc, int $max = 200): array
-	{
-		$startDate = MailTicketPolicy::startDate($account);
-		if ($startDate !== null && strtotime($sinceIsoUtc) < strtotime($startDate)) {
-			$sinceIsoUtc = $startDate;
+
+
+	public function fetchSinceForTicketing(
+		array $account,
+		string $sinceIsoUtc,
+		int $max = 200,
+		?string $untilIsoUtc = null
+	): array {
+		$email = trim((string) ($account['email'] ?? ''));
+
+		$result = [
+			'ok' => false,
+			'error' => null,
+			'emails' => [],
+			'complete' => false,
+			'folders_scanned' => 0,
+			'messages_found' => 0,
+		];
+
+		if ($email === '') {
+			$result['error'] = 'Cuenta sin email.';
+			return $result;
 		}
 
-		$userPrincipalName = trim((string) ($account['email'] ?? ''));
-		if ($userPrincipalName === '') {
-			return ['ok' => false, 'error' => 'La cuenta no tiene email configurado para Graph.', 'emails' => []];
-		}
+		try {
+			$sinceDate = new DateTimeImmutable($sinceIsoUtc);
+			$since = $sinceDate->getTimestamp();
 
-		$alias = trim((string) ($account['alias'] ?? ''));
-		if ($alias === '') {
-			$alias = strtolower($userPrincipalName);
-		}
+			$until = null;
 
-		$emails = [];
-		$perPage = 50;
-		$pages = 0;
-		$maxPages = 50;
-		$nextLink = '';
+			if ($untilIsoUtc !== null && trim($untilIsoUtc) !== '') {
+				$untilDate = new DateTimeImmutable($untilIsoUtc);
+				$until = $untilDate->getTimestamp();
 
-		for ($loop = 0; $loop < $maxPages; $loop++) {
-			if ($pages === 0) {
-				$response = $this->request(
-					'GET',
-					'/users/' . rawurlencode($userPrincipalName) . '/mailFolders/inbox/messages',
-					null,
-					[
-						'$top' => (string) $perPage,
-						'$orderby' => 'receivedDateTime ASC',
-						'$filter' => 'receivedDateTime ge ' . $sinceIsoUtc,
-						'$select' => 'id,subject,from,receivedDateTime,internetMessageId,conversationId,bodyPreview,body,hasAttachments,isRead',
-					],
-					['ConsistencyLevel: eventual']
-				);
-			} else {
-				$response = $this->requestAbsolute('GET', $nextLink);
-			}
-
-			if (!$response['ok']) {
-				return ['ok' => false, 'error' => $response['error'], 'emails' => $emails];
-			}
-
-			$body = is_array($response['body'] ?? null) ? $response['body'] : [];
-			$items = is_array($body['value'] ?? null) ? $body['value'] : [];
-			$nextLink = trim((string) ($body['@odata.nextLink'] ?? ''));
-
-			foreach ($items as $item) {
-				if (!is_array($item) || isset($item['@removed'])) {
-					continue;
-				}
-				$mapped = $this->mapDeltaMessageToTicketEmail($account, $item, $userPrincipalName);
-				if ($mapped !== null) {
-					$emails[] = $mapped;
+				if ($until <= $since) {
+					$result['error'] = 'La fecha final debe ser posterior a la inicial.';
+					return $result;
 				}
 			}
 
-			if ($nextLink === '') {
-				break;
+			$policyStart = MailTicketPolicy::startDate($account);
+
+			if ($policyStart !== null) {
+				$policyTimestamp = strtotime($policyStart);
+
+				if ($policyTimestamp !== false && $policyTimestamp > $since) {
+					$since = $policyTimestamp;
+				}
 			}
 
-			$pages++;
-			if ($pages >= $maxPages || count($emails) >= $max) {
-				break;
+			if ($until !== null && $since >= $until) {
+				$result['error'] = 'El intervalo queda fuera de la politica de fechas.';
+				return $result;
 			}
+
+			$sinceUtc = gmdate('Y-m-d\TH:i:s\Z', $since);
+			$untilUtc = $until !== null
+				? gmdate('Y-m-d\TH:i:s\Z', $until)
+				: null;
+
+			$max = max(1, min(10000, $max));
+
+			$folders = $this->resolveTicketingFolders($email);
+
+			$seenMessages = [];
+
+			foreach ($folders as $folder) {
+				$folderId = trim((string) ($folder['id'] ?? ''));
+				$folderName = (string) ($folder['name'] ?? 'Desconocida');
+
+				if ($folderId === '') {
+					$result['error'] = 'Se encontro una carpeta sin identificador.';
+					return $result;
+				}
+
+				$next = '';
+				$pages = 0;
+
+				do {
+					if (++$pages > 200) {
+						$result['error'] = 'Limite de paginas alcanzado en ' . $folderName;
+						return $result;
+					}
+
+					if ($next === '') {
+						$filter = 'receivedDateTime ge ' . $sinceUtc;
+
+						if ($untilUtc !== null) {
+							$filter .= ' and receivedDateTime lt ' . $untilUtc;
+						}
+
+						$response = $this->request(
+							'GET',
+							'/users/' . rawurlencode($email)
+								. '/mailFolders/' . rawurlencode($folderId)
+								. '/messages',
+							null,
+							[
+								'$top' => '50',
+								'$orderby' => 'receivedDateTime ASC',
+								'$filter' => $filter,
+								'$select' => 'id,subject,from,receivedDateTime,internetMessageId,conversationId,bodyPreview,body,hasAttachments,isRead',
+							],
+							['ConsistencyLevel: eventual']
+						);
+					} else {
+						$response = $this->requestAbsolute('GET', $next);
+					}
+
+					if (empty($response['ok'])) {
+						$result['error'] = 'Carpeta ' . $folderName . ': '
+							. (string) ($response['error'] ?? 'Error Graph');
+						return $result;
+					}
+
+					$body = is_array($response['body'] ?? null)
+						? $response['body']
+						: [];
+
+					if (!isset($body['value']) || !is_array($body['value'])) {
+						$result['error'] = 'Respuesta Graph invalida en ' . $folderName;
+						return $result;
+					}
+
+					foreach ($body['value'] as $item) {
+						if (!is_array($item) || isset($item['@removed'])) {
+							continue;
+						}
+
+						$received = strtotime(
+							(string) ($item['receivedDateTime'] ?? '')
+						);
+
+						if ($received === false || $received < $since) {
+							continue;
+						}
+
+						if ($until !== null && $received >= $until) {
+							continue;
+						}
+
+						$mapped = $this->mapDeltaMessageToTicketEmail(
+							$account,
+							$item,
+							$email
+						);
+
+						if ($mapped === null) {
+							continue;
+						}
+
+						$internetId = strtolower(trim(
+							(string) ($item['internetMessageId'] ?? '')
+						));
+
+						$graphId = trim((string) ($item['id'] ?? ''));
+
+						$identity = $internetId !== ''
+							? 'internet:' . $internetId
+							: 'graph:' . $graphId;
+
+						if ($identity === 'graph:' || isset($seenMessages[$identity])) {
+							continue;
+						}
+
+						if (count($result['emails']) >= $max) {
+							$result['error'] = 'Limite de recuperacion alcanzado. '
+								. 'Divida el intervalo en tramos mas pequenos.';
+							return $result;
+						}
+
+						$seenMessages[$identity] = true;
+						$result['emails'][] = $mapped;
+						$result['messages_found']++;
+					}
+
+					$next = trim((string) ($body['@odata.nextLink'] ?? ''));
+				} while ($next !== '');
+
+				$result['folders_scanned']++;
+			}
+
+			$result['ok'] = true;
+			$result['complete'] = true;
+
+			return $result;
+		} catch (Throwable $e) {
+			$result['error'] = $e->getMessage();
+			return $result;
 		}
-
-		return ['ok' => true, 'error' => null, 'emails' => $emails];
 	}
+
 
 	private function isHistoricalBootstrapEnabled(): bool
 	{
@@ -989,6 +1170,10 @@ class GraphMailService
 		$row = $stmt->fetch();
 
 		if (!$row) {
+			if (str_contains($accountAlias, ':folder:')) {
+				return ['next_link' => '', 'completed' => false];
+			}
+
 			$stmtFallback = $db->prepare('SELECT next_link, completed FROM mail_history_bootstrap_state WHERE account_email = :email LIMIT 1');
 			$stmtFallback->execute(['email' => $accountEmail]);
 			$row = $stmtFallback->fetch();
@@ -1017,7 +1202,7 @@ class GraphMailService
 		]);
 	}
 
-	private function fetchHistoricalBootstrapForTicketing(array $account, string $userPrincipalName, string $alias, int $limit): array
+	private function fetchHistoricalBootstrapForTicketing(array $account, string $userPrincipalName, string $alias, int $limit, string $folderId = 'inbox'): array
 	{
 		$receivedCount = 0;
 		$discardedCount = 0;
@@ -1034,7 +1219,7 @@ class GraphMailService
 		} else {
 			$response = $this->request(
 				'GET',
-				'/users/' . rawurlencode($userPrincipalName) . '/mailFolders/inbox/messages',
+				'/users/' . rawurlencode($userPrincipalName) . '/mailFolders/' . rawurlencode($folderId) . '/messages',
 				null,
 				[
 					'$top' => (string) $limit,
@@ -1075,17 +1260,19 @@ class GraphMailService
 
 		error_log('[GraphMailService] fetchHistoricalBootstrapForTicketing summary received=' . $receivedCount . ' discarded=' . $discardedCount . ' added=' . $addedCount . ' emails=' . count($emails));
 
-		if ($newNextLink !== '') {
-			$this->writeHistoryState($alias, $userPrincipalName, $newNextLink, false);
-		} else {
-			$this->writeHistoryState($alias, $userPrincipalName, '', true);
-		}
+		$pendingCursor = [
+			'type' => 'history',
+			'folder_id' => $folderId,
+			'link' => $newNextLink,
+			'completed' => $newNextLink === '',
+		];
 
 		return [
 			'ok' => true,
 			'error' => null,
 			'emails' => $emails,
 			'history_completed' => $newNextLink === '',
+			'pending_cursor' => $pendingCursor,
 		];
 	}
 
@@ -1440,6 +1627,165 @@ class GraphMailService
 		return $this->graphClient->requestAbsolute($method, $url, $payload, $extraHeaders);
 	}
 
+	/**
+	 * Mantiene el alias original para Inbox.
+	 * Genera un alias independiente para otras carpetas.
+	 */
+	/**
+	 * Carpetas habilitadas para sincronizacion de tickets.
+	 * Inbox siempre se incluye.
+	 */
+	private function ticketingFolderNames(): array
+	{
+		$configured = trim((string) env(
+			'GRAPH_TICKETING_FOLDERS',
+			'inbox,Sistemas Superarse'
+		));
+
+		$folders = ['inbox'];
+		foreach (explode(',', $configured) as $name) {
+			$name = trim($name);
+			if ($name === '' || strtolower($name) === 'inbox') {
+				continue;
+			}
+			if (!in_array($name, $folders, true)) {
+				$folders[] = $name;
+			}
+		}
+
+		return $folders;
+	}
+
+
+	private function resolveTicketingFolders(string $userPrincipalName): array
+	{
+		// Descubrir todas las carpetas y subcarpetas. No alterar cursores.
+		$base = '/users/' . rawurlencode($userPrincipalName) . '/mailFolders';
+		$folders = [['name' => 'inbox', 'id' => 'inbox', 'is_inbox' => true]];
+		$seen = ['inbox' => true];
+
+		$excluded = [
+			'sentitems',
+			'drafts',
+			'deleteditems',
+			'junkemail',
+			'outbox',
+			'recoverableitemsdeletions',
+			'recoverableitemspurges',
+			'conversationhistory',
+			'syncissues',
+			'conflicts',
+			'localfailures',
+			'serverfailures'
+		];
+
+		$queue = [[$base, 0]];
+		$scanned = 0;
+
+		while ($queue !== []) {
+			[$path, $depth] = array_shift($queue);
+
+			if ($depth > 12 || ++$scanned > 500) {
+				throw new RuntimeException(
+					'Limite de descubrimiento de carpetas alcanzado.'
+				);
+			}
+
+			$next = $path;
+			$pages = 0;
+
+			do {
+				$response = str_starts_with($next, 'https://')
+					? $this->requestAbsolute('GET', $next)
+					: $this->request('GET', $next, null, [
+						'$top' => '100',
+						'$select' => 'id,displayName,parentFolderId,childFolderCount',
+						'includeHiddenFolders' => 'false',
+					]);
+
+				if (empty($response['ok'])) {
+					throw new RuntimeException(
+						'No se pudieron consultar carpetas de '
+							. $userPrincipalName . ': '
+							. (string) ($response['error'] ?? 'error Graph')
+					);
+				}
+
+				$body = is_array($response['body'] ?? null)
+					? $response['body']
+					: [];
+
+				foreach ((array) ($body['value'] ?? []) as $item) {
+					if (!is_array($item)) {
+						continue;
+					}
+
+					$id = trim((string) ($item['id'] ?? ''));
+					$name = trim((string) ($item['displayName'] ?? ''));
+
+					if ($id === '' || $name === '' || isset($seen[$id])) {
+						continue;
+					}
+
+					$seen[$id] = true;
+
+					$normalized = preg_replace(
+						'/[^a-z0-9]/',
+						'',
+						strtolower(
+							iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $name)
+								?: $name
+						)
+					);
+
+					$isExcluded = in_array($normalized, $excluded, true);
+
+					if ($isExcluded) {
+						continue;
+					}
+
+					$folders[] = [
+						'name' => $name,
+						'id' => $id,
+						'is_inbox' => false,
+					];
+
+					if ((int) ($item['childFolderCount'] ?? 0) > 0) {
+						$queue[] = [
+							$base . '/' . rawurlencode($id) . '/childFolders',
+							$depth + 1
+						];
+					}
+				}
+
+				$next = trim((string) ($body['@odata.nextLink'] ?? ''));
+
+				if (++$pages > 50) {
+					throw new RuntimeException(
+						'Limite de paginacion de carpetas alcanzado.'
+					);
+				}
+			} while ($next !== '');
+		}
+
+		return $folders;
+	}
+
+
+	private function ticketingFolderStateAlias(
+		string $accountAlias,
+		string $folderId,
+		bool $isInbox = false
+	): string {
+		if ($isInbox) {
+			return $accountAlias;
+		}
+
+		return substr($accountAlias, 0, 72)
+			. ':folder:'
+			. substr(hash('sha256', $folderId), 0, 32);
+	}
+
 	private function ensureDeltaStateTable(): void
 	{
 		$db = Database::getInstance()->connection();
@@ -1453,20 +1799,75 @@ class GraphMailService
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 	}
 
+
 	private function readDeltaState(string $accountAlias, string $accountEmail): string
 	{
 		$this->ensureDeltaStateTable();
+
 		$db = Database::getInstance()->connection();
-		$stmt = $db->prepare('SELECT delta_link FROM mail_sync_state WHERE account_alias = :alias LIMIT 1');
-		$stmt->execute(['alias' => $accountAlias]);
-		$value = trim((string) ($stmt->fetchColumn() ?: ''));
-		if ($value !== '') {
-			return $value;
+
+		$stmt = $db->prepare(
+			'SELECT delta_link
+         FROM mail_sync_state
+         WHERE account_alias = :alias
+         LIMIT 1'
+		);
+
+		$stmt->execute([
+			'alias' => $accountAlias,
+		]);
+
+		return trim((string) ($stmt->fetchColumn() ?: ''));
+	}
+
+	public function acknowledgeTicketingCursor(array $account, array $cursor): void
+	{
+		$alias = trim((string) ($account['alias'] ?? ''));
+		$email = trim((string) ($account['email'] ?? ''));
+
+		if ($alias === '') {
+			$alias = strtolower($email);
 		}
 
-		$stmtFallback = $db->prepare('SELECT delta_link FROM mail_sync_state WHERE account_email = :email LIMIT 1');
-		$stmtFallback->execute(['email' => $accountEmail]);
-		return trim((string) ($stmtFallback->fetchColumn() ?: ''));
+		if ($email === '') {
+			throw new RuntimeException('No se puede confirmar un cursor sin cuenta de correo.');
+		}
+
+		$folderId = trim((string) ($cursor['folder_id'] ?? 'inbox'));
+		if ($folderId === '') {
+			throw new RuntimeException('Cursor sin identificador de carpeta.');
+		}
+
+		$stateAlias = $this->ticketingFolderStateAlias(
+			$alias,
+			$folderId,
+			strcasecmp($folderId, 'inbox') === 0
+		);
+
+		$type = (string) ($cursor['type'] ?? '');
+		$link = trim((string) ($cursor['link'] ?? ''));
+
+		if ($type === 'delta') {
+			if ($link === '') {
+				throw new RuntimeException('Cursor Delta vacio.');
+			}
+
+			$this->writeDeltaState($stateAlias, $email, $link);
+			return;
+		}
+
+		if ($type === 'history') {
+			$completed = !empty($cursor['completed']);
+
+			if (!$completed && $link === '') {
+				throw new RuntimeException('Cursor historico incompleto sin enlace.');
+			}
+
+			$this->writeHistoryState($stateAlias, $email, $link, $completed);
+			return;
+		}
+
+		throw new RuntimeException('Tipo de cursor no reconocido.');
 	}
 
 	private function writeDeltaState(string $accountAlias, string $accountEmail, string $deltaLink): void
