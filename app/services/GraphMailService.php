@@ -238,7 +238,7 @@ class GraphMailService
 			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId) . '/attachments',
 			null,
 			[
-				'$select' => 'id,name,contentType,size,isInline',
+				'$select' => 'id,name,contentType,size,isInline,contentId',
 			]
 		);
 		if ($attachmentsResponse['ok']) {
@@ -326,6 +326,8 @@ class GraphMailService
 				'filename' => (string) ($body['name'] ?? 'Adjunto'),
 				'mime' => (string) ($body['contentType'] ?? 'application/octet-stream'),
 				'content' => $content,
+                'is_inline' => !empty($body['isInline']),
+                'content_id' => trim((string) ($body['contentId'] ?? '')),
 			],
 		];
 	}
@@ -1391,7 +1393,7 @@ class GraphMailService
 			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId) . '/attachments',
 			null,
 			[
-				'$select' => 'id,name,contentType,size,isInline',
+				'$select' => 'id,name,contentType,size,isInline,contentId',
 			]
 		);
 		if (!$list['ok']) {
@@ -1496,7 +1498,7 @@ class GraphMailService
 			'/users/' . rawurlencode($userPrincipalName) . '/messages/' . rawurlencode($messageId) . '/attachments',
 			null,
 			[
-				'$select' => 'id,name,contentType,size,isInline',
+				'$select' => 'id,name,contentType,size,isInline,contentId',
 			]
 		);
 		if (!$list['ok']) {

@@ -87,21 +87,25 @@ class AttachmentQueueService
     {
         $limit = max(1, min(200, $limit));
 
-        $stmt = $this->db->prepare('SELECT * FROM cola_adjuntos WHERE (estado = "pendiente" OR estado = "error") AND intentos < 5 ORDER BY id ASC LIMIT :lim');
-        $stmt->bindValue(':lim', $limit, PDO::PARAM_INT);
-        $stmt->execute();
-        $rows = $stmt->fetchAll() ?: [];
-
-        if (empty($rows)) {
-            return [];
+        // Reserva atomica: evita que dos workers procesen el mismo registro.
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT * FROM cola_adjuntos WHERE (estado = "pendiente" OR estado = "error") AND intentos < 5 ORDER BY id ASC LIMIT :lim FOR UPDATE');
+            $stmt->bindValue(':lim', $limit, PDO::PARAM_INT);
+            $stmt->execute();
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $mark = $this->db->prepare('UPDATE cola_adjuntos SET estado = "procesando", intentos = intentos + 1, error = NULL WHERE id = :id AND estado IN ("pendiente", "error")');
+            foreach ($rows as $row) {
+                $mark->execute(['id' => (int) $row['id']]);
+            }
+            $this->db->commit();
+            return $rows;
+        } catch (Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
         }
-
-        $mark = $this->db->prepare('UPDATE cola_adjuntos SET estado = "procesando", intentos = intentos + 1, error = NULL WHERE id = :id');
-        foreach ($rows as $row) {
-            $mark->execute(['id' => (int) ($row['id'] ?? 0)]);
-        }
-
-        return $rows;
     }
 
     public function markProcessed(int $id): void

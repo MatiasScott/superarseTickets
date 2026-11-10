@@ -400,6 +400,11 @@ class TicketController extends Controller
 	public function show(string $id): void
 	{
 		Auth::requireAuth();
+		if (!Auth::canPerform('tickets', 'ver')) {
+			http_response_code(403);
+			echo 'Acceso denegado.';
+			return;
+		}
 		$ticketId = (int) $id;
 
 		$ticket      = null;
@@ -462,10 +467,11 @@ class TicketController extends Controller
 			$mensajes = $this->hydrateMissingInlineImages($db, $ticketId, $mensajes);
 
 			$attachmentsByMessage = [];
-			$stmtAttach = $db->prepare("SELECT id, ticket_mensaje_id, filename_original, mime, size_bytes, is_inline, storage_path
-				FROM ticket_mensaje_adjuntos
-				WHERE ticket_id = :tid
-				ORDER BY id ASC");
+			$stmtAttach = $db->prepare("SELECT a.id, a.ticket_mensaje_id, a.filename_original, a.mime, a.size_bytes, a.is_inline, a.storage_path
+				FROM ticket_mensaje_adjuntos a
+				INNER JOIN ticket_mensajes tm ON tm.id = a.ticket_mensaje_id AND tm.ticket_id = a.ticket_id
+				WHERE a.ticket_id = :tid
+				ORDER BY a.id ASC");
 			$stmtAttach->execute(['tid' => $ticketId]);
 			foreach (($stmtAttach->fetchAll() ?: []) as $attRow) {
 				$messageId = (int) ($attRow['ticket_mensaje_id'] ?? 0);
@@ -553,7 +559,7 @@ class TicketController extends Controller
 				$mensajeOrigen = $mailbox->getMessage((string) ($correoOrigen['account_alias'] ?? ''), (string) $correoOrigen['email_uid']);
 				if (!empty($mensajeOrigen['ok']) && is_array($mensajeOrigen['message'] ?? null)) {
 					$adjuntos = is_array($mensajeOrigen['message']['attachments'] ?? null) ? $mensajeOrigen['message']['attachments'] : [];
-					$mensajes = $this->applyCidFallbackFromOriginAttachments($mensajes, $adjuntos, $ticketId);
+					// SECURITY: positional CID fallback disabled; attachments must match the originating message.
 				}
 			} catch (Throwable $e) {
 				$adjuntos = [];
@@ -1207,6 +1213,11 @@ class TicketController extends Controller
 	public function replyAttachment(string $id, string $attachmentId): void
 	{
 		Auth::requireAuth();
+		if (!Auth::canPerform('tickets', 'ver')) {
+			http_response_code(403);
+			echo 'Acceso denegado.';
+			return;
+		}
 
 		$ticketId = (int) $id;
 		$adjId = (int) $attachmentId;
@@ -1219,7 +1230,10 @@ class TicketController extends Controller
 		try {
 			$db = Database::getInstance()->connection();
 			$this->ensureReplyAttachmentsTable($db);
-			$stmt = $db->prepare('SELECT filename_original, mime, size_bytes, storage_path FROM ticket_mensaje_adjuntos WHERE id = :id AND ticket_id = :ticket_id LIMIT 1');
+			$stmt = $db->prepare('SELECT a.filename_original, a.mime, a.size_bytes, a.storage_path
+				FROM ticket_mensaje_adjuntos a
+				INNER JOIN ticket_mensajes tm ON tm.id = a.ticket_mensaje_id AND tm.ticket_id = a.ticket_id
+				WHERE a.id = :id AND a.ticket_id = :ticket_id LIMIT 1');
 			$stmt->execute([
 				'id' => $adjId,
 				'ticket_id' => $ticketId,
@@ -1272,6 +1286,12 @@ class TicketController extends Controller
 	public function attachment(string $id): void
 	{
 		Auth::requireAuth();
+		// SECURITY: this legacy endpoint resolves an attachment against the latest
+		// email of the ticket, not the original message. Disabled pending redesign.
+		http_response_code(404);
+		echo 'Adjunto no disponible mediante esta ruta.';
+		return;
+
 
 		$ticketId = (int) $id;
 		$part = trim((string) ($_GET['part'] ?? ''));
@@ -2776,6 +2796,10 @@ class TicketController extends Controller
 					continue;
 				}
 			}
+
+			// SECURITY: do not fetch or persist remote attachments during ticket rendering.
+			// Unresolved CID values are hidden by sanitizeUnresolvedCidSources().
+			continue;
 
 			$internetMessageId = trim((string) ($msg['internet_message_id'] ?? ''));
 			$syncStmt = $db->prepare('SELECT account_alias, email_uid FROM mail_ticket_sync WHERE ticket_id = :ticket_id AND (:internet_message_id = "" OR internet_message_id = :internet_message_id OR message_id = :internet_message_id) ORDER BY id DESC LIMIT 1');

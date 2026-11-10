@@ -39,6 +39,13 @@ class AttachmentProcessorService
                     throw new RuntimeException('Registro de cola invalido.');
                 }
 
+                // Nunca asociar un archivo a un mensaje de otro ticket.
+                $ownership = $this->db->prepare('SELECT id FROM ticket_mensajes WHERE id = :message_id AND ticket_id = :ticket_id LIMIT 1');
+                $ownership->execute(['message_id' => $ticketMensajeId, 'ticket_id' => $ticketId]);
+                if (!$ownership->fetchColumn()) {
+                    throw new RuntimeException('INTEGRIDAD: el mensaje no pertenece al ticket de la cola.');
+                }
+
                 $result = $this->mailbox->getAttachment($alias, $emailUid, $attachmentId);
                 if (!($result['ok'] ?? false) || !is_array($result['attachment'] ?? null)) {
                     throw new RuntimeException((string) ($result['error'] ?? 'No se pudo descargar adjunto.'));
