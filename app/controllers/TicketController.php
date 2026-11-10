@@ -465,7 +465,7 @@ class TicketController extends Controller
 			$stmtM->execute(['tid' => $ticketId]);
 			$mensajes = $stmtM->fetchAll() ?: [];
 			$mensajes = $this->hydrateMissingInlineImages($db, $ticketId, $mensajes);
-
+			$attachmentHashesByMessage = [];
 			$attachmentsByMessage = [];
 			$stmtAttach = $db->prepare("SELECT a.id, a.ticket_mensaje_id, a.filename_original, a.mime, a.size_bytes, a.is_inline, a.storage_path
 				FROM ticket_mensaje_adjuntos a
@@ -482,13 +482,33 @@ class TicketController extends Controller
 					$attachmentsByMessage[$messageId] = [];
 				}
 				$attachmentPath = (string) ($attRow['storage_path'] ?? '');
+
+				$attachmentExists = $attachmentPath !== ''
+					&& is_file($attachmentPath);
+
+				// Evitar duplicados físicos dentro del mismo mensaje.
+				// No modificar ni eliminar archivos o registros históricos.
+				if ($attachmentExists) {
+					$attachmentHash = hash_file('sha256', $attachmentPath);
+
+					if ($attachmentHash !== false) {
+						$attachmentKey = $messageId . ':' . $attachmentHash;
+
+						if (isset($attachmentHashesByMessage[$attachmentKey])) {
+							continue;
+						}
+
+						$attachmentHashesByMessage[$attachmentKey] = true;
+					}
+				}
+
 				$attachmentsByMessage[$messageId][] = [
 					'id' => (int) ($attRow['id'] ?? 0),
 					'filename' => (string) ($attRow['filename_original'] ?? 'Adjunto'),
 					'mime' => (string) ($attRow['mime'] ?? 'application/octet-stream'),
 					'size' => (int) ($attRow['size_bytes'] ?? 0),
 					'is_inline' => !empty($attRow['is_inline']),
-					'missing' => $attachmentPath === '' || !is_file($attachmentPath),
+					'missing' => !$attachmentExists,
 				];
 			}
 
@@ -598,9 +618,22 @@ class TicketController extends Controller
 		}
 
 		$this->view('tickets/show', compact(
-			'ticket', 'mensajes', 'estados', 'prioridades', 'tipos',
-			'grupos', 'usuarios', 'contacto', 'historial', 'historialCorreos', 'correoOrigen', 'adjuntos', 'mailAccounts',
-			'responseAccountAlias', 'responseAccountLocked', 'navigation'
+			'ticket',
+			'mensajes',
+			'estados',
+			'prioridades',
+			'tipos',
+			'grupos',
+			'usuarios',
+			'contacto',
+			'historial',
+			'historialCorreos',
+			'correoOrigen',
+			'adjuntos',
+			'mailAccounts',
+			'responseAccountAlias',
+			'responseAccountLocked',
+			'navigation'
 		), [
 			'title' => 'Ticket ' . ($ticket['codigo'] ?? '#' . $ticketId),
 		]);
@@ -1573,7 +1606,7 @@ class TicketController extends Controller
 
 		$ticketId   = (int) $id;
 		$estadoId   = ($_POST['estado_id']   ?? '') !== '' ? (int) $_POST['estado_id']   : null;
-		$prioridadId= ($_POST['prioridad_id']?? '') !== '' ? (int) $_POST['prioridad_id'] : null;
+		$prioridadId = ($_POST['prioridad_id'] ?? '') !== '' ? (int) $_POST['prioridad_id'] : null;
 		$tipoId     = ($_POST['tipo_id']     ?? '') !== '' ? (int) $_POST['tipo_id']     : null;
 		$grupoId    = ($_POST['grupo_id']    ?? '') !== '' ? (int) $_POST['grupo_id']    : null;
 		$asignadoA  = ($_POST['asignado_a']  ?? '') !== '' ? (int) $_POST['asignado_a']  : null;
