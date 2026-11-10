@@ -118,38 +118,88 @@ $phones = array_values(array_unique($phones));
                     <?php endif; ?>
                 </div>
 
+                <?php
+                // Reunir los adjuntos almacenados de todos los mensajes del ticket.
+                // El controlador ya valida la pertenencia de cada adjunto al mensaje.
+                $storedTicketAttachments = [];
+
+                foreach ($mensajes as $ticketMessage) {
+                    foreach (($ticketMessage['attachments'] ?? []) as $storedAttachment) {
+                        if (!is_array($storedAttachment)) {
+                            continue;
+                        }
+
+                        $attachmentId = (int) ($storedAttachment['id'] ?? 0);
+
+                        if ($attachmentId > 0) {
+                            $storedTicketAttachments[$attachmentId] = $storedAttachment;
+                        }
+                    }
+                }
+                ?>
                 <div class="attach-box">
                     <div class="attach-title">Archivos adjuntos</div>
-                    <?php if (!empty($adjuntos)): ?>
+                    <?php if (!empty($storedTicketAttachments)): ?>
                         <div class="attach-list">
-                            <?php foreach ($adjuntos as $adj): ?>
+                            <?php foreach ($storedTicketAttachments as $adj): ?>
                                 <?php
+                                $adjId = (int) $adj['id'];
                                 $name = (string) ($adj['filename'] ?? 'Adjunto');
                                 $size = (int) ($adj['size'] ?? 0);
-                                $sizeKb = $size > 0 ? round($size / 1024, 1) . ' KB' : 'Tamano no disponible';
-                                $partToken = (string) ($adj['part_no'] ?? '');
-                                $mime = strtolower((string) ($adj['mime'] ?? 'application/octet-stream'));
-                                $canPreview = str_starts_with($mime, 'image/') || $mime === 'application/pdf' || str_starts_with($mime, 'text/');
-                                $downloadUrl = base_url('tickets/' . $ticketId . '/attachment?part=' . urlencode($partToken));
-                                $previewUrl = base_url('tickets/' . $ticketId . '/attachment?part=' . urlencode($partToken) . '&mode=inline');
+                                $mime = strtolower((string) ($adj['mime'] ?? ''));
+                                $missing = !empty($adj['missing']);
+
+                                $sizeText = $size > 0
+                                    ? round($size / 1024, 1) . ' KB'
+                                    : 'Tamaño no disponible';
+
+                                $downloadUrl = base_url(
+                                    'tickets/' . $ticketId . '/reply-attachment/' . $adjId
+                                );
+
+                                $previewUrl = $downloadUrl . '?mode=inline';
+
+                                $canPreview = str_starts_with($mime, 'image/')
+                                    || $mime === 'application/pdf';
                                 ?>
+
                                 <div class="attach-item">
                                     <span>
                                         <span>📎</span>
                                         <span><?= e($name) ?></span>
-                                        <span class="attach-meta">(<?= e($sizeKb) ?>)</span>
+                                        <span class="attach-meta">
+                                            (<?= e($sizeText) ?>)
+                                        </span>
                                     </span>
+
                                     <span class="attach-actions">
-                                        <?php if ($canPreview): ?>
-                                            <a class="attach-link" href="<?= e($previewUrl) ?>" target="_blank" rel="noopener noreferrer">Ver</a>
+                                        <?php if ($missing): ?>
+                                            <span class="text-muted">
+                                                Archivo no disponible
+                                            </span>
+                                        <?php else: ?>
+                                            <?php if ($canPreview): ?>
+                                                <a class="attach-link"
+                                                    href="<?= e($previewUrl) ?>"
+                                                    target="_blank"
+                                                    rel="noopener noreferrer">
+                                                    Ver
+                                                </a>
+                                            <?php endif; ?>
+
+                                            <a class="attach-link"
+                                                href="<?= e($downloadUrl) ?>">
+                                                Descargar
+                                            </a>
                                         <?php endif; ?>
-                                        <a class="attach-link" href="<?= e($downloadUrl) ?>">Descargar</a>
                                     </span>
                                 </div>
                             <?php endforeach; ?>
                         </div>
                     <?php else: ?>
-                        <div class="timeline-meta">No hay adjuntos almacenados para este ticket.</div>
+                        <div class="timeline-meta">
+                            No hay adjuntos almacenados para este ticket.
+                        </div>
                     <?php endif; ?>
 
                     <?php if ($correoOrigenUrl !== ''): ?>
@@ -197,8 +247,7 @@ $phones = array_values(array_unique($phones));
                                     data-bs-toggle="modal"
                                     data-bs-target="#ticketNoteEditModal"
                                     data-ticket-note-edit-btn="true"
-                                    data-ticket-note-id="<?= (int) ($m['id'] ?? 0) ?>"
-                                >Editar nota</button>
+                                    data-ticket-note-id="<?= (int) ($m['id'] ?? 0) ?>">Editar nota</button>
                                 <button
                                     type="button"
                                     class="btn btn-sm btn-outline-danger"
@@ -206,16 +255,42 @@ $phones = array_values(array_unique($phones));
                                     data-bs-target="#ticketNoteDeleteModal"
                                     data-ticket-note-delete-btn="true"
                                     data-ticket-note-id="<?= (int) ($m['id'] ?? 0) ?>"
-                                    data-ticket-note-preview="<?= e(trim(strip_tags((string) ($m['mensaje'] ?? '')))) ?>"
-                                >Eliminar nota</button>
+                                    data-ticket-note-preview="<?= e(trim(strip_tags((string) ($m['mensaje'] ?? '')))) ?>">Eliminar nota</button>
                             </div>
                         <?php endif; ?>
                         <div class="message-body"><?= $m['mensaje'] ?? '' ?></div>
                         <?php
-                        $messageAttachmentsRaw = is_array($m['attachments'] ?? null) ? $m['attachments'] : [];
-                        $messageAttachments = array_values(array_filter($messageAttachmentsRaw, static function ($att): bool {
-                            return empty($att['is_inline']);
-                        }));
+                        $messageAttachmentsRaw = is_array($m['attachments'] ?? null)
+                            ? $m['attachments']
+                            : [];
+
+                        // Mostrar los adjuntos almacenados, incluidos los inline.
+                        // No sustituir automáticamente referencias CID.
+                        // Los archivos deben pertenecer al mensaje actual.
+                        $messageAttachments = [];
+                        $seenAttachments = [];
+
+                        foreach ($messageAttachmentsRaw as $att) {
+                            if (!is_array($att)) {
+                                continue;
+                            }
+
+                            $adjId = (int) ($att['id'] ?? 0);
+
+                            if ($adjId <= 0) {
+                                continue;
+                            }
+
+                            // Evitar repetir exactamente el mismo registro.
+                            $key = 'id:' . $adjId;
+
+                            if (isset($seenAttachments[$key])) {
+                                continue;
+                            }
+
+                            $seenAttachments[$key] = true;
+                            $messageAttachments[] = $att;
+                        }
                         ?>
                         <?php if (!empty($messageAttachments)): ?>
                             <div class="message-attachments">
@@ -272,7 +347,7 @@ $phones = array_values(array_unique($phones));
                         <input type="hidden" name="_token" value="<?= csrf_token() ?>">
                         <input type="hidden" name="cuerpo_html" id="reply-body">
                         <input type="hidden" name="request_key" id="reply-request-key" value="">
-                           <input type="hidden" name="return" value="<?= e($ticketUrl) ?>">
+                        <input type="hidden" name="return" value="<?= e($ticketUrl) ?>">
 
                         <?php if (!empty($mailAccounts)): ?>
                             <div class="compose-row">
@@ -386,7 +461,7 @@ $phones = array_values(array_unique($phones));
                         <input type="hidden" name="_token" value="<?= csrf_token() ?>">
                         <input type="hidden" name="cuerpo_html" id="note-body">
                         <input type="hidden" name="request_key" id="note-request-key" value="">
-                           <input type="hidden" name="return" value="<?= e($ticketUrl) ?>">
+                        <input type="hidden" name="return" value="<?= e($ticketUrl) ?>">
 
                         <div class="compose-toolbar">
                             <button type="button" data-editor-target="note-editor" data-editor-cmd="bold"><strong>B</strong></button>
@@ -505,7 +580,7 @@ $phones = array_values(array_unique($phones));
                 <h2 class="sidebar-title">Propiedades</h2>
                 <form method="POST" action="<?= e(base_url('tickets/' . $ticketId . '/properties')) ?>">
                     <input type="hidden" name="_token" value="<?= csrf_token() ?>">
-                       <input type="hidden" name="return" value="<?= e($ticketUrl) ?>">
+                    <input type="hidden" name="return" value="<?= e($ticketUrl) ?>">
 
                     <div class="prop-field">
                         <label>Tipo</label>
