@@ -1,4 +1,3 @@
-<IfModule mod_authz_core.c>
-    <DirectoryMatch "">
-    </DirectoryMatch>
-</IfModule>
+# Atlas - Configuracion local
+# Las restricciones de acceso a archivos privados
+# deben aplicarse en sus directorios correspondientes.
