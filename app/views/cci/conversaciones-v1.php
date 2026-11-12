@@ -164,7 +164,7 @@ $filterQuery = 'estado=' . rawurlencode($estadoFilter) . '&asesor=' . $asesorFil
 											$isImage = in_array($fileExt, ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp']);
 											$isVideo = in_array($fileExt, ['mp4', 'avi', 'mov', 'mkv', 'flv', 'wmv']);
 											$isAudio = in_array($fileExt, ['mp3', 'wav', 'aac', 'm4a', 'flac', 'ogg']);
-											$fileUrl = $isRemoteUrl ? $filename : base_url('cci-attachments/' . urlencode($filename));
+											$fileUrl = $isRemoteUrl ? $filename : base_url('cci/archivo/' . urlencode($filename));
 											$displayName = $isRemoteUrl
 												? basename(strtok($filename, '?'))
 												: ((string) preg_replace('/^\d{14}_[a-f0-9]{8}_/', '', $filename) ?: $filename);
@@ -388,7 +388,7 @@ $filterQuery = 'estado=' . rawurlencode($estadoFilter) . '&asesor=' . $asesorFil
 								var isImage = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].indexOf(ext) !== -1;
 								var isVideo = ['mp4', 'avi', 'mov', 'mkv', 'flv', 'wmv'].indexOf(ext) !== -1;
 								var isAudio = ['mp3', 'wav', 'aac', 'm4a', 'flac', 'ogg'].indexOf(ext) !== -1;
-								var fileUrl = isRemoteUrl ? filename : ('<?= e(base_url("cci-attachments")) ?>/' + encodeURIComponent(filename));
+								var fileUrl = isRemoteUrl ? filename : ('<?= e(base_url("cci/archivo")) ?>/' + encodeURIComponent(filename));
 								var displayName = isRemoteUrl
 									? cleanName.substring(cleanName.lastIndexOf('/') + 1)
 									: (filename.replace(/^\d{14}_[a-f0-9]{8}_/i, '') || filename);

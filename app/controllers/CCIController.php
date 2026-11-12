@@ -2064,11 +2064,7 @@ class CCIController extends Controller
 		if (!move_uploaded_file($tmpPath, $destPath)) return null;
 		chmod($destPath, 0644);
 
-		// Copiar también al directorio público para que sea accesible desde web
-		$publicDir = PUBLIC_PATH . '/cci-attachments';
-		if (!is_dir($publicDir)) @mkdir($publicDir, 0755, true);
-		@copy($destPath, $publicDir . '/' . $unique);
-		@chmod($publicDir . '/' . $unique, 0644);
+		// No publicar copias de adjuntos en el document root.
 
 		return [
 			'path' => $destPath,
@@ -2076,51 +2072,44 @@ class CCIController extends Controller
 		];
 	}
 
-	/**
-	 * Sirve adjuntos de CCI con auto-reparación: si el archivo no está en public/ pero
-	 * sí existe en storage/uploads (ej. tras un despliegue que no preservó public/cci-attachments),
-	 * lo copia antes de servirlo. Evita el 404 genérico del router cuando Apache no encuentra el estático.
-	 */
+	/** Sirve archivos privados de CCI solo si existe un mensaje asociado. */
 	public function serveAttachment(string $filename): void
 	{
 		Auth::requireAuth();
-		$safeName = basename(rawurldecode($filename));
-		if ($safeName === '' || $safeName === '.' || $safeName === '..' || str_contains($safeName, '..')) {
+		// Evitar traversal, dobles decodificaciones y nombres ambiguos.
+		if ($filename === '' || $filename !== basename($filename)
+			|| preg_match('/[\\\/\x00-\x1f]/', $filename)
+			|| str_contains($filename, '..') || str_contains($filename, '%')) {
 			http_response_code(404);
-			header('Content-Type: text/plain; charset=utf-8');
-			echo 'Archivo no encontrado.';
 			return;
 		}
-
-		$publicPath = PUBLIC_PATH . '/cci-attachments/' . $safeName;
-		$storagePath = STORAGE_PATH . '/uploads/cci-attachments/' . $safeName;
-
-		if (!is_file($publicPath) && is_file($storagePath)) {
-			$publicDir = dirname($publicPath);
-			if (!is_dir($publicDir)) {
-				@mkdir($publicDir, 0755, true);
+		try {
+			$db = $this->db();
+			// Solo adjuntos registrados en el historial de mensajes.
+			$stmt = $db->prepare("SELECT 1 FROM bot_mensajes WHERE tipo = 'archivo' AND mensaje = :archivo LIMIT 1");
+			$stmt->execute(['archivo' => $filename]);
+			if (!$stmt->fetchColumn()) {
+				http_response_code(404);
+				return;
 			}
-			@copy($storagePath, $publicPath);
-			@chmod($publicPath, 0644);
-		}
-
-		if (!is_file($publicPath)) {
+		} catch (Throwable $e) {
+			error_log('CCI attachment lookup failed: ' . $e->getMessage());
 			http_response_code(404);
-			header('Content-Type: text/plain; charset=utf-8');
-			echo 'El archivo adjunto no está disponible: pudo no haberse guardado localmente o haber expirado.';
 			return;
 		}
-
-		$mime = function_exists('mime_content_type') ? (string) (mime_content_type($publicPath) ?: '') : '';
-		if ($mime === '') {
-			$mime = 'application/octet-stream';
+		$path = STORAGE_PATH . '/uploads/cci-attachments/' . $filename;
+		if (!is_file($path) || is_link($path)) {
+			http_response_code(404);
+			return;
 		}
-
+		$mime = function_exists('mime_content_type') ? (string) (mime_content_type($path) ?: '') : '';
+		if ($mime === '') $mime = 'application/octet-stream';
 		header('Content-Type: ' . $mime);
-		header('Content-Length: ' . (string) filesize($publicPath));
-		header('Content-Disposition: inline; filename="' . rawurlencode($safeName) . '"');
-		header('Cache-Control: public, max-age=86400');
-		readfile($publicPath);
+		header('Content-Length: ' . (string) filesize($path));
+		header('Content-Disposition: attachment; filename="' . str_replace(['"', "\r", "\n"], '_', $filename) . '"');
+		header('Cache-Control: private, no-store, max-age=0');
+		header('X-Content-Type-Options: nosniff');
+		readfile($path);
 	}
 
 	public function whatsAppWebhook(): void
@@ -2469,15 +2458,13 @@ class CCIController extends Controller
 		}
 		$filename = date('YmdHis') . '_' . $hashToken . '_' . $safePreferred;
 		$storageDir = STORAGE_PATH . '/uploads/cci-attachments';
-		$publicDir = PUBLIC_PATH . '/cci-attachments';
-		if ((!is_dir($storageDir) && !@mkdir($storageDir, 0755, true)) || (!is_dir($publicDir) && !@mkdir($publicDir, 0755, true))) {
+		if (!is_dir($storageDir) && !@mkdir($storageDir, 0755, true)) {
 			return $url;
 		}
-		if (file_put_contents($storageDir . '/' . $filename, $body) === false || file_put_contents($publicDir . '/' . $filename, $body) === false) {
+		if (file_put_contents($storageDir . '/' . $filename, $body) === false) {
 			return $url;
 		}
 		@chmod($storageDir . '/' . $filename, 0644);
-		@chmod($publicDir . '/' . $filename, 0644);
 		return $filename;
 	}
 
