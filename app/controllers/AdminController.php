@@ -97,46 +97,19 @@ class AdminController extends Controller
 
 	private function ensureActionPermissionsTable(PDO $db): void
 	{
-		try {
-			// Intentar verificar si la tabla existe
-			$db->query("SELECT 1 FROM role_action_permissions LIMIT 1");
-		} catch (PDOException $e) {
-			// Tabla no existe, crearla - usar exec FUERA de transacción si es posible
-			// Si estamos en transacción, no usar exec() porque interfiere
-			$inTransaction = $db->inTransaction();
+		// La estructura debe instalarse mediante una migración, nunca durante
+		// una transacción de guardado de roles (DDL hace COMMIT implícito).
+		$db->query('SELECT 1 FROM role_action_permissions LIMIT 1');
+	}
 
-			if ($inTransaction) {
-				// Dentro de transacción: usar preparado en lugar de exec
-				$sql = "CREATE TABLE IF NOT EXISTS role_action_permissions (
-					id INT AUTO_INCREMENT PRIMARY KEY,
-					rol_id INT NOT NULL,
-					module_key VARCHAR(80) NOT NULL,
-					accion ENUM('ver', 'listar', 'crear', 'editar', 'eliminar', 'exportar', 'enviar', 'responder', 'configurar') NOT NULL,
-					allowed TINYINT(1) NOT NULL DEFAULT 1,
-					created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-					updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-					UNIQUE KEY uniq_role_action (rol_id, module_key, accion),
-					INDEX idx_role (rol_id),
-					INDEX idx_module (module_key),
-					FOREIGN KEY (rol_id) REFERENCES roles(id) ON DELETE CASCADE
-				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
-				$db->prepare($sql)->execute();
-			} else {
-				// Fuera de transacción: usar exec normalmente
-				$db->exec("CREATE TABLE IF NOT EXISTS role_action_permissions (
-					id INT AUTO_INCREMENT PRIMARY KEY,
-					rol_id INT NOT NULL,
-					module_key VARCHAR(80) NOT NULL,
-					accion ENUM('ver', 'listar', 'crear', 'editar', 'eliminar', 'exportar', 'enviar', 'responder', 'configurar') NOT NULL,
-					allowed TINYINT(1) NOT NULL DEFAULT 1,
-					created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-					updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-					UNIQUE KEY uniq_role_action (rol_id, module_key, accion),
-					INDEX idx_role (rol_id),
-					INDEX idx_module (module_key),
-					FOREIGN KEY (rol_id) REFERENCES roles(id) ON DELETE CASCADE
-				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-			}
+	private function requireRoleManagement(): void
+	{
+		Auth::requireAuth();
+		// La edición de permisos permite escalamiento de privilegios.
+		// Por ahora se reserva al Super Administrador.
+		if (!Auth::isSuperAdmin(Auth::user() ?? [])) {
+			http_response_code(403);
+			exit('403 - No autorizado para administrar roles');
 		}
 	}
 
@@ -145,7 +118,7 @@ class AdminController extends Controller
 		$this->ensureActionPermissionsTable($db);
 
 		// Validar contra el catálogo del servidor; nunca confiar en acciones del POST.
-		$catalog = Auth::moduleCatalog();
+		$catalog = $this->permissionModules();
 		$allowed = [];
 		foreach ($catalog as $moduleKey => $module) {
 			foreach (($module['actions'] ?? []) as $action) {
@@ -161,8 +134,11 @@ class AdminController extends Controller
 		}
 
 		// Mantener el reemplazo transaccional existente de los permisos del rol.
-		$delete = $db->prepare('DELETE FROM role_action_permissions WHERE rol_id = :rol_id');
-		$delete->execute(['rol_id' => $roleId]);
+		// Conservar permisos de módulos que este formulario no muestra.
+		$visibleModules = array_keys($catalog);
+		$placeholders = implode(', ', array_fill(0, count($visibleModules), '?'));
+		$delete = $db->prepare('DELETE FROM role_action_permissions WHERE rol_id = ? AND module_key IN (' . $placeholders . ')');
+		$delete->execute(array_merge([$roleId], $visibleModules));
 		if (!$validated) {
 			return;
 		}
@@ -344,7 +320,7 @@ class AdminController extends Controller
 	// ============ ROLES ============
 	public function rolesIndex(): void
 	{
-		Auth::requireAuth();
+		$this->requireRoleManagement();
 		$db = Database::getInstance()->connection();
 		$roles = $db->query("SELECT * FROM roles WHERE estado = 'activo' ORDER BY id DESC")->fetchAll() ?: [];
 		$this->view('admin/roles/index', compact('roles'), ['title' => 'Gestión de Roles']);
@@ -352,23 +328,18 @@ class AdminController extends Controller
 
 	public function rolesCreate(): void
 	{
-		Auth::requireAuth();
+		$this->requireRoleManagement();
 		$permissionModules = $this->permissionModules();
 		$selectedActions = [];
 
-		// Para nuevo rol, preseleccionar todas las acciones
-		foreach ($permissionModules as $moduleKey => $module) {
-			foreach (($module['actions'] ?? []) as $action) {
-				$selectedActions[] = $moduleKey . '|' . $action;
-			}
-		}
+		// Principio de mínimo privilegio: iniciar sin acciones seleccionadas.
 
 		$this->view('admin/roles/create', compact('permissionModules', 'selectedActions'), ['title' => 'Crear Rol']);
 	}
 
 	public function rolesStore(): void
 	{
-		Auth::requireAuth();
+		$this->requireRoleManagement();
 		if (!verify_csrf($_POST['_token'] ?? null)) redirect('admin/roles');
 
 		$nombre = trim($_POST['nombre'] ?? '');
@@ -407,7 +378,7 @@ class AdminController extends Controller
 
 	public function rolesEdit(int $id): void
 	{
-		Auth::requireAuth();
+		$this->requireRoleManagement();
 		$db = Database::getInstance()->connection();
 		$stmt = $db->prepare("SELECT * FROM roles WHERE id = :id");
 		$stmt->execute(['id' => $id]);
@@ -423,7 +394,7 @@ class AdminController extends Controller
 
 	public function rolesUpdate(int $id): void
 	{
-		Auth::requireAuth();
+		$this->requireRoleManagement();
 		if (!verify_csrf($_POST['_token'] ?? null)) redirect('admin/roles');
 
 		$nombre = trim($_POST['nombre'] ?? '');
@@ -468,7 +439,7 @@ class AdminController extends Controller
 
 	public function rolesDelete(int $id): void
 	{
-		Auth::requireAuth();
+		$this->requireRoleManagement();
 		if (!verify_csrf($_POST['_token'] ?? null)) redirect('admin/roles');
 
 		try {
