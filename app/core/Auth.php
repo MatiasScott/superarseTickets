@@ -50,7 +50,7 @@ class Auth
 				'label' => 'Centro de Comunicaciones',
 				'description' => 'Gestión omnicanal de conversaciones, asignaciones y automatizaciones',
 				'default_path' => 'cci/dashboard',
-				'actions' => ['ver', 'listar', 'crear', 'editar', 'eliminar', 'exportar', 'configurar']
+				'actions' => ['ver', 'listar', 'crear', 'editar', 'eliminar', 'exportar', 'responder', 'enviar', 'configurar']
 			],
 			'crm' => [
 				'label' => 'CRM',

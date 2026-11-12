@@ -144,28 +144,36 @@ class AdminController extends Controller
 	{
 		$this->ensureActionPermissionsTable($db);
 
-		// Eliminar permisos anteriores
-		$delete = $db->prepare('DELETE FROM role_action_permissions WHERE rol_id = :rol_id');
-		$delete->execute(['rol_id' => $roleId]);
-
-		if (empty($actions)) {
-			return;
+		// Validar contra el catálogo del servidor; nunca confiar en acciones del POST.
+		$catalog = Auth::moduleCatalog();
+		$allowed = [];
+		foreach ($catalog as $moduleKey => $module) {
+			foreach (($module['actions'] ?? []) as $action) {
+				$allowed[$moduleKey . '|' . $action] = true;
+			}
+		}
+		$validated = [];
+		foreach ($actions as $actionStr) {
+			if (!is_string($actionStr) || !isset($allowed[$actionStr])) {
+				throw new InvalidArgumentException('Acción de permiso no reconocida.');
+			}
+			$validated[$actionStr] = true;
 		}
 
+		// Mantener el reemplazo transaccional existente de los permisos del rol.
+		$delete = $db->prepare('DELETE FROM role_action_permissions WHERE rol_id = :rol_id');
+		$delete->execute(['rol_id' => $roleId]);
+		if (!$validated) {
+			return;
+		}
 		$insert = $db->prepare('INSERT INTO role_action_permissions (rol_id, module_key, accion, allowed) VALUES (:rol_id, :module_key, :accion, 1)');
-
-		foreach ($actions as $actionStr) {
-			// Formato: "module_key|action"
-			$parts = explode('|', $actionStr);
-			if (count($parts) === 2) {
-				$moduleKey = trim($parts[0]);
-				$accion = strtolower(trim($parts[1]));
-				$insert->execute([
-					'rol_id' => $roleId,
-					'module_key' => $moduleKey,
-					'accion' => $accion,
-				]);
-			}
+		foreach (array_keys($validated) as $actionStr) {
+			[$moduleKey, $accion] = explode('|', $actionStr, 2);
+			$insert->execute([
+				'rol_id' => $roleId,
+				'module_key' => $moduleKey,
+				'accion' => $accion,
+			]);
 		}
 	}
 

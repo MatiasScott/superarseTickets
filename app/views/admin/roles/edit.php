@@ -40,7 +40,7 @@
 				<div class="form-group">
 					<label><i class="bi bi-grid"></i> Acceso por módulos y acciones</label>
 					<div class="alert alert-info small mb-3">
-						<strong>Leyenda:</strong> Ver = acceso, Listar = mostrar listados, Crear = agregar nuevos, Editar = modificar, Eliminar = borrar, Exportar = descargar datos
+						<strong>Leyenda:</strong> Ver = acceso, Listar = mostrar listados, Crear = agregar nuevos, Editar = modificar, Eliminar = borrar, Exportar = descargar datos, Responder = contestar conversaciones, Enviar = emitir comunicaciones, Configurar = administrar asignaciones y ajustes
 					</div>
 					<div class="mb-2">
 						<button type="button" class="btn btn-sm btn-outline-primary" id="selectAllBtn">
