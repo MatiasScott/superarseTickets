@@ -400,7 +400,7 @@ class TicketController extends Controller
 	public function show(string $id): void
 	{
 		Auth::requireAuth();
-		if (!Auth::canPerform('tickets', 'ver')) {
+		if (!Auth::canPerformSensitive('tickets', 'ver')) {
 			http_response_code(403);
 			echo 'Acceso denegado.';
 			return;
@@ -1412,57 +1412,12 @@ class TicketController extends Controller
 	public function attachment(string $id): void
 	{
 		Auth::requireAuth();
-		// SECURITY: this legacy endpoint resolves an attachment against the latest
-		// email of the ticket, not the original message. Disabled pending redesign.
+		// Ruta antigua insegura: no asociaba el adjunto a su mensaje de origen.
+		// No reactivar sin vincular cuenta + mensaje + ticket + identificador Graph.
 		http_response_code(404);
+		header('Cache-Control: private, no-store');
+		header('X-Content-Type-Options: nosniff');
 		echo 'Adjunto no disponible mediante esta ruta.';
-		return;
-
-
-		$ticketId = (int) $id;
-		$part = trim((string) ($_GET['part'] ?? ''));
-		$mode = strtolower(trim((string) ($_GET['mode'] ?? 'download')));
-
-		if ($ticketId <= 0 || $part === '') {
-			http_response_code(400);
-			echo 'Adjunto invalido.';
-			return;
-		}
-
-		try {
-			$db = Database::getInstance()->connection();
-			$stmt = $db->prepare('SELECT account_alias, email_uid FROM mail_ticket_sync WHERE ticket_id = :tid ORDER BY id DESC LIMIT 1');
-			$stmt->execute(['tid' => $ticketId]);
-			$sync = $stmt->fetch() ?: null;
-
-			if (!is_array($sync) || empty($sync['email_uid'])) {
-				http_response_code(404);
-				echo 'No se encontro el correo origen del ticket.';
-				return;
-			}
-
-			$mailbox = new MailboxService();
-			$result = $mailbox->getAttachment((string) ($sync['account_alias'] ?? ''), (string) $sync['email_uid'], $part);
-			if (empty($result['ok']) || !is_array($result['attachment'] ?? null)) {
-				http_response_code(404);
-				echo e((string) ($result['error'] ?? 'No se pudo obtener el adjunto.'));
-				return;
-			}
-
-			$attachment = $result['attachment'];
-			$filename = (string) ($attachment['filename'] ?? 'adjunto.bin');
-			$mime = (string) ($attachment['mime'] ?? 'application/octet-stream');
-			$content = (string) ($attachment['content'] ?? '');
-
-			header('Content-Type: ' . $mime);
-			header('Content-Length: ' . strlen($content));
-			$disposition = $mode === 'inline' ? 'inline' : 'attachment';
-			header('Content-Disposition: ' . $disposition . '; filename="' . addslashes($filename) . '"');
-			echo $content;
-		} catch (Throwable $e) {
-			http_response_code(500);
-			echo 'No se pudo servir el adjunto.';
-		}
 	}
 
 	public function addNote(string $id): void
