@@ -2072,11 +2072,18 @@ class CCIController extends Controller
 		];
 	}
 
-	/** Sirve archivos privados de CCI solo si existe un mensaje asociado. */
+	/**
+	 * Descarga privada: autorización explícita CCI y pertenencia a la conversación.
+	 * Si un nombre histórico aparece en más de una conversación, se exige acceso
+	 * a todas ellas para impedir filtraciones por colisión de nombres.
+	 */
 	public function serveAttachment(string $filename): void
 	{
 		Auth::requireAuth();
-		// Evitar traversal, dobles decodificaciones y nombres ambiguos.
+		if (!Auth::canPerformSensitive('cci', 'ver')) {
+			http_response_code(403);
+			return;
+		}
 		if ($filename === '' || $filename !== basename($filename)
 			|| preg_match('/[\\\/\x00-\x1f]/', $filename)
 			|| str_contains($filename, '..') || str_contains($filename, '%')) {
@@ -2085,20 +2092,35 @@ class CCIController extends Controller
 		}
 		try {
 			$db = $this->db();
-			// Solo adjuntos registrados en el historial de mensajes.
-			$stmt = $db->prepare("SELECT 1 FROM bot_mensajes WHERE tipo = 'archivo' AND mensaje = :archivo LIMIT 1");
-			$stmt->execute(['archivo' => $filename]);
-			if (!$stmt->fetchColumn()) {
+			$stmt = $db->prepare('SELECT DISTINCT bc.id, bc.asignado_a
+				FROM bot_mensajes bm
+				INNER JOIN bot_conversaciones bc ON bc.id = bm.conversacion_id
+				WHERE bm.tipo = :tipo AND bm.mensaje = :archivo
+				AND bc.canal IN ("freshchat", "whatsapp")');
+			$stmt->execute(['tipo' => 'archivo', 'archivo' => $filename]);
+			$conversations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+			if (!$conversations) {
 				http_response_code(404);
 				return;
 			}
+			$canManageAll = Auth::canPerformSensitive('cci', 'configurar');
+			$userId = (int) Auth::id();
+			foreach ($conversations as $conversation) {
+				$assignedId = (int) ($conversation['asignado_a'] ?? 0);
+				if (!$canManageAll && ($assignedId <= 0 || $assignedId !== $userId)) {
+					http_response_code(403);
+					return;
+				}
+			}
 		} catch (Throwable $e) {
-			error_log('CCI attachment lookup failed: ' . $e->getMessage());
+			error_log('[SECURITY] CCI attachment authorization failed: ' . $e->getMessage());
 			http_response_code(404);
 			return;
 		}
-		$path = STORAGE_PATH . '/uploads/cci-attachments/' . $filename;
-		if (!is_file($path) || is_link($path)) {
+		$directory = realpath(STORAGE_PATH . '/uploads/cci-attachments');
+		$path = $directory !== false ? realpath($directory . DIRECTORY_SEPARATOR . $filename) : false;
+		if ($directory === false || $path === false || dirname($path) !== $directory
+			|| !is_file($path) || is_link($path)) {
 			http_response_code(404);
 			return;
 		}
