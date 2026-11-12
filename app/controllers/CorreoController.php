@@ -1656,60 +1656,40 @@ class CorreoController extends Controller
 
 	private function findThreadTicketId(PDO $db, array $email): ?int
 	{
+		// Nunca vincular hilos entre buzones distintos solo por conversationId.
+		$alias = trim((string) ($email['account_alias'] ?? ''));
 		$conversationId = trim((string) ($email['conversation_id'] ?? ''));
-		$internetMessageId = trim((string) ($email['internet_message_id'] ?? ($email['message_id'] ?? '')));
-		$subject = trim((string) ($email['subject'] ?? ''));
+		$internetId = trim((string) ($email['internet_message_id'] ?? ($email['message_id'] ?? '')));
+		if ($alias === '') {
+			throw new RuntimeException('INTEGRIDAD: cuenta de correo ausente al asociar el hilo.');
+		}
 
 		if ($conversationId !== '') {
-			$stmt = $db->prepare('SELECT ticket_id FROM mail_ticket_sync WHERE conversation_id = :conversation_id ORDER BY id DESC LIMIT 1');
-			$stmt->execute([
-				'conversation_id' => $conversationId,
-			]);
+			$stmt = $db->prepare('SELECT ticket_id FROM mail_ticket_sync WHERE account_alias = :alias AND conversation_id = :conversation_id ORDER BY id DESC LIMIT 1');
+			$stmt->execute(['alias' => $alias, 'conversation_id' => $conversationId]);
 			$ticketId = (int) $stmt->fetchColumn();
-			if ($ticketId > 0) {
-				return $ticketId;
-			}
+			if ($ticketId > 0) { return $ticketId; }
 
-			$stmtMsg = $db->prepare('SELECT ticket_id FROM ticket_mensajes WHERE conversation_id = :conversation_id ORDER BY id DESC LIMIT 1');
-			$stmtMsg->execute([
-				'conversation_id' => $conversationId,
-			]);
-			$ticketId = (int) $stmtMsg->fetchColumn();
-			if ($ticketId > 0) {
-				return $ticketId;
-			}
-		}
-
-		if ($internetMessageId !== '') {
-			$stmt = $db->prepare('SELECT ticket_id FROM mail_ticket_sync WHERE internet_message_id = :internet_message_id OR message_id = :internet_message_id ORDER BY id DESC LIMIT 1');
-			$stmt->execute([
-				'internet_message_id' => $internetMessageId,
-			]);
+			$stmt = $db->prepare('SELECT ticket_id FROM ticket_mensajes WHERE cuenta_alias = :alias AND conversation_id = :conversation_id ORDER BY id DESC LIMIT 1');
+			$stmt->execute(['alias' => $alias, 'conversation_id' => $conversationId]);
 			$ticketId = (int) $stmt->fetchColumn();
-			if ($ticketId > 0) {
-				return $ticketId;
-			}
-
-			$stmtMsg = $db->prepare('SELECT ticket_id FROM ticket_mensajes WHERE internet_message_id = :internet_message_id ORDER BY id DESC LIMIT 1');
-			$stmtMsg->execute([
-				'internet_message_id' => $internetMessageId,
-			]);
-			$ticketId = (int) $stmtMsg->fetchColumn();
-			if ($ticketId > 0) {
-				return $ticketId;
-			}
+			if ($ticketId > 0) { return $ticketId; }
 		}
 
-		$subjectTicketId = $this->extractTicketIdFromSubject($subject);
-		if ($subjectTicketId !== null) {
-			$stmtTicket = $db->prepare('SELECT id FROM tickets WHERE id = :id LIMIT 1');
-			$stmtTicket->execute(['id' => $subjectTicketId]);
-			$existing = (int) $stmtTicket->fetchColumn();
-			if ($existing > 0) {
-				return $existing;
-			}
+		if ($internetId !== '') {
+			$stmt = $db->prepare('SELECT ticket_id FROM mail_ticket_sync WHERE account_alias = :alias AND (internet_message_id = :internet_id_a OR message_id = :internet_id_b) ORDER BY id DESC LIMIT 1');
+			$stmt->execute(['alias' => $alias, 'internet_id_a' => $internetId, 'internet_id_b' => $internetId]);
+			$ticketId = (int) $stmt->fetchColumn();
+			if ($ticketId > 0) { return $ticketId; }
+
+			$stmt = $db->prepare('SELECT ticket_id FROM ticket_mensajes WHERE cuenta_alias = :alias AND internet_message_id = :internet_id ORDER BY id DESC LIMIT 1');
+			$stmt->execute(['alias' => $alias, 'internet_id' => $internetId]);
+			$ticketId = (int) $stmt->fetchColumn();
+			if ($ticketId > 0) { return $ticketId; }
 		}
 
+		// El asunto es controlado por el remitente: TCK-123 no prueba pertenencia.
+		// Ante ausencia de identificadores confiables, crear ticket separado.
 		return null;
 	}
 
@@ -1812,9 +1792,14 @@ class CorreoController extends Controller
 			|| !empty($email['has_cid_body'])
 			|| stripos($bodyHtml, 'cid:') !== false;
 
-		return $needsAttachments
-			? $this->loadIncomingAttachmentHeaders($email)
-			: [];
+		if (!$needsAttachments) {
+			return [];
+		}
+		$loaded = $this->loadIncomingAttachmentHeaders($email);
+		if ($loaded === []) {
+			throw new RuntimeException('INTEGRIDAD: no se pudieron verificar los adjuntos del correo; no se marcara como sincronizado.');
+		}
+		return $loaded;
 	}
 
 	private function appendIncomingMessageToTicket(PDO $db, int $ticketId, array $email, ?array $preparedAttachmentHeaders = null): void
@@ -1991,8 +1976,11 @@ class CorreoController extends Controller
 	{
 		$alias = trim((string) ($email['account_alias'] ?? ''));
 		$uid = trim((string) ($email['uid'] ?? ''));
-		if ($alias === '' || $uid === '' || empty($attachmentHeaders)) {
+		if ($attachmentHeaders === []) {
 			return;
+		}
+		if ($alias === '' || $uid === '') {
+			throw new RuntimeException('INTEGRIDAD: faltan datos del correo para encolar sus adjuntos.');
 		}
 
 		$queue = new AttachmentQueueService($db);
