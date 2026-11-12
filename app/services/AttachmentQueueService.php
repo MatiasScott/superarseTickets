@@ -27,6 +27,8 @@ class AttachmentQueueService
             es_inline TINYINT(1) NOT NULL DEFAULT 0,
             content_id VARCHAR(255) NULL,
             estado VARCHAR(20) NOT NULL DEFAULT 'pendiente',
+            claim_token CHAR(32) NULL,
+            claimed_at DATETIME NULL,
             intentos INT NOT NULL DEFAULT 0,
             error TEXT NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -38,48 +40,113 @@ class AttachmentQueueService
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
     }
 
+    /**
+     * Encola exclusivamente adjuntos cuya identidad Graph coincide con el
+     * mensaje persistido. Debe ejecutarse dentro de la transaccion del correo.
+     * Nunca modifica trabajos preexistentes ni sus metadatos.
+     */
     public function enqueueIncomingAttachments(int $ticketId, int $ticketMensajeId, string $accountAlias, string $emailUid, array $attachmentHeaders): int
     {
-        if ($ticketId <= 0 || $ticketMensajeId <= 0 || $accountAlias === '' || $emailUid === '' || empty($attachmentHeaders)) {
+        if ($attachmentHeaders === []) {
             return 0;
         }
 
-        $stmt = $this->db->prepare('INSERT INTO cola_adjuntos (ticket_mensaje_id, ticket_id, account_alias, email_uid, graph_attachment_id, nombre, mime_type, extension, peso, es_inline, content_id, estado, intentos, error, created_at) VALUES (:ticket_mensaje_id, :ticket_id, :account_alias, :email_uid, :graph_attachment_id, :nombre, :mime_type, :extension, :peso, :es_inline, :content_id, "pendiente", 0, NULL, NOW()) ON DUPLICATE KEY UPDATE nombre = VALUES(nombre), mime_type = VALUES(mime_type), extension = VALUES(extension), peso = VALUES(peso), es_inline = VALUES(es_inline), content_id = VALUES(content_id)');
+        $accountAlias = trim($accountAlias);
+        $emailUid = trim($emailUid);
+        if ($ticketId <= 0 || $ticketMensajeId <= 0 || $accountAlias === '' || $emailUid === '') {
+            throw new RuntimeException('INTEGRIDAD: identidad incompleta para encolar adjuntos.');
+        }
+        if (!$this->db->inTransaction()) {
+            throw new RuntimeException('INTEGRIDAD: el encolado requiere una transaccion activa.');
+        }
+        if (strlen($accountAlias) > 100 || strlen($emailUid) > 255) {
+            throw new RuntimeException('INTEGRIDAD: identificador de cuenta o correo demasiado largo.');
+        }
+
+        $messageStmt = $this->db->prepare(
+            'SELECT ticket_id, cuenta_alias, graph_message_id
+             FROM ticket_mensajes WHERE id = :id FOR UPDATE'
+        );
+        $messageStmt->execute(['id' => $ticketMensajeId]);
+        $message = $messageStmt->fetch(PDO::FETCH_ASSOC);
+
+        // Atlas codifica el ID original de Graph como base64url sin padding.
+        $normalized = strtr($emailUid, '-_', '+/');
+        $normalized .= str_repeat('=', (4 - strlen($normalized) % 4) % 4);
+        $decoded = base64_decode($normalized, true);
+        $canonical = $decoded === false ? '' : rtrim(strtr(base64_encode($decoded), '+/', '-_'), '=');
+        $storedId = is_array($message) ? trim((string) ($message['graph_message_id'] ?? '')) : '';
+        $storedAlias = is_array($message) ? trim((string) ($message['cuenta_alias'] ?? '')) : '';
+        if (
+            !is_array($message) ||
+            (int) $message['ticket_id'] !== $ticketId ||
+            $storedAlias === '' || strcasecmp($storedAlias, $accountAlias) !== 0 ||
+            $decoded === false || $decoded === '' ||
+            !hash_equals($emailUid, $canonical) ||
+            $storedId === '' || !hash_equals($storedId, $decoded)
+        ) {
+            throw new RuntimeException('INTEGRIDAD: el ticket, cuenta o identificador Graph no corresponde al mensaje.');
+        }
+
+        $insert = $this->db->prepare(
+            'INSERT INTO cola_adjuntos
+             (ticket_mensaje_id, ticket_id, account_alias, email_uid,
+              graph_attachment_id, nombre, mime_type, extension, peso,
+              es_inline, content_id, estado, intentos, error, created_at)
+             VALUES (:ticket_mensaje_id, :ticket_id, :account_alias, :email_uid,
+              :graph_attachment_id, :nombre, :mime_type, :extension, :peso,
+              :es_inline, :content_id, "pendiente", 0, NULL, NOW())
+             ON DUPLICATE KEY UPDATE id = id'
+        );
+        $existing = $this->db->prepare(
+            'SELECT ticket_id, account_alias, email_uid
+             FROM cola_adjuntos
+             WHERE ticket_mensaje_id = :message_id AND graph_attachment_id = :attachment_id
+             FOR UPDATE'
+        );
 
         $queued = 0;
         foreach ($attachmentHeaders as $header) {
             if (!is_array($header)) {
-                continue;
+                throw new RuntimeException('INTEGRIDAD: cabecera de adjunto invalida.');
             }
-
-            $graphAttachmentId = trim((string) ($header['id'] ?? ''));
-            if ($graphAttachmentId === '') {
-                continue;
+            $attachmentId = trim((string) ($header['id'] ?? ''));
+            if ($attachmentId === '' || strlen($attachmentId) > 255) {
+                throw new RuntimeException('INTEGRIDAD: identificador Graph de adjunto ausente o demasiado largo.');
             }
-
             $name = trim((string) ($header['name'] ?? 'Adjunto'));
             $mime = trim((string) ($header['mime'] ?? 'application/octet-stream'));
             $size = (int) ($header['size'] ?? 0);
-            $isInline = !empty($header['is_inline']);
             $contentId = trim((string) ($header['content_id'] ?? ''));
             $extension = strtolower((string) pathinfo($name, PATHINFO_EXTENSION));
 
-            $stmt->execute([
+            $insert->execute([
                 'ticket_mensaje_id' => $ticketMensajeId,
                 'ticket_id' => $ticketId,
                 'account_alias' => $accountAlias,
                 'email_uid' => $emailUid,
-                'graph_attachment_id' => $graphAttachmentId,
-                'nombre' => $name !== '' ? substr($name, 0, 255) : 'Adjunto',
-                'mime_type' => $mime !== '' ? substr($mime, 0, 120) : 'application/octet-stream',
+                'graph_attachment_id' => $attachmentId,
+                'nombre' => substr($name !== '' ? $name : 'Adjunto', 0, 255),
+                'mime_type' => substr($mime !== '' ? $mime : 'application/octet-stream', 0, 120),
                 'extension' => $extension !== '' ? substr($extension, 0, 20) : null,
-                'peso' => $size > 0 ? $size : 0,
-                'es_inline' => $isInline ? 1 : 0,
+                'peso' => max(0, $size),
+                'es_inline' => !empty($header['is_inline']) ? 1 : 0,
                 'content_id' => $contentId !== '' ? substr($contentId, 0, 255) : null,
             ]);
+
+            // El INSERT puede haber sido un duplicado: comprobar que el trabajo
+            // existente NO corresponde a otro ticket/cuenta/correo.
+            $existing->execute(['message_id' => $ticketMensajeId, 'attachment_id' => $attachmentId]);
+            $job = $existing->fetch(PDO::FETCH_ASSOC);
+            if (
+                !is_array($job) || (int) $job['ticket_id'] !== $ticketId ||
+                strcasecmp(trim((string) $job['account_alias']), $accountAlias) !== 0 ||
+                !hash_equals((string) $job['email_uid'], $emailUid)
+            ) {
+                throw new RuntimeException('INTEGRIDAD: adjunto duplicado con identidad contradictoria.');
+            }
             $queued++;
         }
-
         return $queued;
     }
 
@@ -87,39 +154,141 @@ class AttachmentQueueService
     {
         $limit = max(1, min(200, $limit));
 
-        // Reserva atomica: evita que dos workers procesen el mismo registro.
         $this->db->beginTransaction();
+
         try {
-            $stmt = $this->db->prepare('SELECT * FROM cola_adjuntos WHERE (estado = "pendiente" OR estado = "error") AND intentos < 5 ORDER BY id ASC LIMIT :lim FOR UPDATE');
+            $stmt = $this->db->prepare(
+                'SELECT *
+             FROM cola_adjuntos
+             WHERE estado IN ("pendiente", "error")
+               AND intentos < 5
+             ORDER BY id ASC
+             LIMIT :lim
+             FOR UPDATE'
+            );
+
             $stmt->bindValue(':lim', $limit, PDO::PARAM_INT);
             $stmt->execute();
+
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            $mark = $this->db->prepare('UPDATE cola_adjuntos SET estado = "procesando", intentos = intentos + 1, error = NULL WHERE id = :id AND estado IN ("pendiente", "error")');
-            foreach ($rows as $row) {
-                $mark->execute(['id' => (int) $row['id']]);
+
+            $mark = $this->db->prepare(
+                'UPDATE cola_adjuntos
+             SET estado = "procesando",
+                 intentos = intentos + 1,
+                 error = NULL,
+                 claim_token = :token,
+                 claimed_at = NOW()
+             WHERE id = :id
+               AND estado IN ("pendiente", "error")'
+            );
+
+            foreach ($rows as &$row) {
+                $token = bin2hex(random_bytes(16));
+
+                $mark->execute([
+                    'id' => (int) $row['id'],
+                    'token' => $token,
+                ]);
+
+                if ($mark->rowCount() !== 1) {
+                    throw new RuntimeException(
+                        'INTEGRIDAD: no se pudo reservar el trabajo.'
+                    );
+                }
+
+                $row['claim_token'] = $token;
+                $row['estado'] = 'procesando';
             }
+
+            unset($row);
+
             $this->db->commit();
+
             return $rows;
         } catch (Throwable $e) {
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
+            try {
+                if ($this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+            } catch (Throwable $rollbackError) {
+                error_log(
+                    '[ATLAS COLA ADJUNTOS] Fallo ROLLBACK: ' .
+                        $rollbackError->getMessage()
+                );
             }
+
+            error_log(
+                '[ATLAS COLA ADJUNTOS] Fallo al reservar trabajos: ' .
+                    $e->getMessage()
+            );
+
             throw $e;
         }
     }
 
-    public function markProcessed(int $id): void
+    public function markProcessed(int $id, string $token): void
     {
-        $stmt = $this->db->prepare('UPDATE cola_adjuntos SET estado = "procesado", processed_at = NOW(), error = NULL WHERE id = :id');
-        $stmt->execute(['id' => $id]);
+        if ($id <= 0 || !preg_match('/^[a-f0-9]{32}$/', $token)) {
+            throw new RuntimeException(
+                'INTEGRIDAD: identificador de reserva invalido.'
+            );
+        }
+
+        $stmt = $this->db->prepare(
+            'UPDATE cola_adjuntos
+         SET estado = "procesado",
+             processed_at = NOW(),
+             error = NULL,
+             claim_token = NULL,
+             claimed_at = NULL
+         WHERE id = :id
+           AND estado = "procesando"
+           AND claim_token = :token'
+        );
+
+        $stmt->execute([
+            'id' => $id,
+            'token' => $token,
+        ]);
+
+        if ($stmt->rowCount() !== 1) {
+            throw new RuntimeException(
+                'INTEGRIDAD: la reserva ya no pertenece a este worker.'
+            );
+        }
     }
 
-    public function markError(int $id, string $error): void
+    public function markError(int $id, string $error, string $token): void
     {
-        $stmt = $this->db->prepare('UPDATE cola_adjuntos SET estado = "error", processed_at = NOW(), error = :error WHERE id = :id');
+        if ($id <= 0 || !preg_match('/^[a-f0-9]{32}$/', $token)) {
+            throw new RuntimeException(
+                'INTEGRIDAD: identificador de reserva invalido.'
+            );
+        }
+
+        $stmt = $this->db->prepare(
+            'UPDATE cola_adjuntos
+         SET estado = "error",
+             processed_at = NOW(),
+             error = :error,
+             claim_token = NULL,
+             claimed_at = NULL
+         WHERE id = :id
+           AND estado = "procesando"
+           AND claim_token = :token'
+        );
+
         $stmt->execute([
             'id' => $id,
             'error' => substr($error, 0, 4000),
+            'token' => $token,
         ]);
+
+        if ($stmt->rowCount() !== 1) {
+            throw new RuntimeException(
+                'INTEGRIDAD: no se pudo registrar el error de la reserva.'
+            );
+        }
     }
 }

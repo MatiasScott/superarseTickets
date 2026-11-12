@@ -1246,7 +1246,7 @@ class TicketController extends Controller
 	public function replyAttachment(string $id, string $attachmentId): void
 	{
 		Auth::requireAuth();
-		if (!Auth::canPerform('tickets', 'ver')) {
+		if (!Auth::canPerformSensitive('tickets', 'ver')) {
 			http_response_code(403);
 			echo 'Acceso denegado.';
 			return;
@@ -1262,8 +1262,10 @@ class TicketController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
-			$this->ensureReplyAttachmentsTable($db);
-			$stmt = $db->prepare('SELECT a.filename_original, a.mime, a.size_bytes, a.storage_path
+
+			// SECURITY: la descarga es de solo lectura.
+			// Las migraciones deben ejecutarse fuera de las solicitudes HTTP.
+			$stmt = $db->prepare('SELECT a.filename_original, a.mime, a.size_bytes,	a.storage_path, a.sha256
 				FROM ticket_mensaje_adjuntos a
 				INNER JOIN ticket_mensajes tm ON tm.id = a.ticket_mensaje_id AND tm.ticket_id = a.ticket_id
 				WHERE a.id = :id AND a.ticket_id = :ticket_id LIMIT 1');
@@ -1300,15 +1302,106 @@ class TicketController extends Controller
 				return;
 			}
 
-			$filename = (string) ($row['filename_original'] ?? 'adjunto.bin');
-			$mime = (string) ($row['mime'] ?? 'application/octet-stream');
-			$size = (int) ($row['size_bytes'] ?? filesize($realFile));
 
-			header('Content-Type: ' . $mime);
-			header('Content-Length: ' . $size);
+			$filename = (string) ($row['filename_original'] ?? 'adjunto.bin');
+			$filename = basename(str_replace('\\', '/', $filename));
+
+			// Evitar caracteres de control y caracteres peligrosos en cabeceras HTTP.
+			$filename = preg_replace('/[\x00-\x1F\x7F"\\\\]/', '_', $filename);
+			$filename = trim((string) $filename);
+
+			if ($filename === '' || $filename === '.' || $filename === '..') {
+				$filename = 'adjunto.bin';
+			}
+
+			// No confiar en el MIME proporcionado por el correo.
+			$detectedMime = 'application/octet-stream';
+
+			if (class_exists('finfo')) {
+				$finfo = new finfo(FILEINFO_MIME_TYPE);
+				$mimeResult = $finfo->file($realFile);
+
+				if (is_string($mimeResult) && $mimeResult !== '') {
+					$detectedMime = strtolower(trim($mimeResult));
+				}
+			}
+
+			// Solo permitir visualizacion inline de formatos conocidos.
+			$inlineMimeTypes = [
+				'image/jpeg',
+				'image/png',
+				'image/gif',
+				'image/webp',
+				'application/pdf',
+			];
+
 			$mode = strtolower(trim((string) ($_GET['mode'] ?? 'attachment')));
-			$disposition = $mode === 'inline' ? 'inline' : 'attachment';
-			header('Content-Disposition: ' . $disposition . '; filename="' . addslashes($filename) . '"');
+
+			$allowInline = $mode === 'inline'
+				&& in_array($detectedMime, $inlineMimeTypes, true);
+
+			$disposition = $allowInline ? 'inline' : 'attachment';
+
+			// Utilizar el tamaño real del archivo, no el declarado en la BD.
+			$size = filesize($realFile);
+
+			if ($size === false || !is_readable($realFile)) {
+				http_response_code(404);
+				echo 'Archivo adjunto no disponible.';
+				return;
+			}
+
+			// SECURITY: verificar integridad de adjuntos con hash registrado.
+			$expectedHash = strtolower(trim((string) ($row['sha256'] ?? '')));
+
+			if ($expectedHash !== '') {
+				if (!preg_match('/^[a-f0-9]{64}$/', $expectedHash)) {
+					error_log(
+						'[ATLAS SECURITY] SHA256 invalido para adjunto ID ' . $adjId
+					);
+
+					http_response_code(409);
+					echo 'No se pudo verificar la integridad del adjunto.';
+					return;
+				}
+
+				$actualHash = hash_file('sha256', $realFile);
+
+				if (
+					$actualHash === false ||
+					!hash_equals($expectedHash, strtolower($actualHash))
+				) {
+
+					error_log(
+						'[ATLAS SECURITY] Integridad fallida. Ticket ID ' .
+							$ticketId . ', adjunto ID ' . $adjId
+					);
+
+					http_response_code(409);
+					echo 'El archivo adjunto no supero la verificacion de integridad.';
+					return;
+				}
+			}
+
+			// Evitar cacheo de documentos sensibles.
+			header('Cache-Control: private, no-store, no-cache, must-revalidate');
+			header('Pragma: no-cache');
+			header('Expires: 0');
+
+			// Evitar interpretacion de tipos MIME diferentes al declarado.
+			header('X-Content-Type-Options: nosniff');
+			header('Content-Security-Policy: sandbox');
+			header('X-Frame-Options: DENY');
+			header('Referrer-Policy: no-referrer');
+
+			header('Content-Type: ' . $detectedMime);
+			header('Content-Length: ' . $size);
+			header(
+				'Content-Disposition: ' .
+					$disposition .
+					'; filename="' . $filename . '"'
+			);
+
 			readfile($realFile);
 		} catch (Throwable $e) {
 			http_response_code(500);

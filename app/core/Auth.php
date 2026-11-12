@@ -211,6 +211,70 @@ class Auth
 		}
 	}
 
+
+	/**
+	 * Verifica permisos para operaciones sensibles.
+	 *
+	 * A diferencia de canPerform(), no concede acceso
+	 * cuando falla la consulta de permisos.
+	 */
+	public static function canPerformSensitive(
+		string $moduleKey,
+		string $action
+	): bool {
+		$user = self::user();
+
+		if (!$user) {
+			return false;
+		}
+
+		if (self::isSuperAdmin($user)) {
+			return true;
+		}
+
+		$roleId = (int) ($user['rol_id'] ?? 0);
+
+		if ($roleId <= 0) {
+			return false;
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+
+			$stmt = $db->prepare("
+            SELECT allowed
+            FROM role_action_permissions
+            WHERE rol_id = :rol_id
+              AND module_key = :module_key
+              AND accion = :accion
+            LIMIT 1
+        ");
+
+			$stmt->execute([
+				'rol_id' => $roleId,
+				'module_key' => $moduleKey,
+				'accion' => strtolower($action),
+			]);
+
+			$result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+			if (is_array($result)) {
+				return (int) ($result['allowed'] ?? 0) === 1;
+			}
+
+			// Sin permiso explícito, no conceder acceso sensible.
+			return false;
+		} catch (Throwable $e) {
+			error_log(
+				'[SECURITY] Error al verificar permiso sensible: ' .
+					$moduleKey . '/' . $action
+			);
+
+			return false;
+		}
+	}
+
+
 	public static function homePath(): string
 	{
 		if (!self::check()) {

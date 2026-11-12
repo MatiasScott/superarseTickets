@@ -313,8 +313,37 @@ class GraphMailService
 			return ['ok' => false, 'error' => $response['error']];
 		}
 
-		$body = is_array($response['body'] ?? null) ? $response['body'] : [];
-		$content = $this->decodeContentBytes((string) ($body['contentBytes'] ?? ''));
+		$body = is_array($response['body'] ?? null)
+			? $response['body']
+			: [];
+
+		$returnedAttachmentId = (string) ($body['id'] ?? '');
+
+		if (
+			$returnedAttachmentId === '' ||
+			!hash_equals($attachmentId, $returnedAttachmentId)
+		) {
+			return [
+				'ok' => false,
+				'error' => 'INTEGRIDAD: Graph devolvio un adjunto con identidad diferente.'
+			];
+		}
+
+		$attachmentType = (string) ($body['@odata.type'] ?? '');
+
+		if (
+			$attachmentType !== '' &&
+			$attachmentType !== '#microsoft.graph.fileAttachment'
+		) {
+			return [
+				'ok' => false,
+				'error' => 'INTEGRIDAD: el adjunto Graph no es un archivo compatible.'
+			];
+		}
+
+		$content = $this->decodeContentBytes(
+			(string) ($body['contentBytes'] ?? '')
+		);
 		if ($content === false || $content === null) {
 			return ['ok' => false, 'error' => 'No se pudo decodificar el adjunto.'];
 		}
@@ -326,8 +355,8 @@ class GraphMailService
 				'filename' => (string) ($body['name'] ?? 'Adjunto'),
 				'mime' => (string) ($body['contentType'] ?? 'application/octet-stream'),
 				'content' => $content,
-                'is_inline' => !empty($body['isInline']),
-                'content_id' => trim((string) ($body['contentId'] ?? '')),
+				'is_inline' => !empty($body['isInline']),
+				'content_id' => trim((string) ($body['contentId'] ?? '')),
 			],
 		];
 	}
