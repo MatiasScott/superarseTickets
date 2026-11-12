@@ -104,7 +104,7 @@ class Auth
 				'label' => 'Administración',
 				'description' => 'Gestión de usuarios, roles, permisos y configuración del sistema',
 				'default_path' => 'admin/dashboard',
-				'actions' => ['ver', 'listar', 'crear', 'editar', 'eliminar', 'configuraración']
+				'actions' => ['ver', 'listar', 'crear', 'editar', 'eliminar', 'configurar']
 			],
 			'configuracion' => [
 				'label' => 'Configuración',
