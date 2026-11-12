@@ -1384,6 +1384,7 @@ class CCIController extends Controller
 	public function sendConversationReply(int $id): void
 	{
 		Auth::requireAuth();
+		$this->requireCciAction('responder');
 		$contentLength = (int) ($_SERVER['CONTENT_LENGTH'] ?? 0);
 		if (
 			strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'POST'
@@ -2077,10 +2078,23 @@ class CCIController extends Controller
 	 * Si un nombre histórico aparece en más de una conversación, se exige acceso
 	 * a todas ellas para impedir filtraciones por colisión de nombres.
 	 */
+	/**
+	 * CCI: autorización explícita y restrictiva para operaciones sensibles.
+	 * El permiso de módulo genérico no sustituye permisos de acción.
+	 */
+	private function requireCciAction(string $action): void
+	{
+		if (!Auth::canPerformSensitive('cci', $action)) {
+			http_response_code(403);
+			echo '403 - Acceso CCI denegado';
+			exit;
+		}
+	}
+
 	public function serveAttachment(string $filename): void
 	{
 		Auth::requireAuth();
-		if (!Auth::canPerformSensitive('cci', 'ver')) {
+		if (!Auth::canPerformSensitive('cci', 'ver') || !Auth::canPerformSensitive('cci', 'exportar')) {
 			http_response_code(403);
 			return;
 		}
@@ -2103,15 +2117,9 @@ class CCIController extends Controller
 				http_response_code(404);
 				return;
 			}
-			$canManageAll = Auth::canPerformSensitive('cci', 'configurar');
-			$userId = (int) Auth::id();
-			foreach ($conversations as $conversation) {
-				$assignedId = (int) ($conversation['asignado_a'] ?? 0);
-				if (!$canManageAll && ($assignedId <= 0 || $assignedId !== $userId)) {
-					http_response_code(403);
-					return;
-				}
-			}
+			// Bandeja compartida: permiso de descarga explícito, sin depender de asignado_a.
+			// El archivo debe estar referenciado por al menos una conversación CCI.
+
 		} catch (Throwable $e) {
 			error_log('[SECURITY] CCI attachment authorization failed: ' . $e->getMessage());
 			http_response_code(404);
@@ -3285,6 +3293,7 @@ class CCIController extends Controller
 	public function updateConversationEstado(int $id): void
 	{
 		Auth::requireAuth();
+		$this->requireCciAction('editar');
 		if (!verify_csrf($_POST['_token'] ?? null)) {
 			set_flash('error', 'Token CSRF inválido.');
 			redirect('cci/conversaciones?selected_id=' . max(1, $id));
@@ -3317,6 +3326,7 @@ class CCIController extends Controller
 	public function storeConversationNote(int $id): void
 	{
 		Auth::requireAuth();
+		$this->requireCciAction('editar');
 		if (!verify_csrf($_POST['_token'] ?? null)) {
 			set_flash('error', 'Token CSRF invalido.');
 			redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
@@ -4364,6 +4374,7 @@ class CCIController extends Controller
 	public function mapCciAdvisorUser(int $advisorId): void
 	{
 		Auth::requireAuth();
+		$this->requireCciAction('configurar');
 		if (!verify_csrf($_POST['_token'] ?? null)) {
 			set_flash('error', 'Token CSRF inválido.');
 			redirect('cci/asignaciones');
@@ -4390,6 +4401,7 @@ class CCIController extends Controller
 	public function assignConversation(int $id): void
 	{
 		Auth::requireAuth();
+		$this->requireCciAction('configurar');
 		if (!verify_csrf($_POST['_token'] ?? null)) {
 			set_flash('error', 'Token CSRF inválido.');
 			redirect('cci/conversaciones?selected_id=' . $id);
@@ -4666,6 +4678,7 @@ class CCIController extends Controller
 	public function guardarEtiqueta(int $id): void
 	{
 		Auth::requireAuth();
+		$this->requireCciAction('editar');
 		if (!verify_csrf($_POST['_token'] ?? null)) {
 			set_flash('error', 'Token CSRF inválido.');
 			redirect('cci/conversaciones?selected_id=' . max(1, (int) $id));
@@ -4768,6 +4781,7 @@ class CCIController extends Controller
 	public function enviarMasivo(): void
 	{
 		Auth::requireAuth();
+		$this->requireCciAction('enviar');
 		header('Content-Type: application/json; charset=utf-8');
 
 		$inputJson = file_get_contents('php://input');
@@ -4955,6 +4969,7 @@ class CCIController extends Controller
 	public function cerrarLote(): void
 	{
 		Auth::requireAuth();
+		$this->requireCciAction('editar');
 		header('Content-Type: application/json; charset=utf-8');
 		
 		$inputJson = file_get_contents('php://input');
@@ -5008,6 +5023,7 @@ class CCIController extends Controller
 	public function conversaciones(): void
 	{
 		Auth::requireAuth();
+		$this->requireCciAction('ver');
 		$db = $this->db();
 		$this->ensureCciTables($db);
 		$this->ensureProspectByInteraction($db);
@@ -5373,6 +5389,7 @@ class CCIController extends Controller
 	public function conversacionesPoll(): void
 	{
 		Auth::requireAuth();
+		$this->requireCciAction('ver');
 		header('Content-Type: application/json; charset=utf-8');
 
 		$db = $this->db();
@@ -5477,6 +5494,7 @@ class CCIController extends Controller
 	public function obtenerMensajesAnteriores(): void
 	{
 		Auth::requireAuth();
+		$this->requireCciAction('ver');
 		header('Content-Type: application/json; charset=utf-8');
 
 		$id = (int) ($_GET['id'] ?? 0);
