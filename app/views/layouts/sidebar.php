@@ -1,12 +1,12 @@
 <?php
-$canTickets = Auth::canAccessModule('tickets');
-$canCci = Auth::canAccessModule('cci');
-$canCrm = Auth::canAccessModule('crm');
-$canAdmin = Auth::canAccessModule('admin');
-$canContactos = Auth::canAccessModule('contactos');
-$canConfig = Auth::canAccessModule('configuracion');
-$canCampanas = Auth::canAccessModule('campanas');
-$canConvenios = Auth::canAccessModule('convenios');
+$canTickets = Auth::canPerformSensitive('tickets', 'ver') || Auth::canPerformSensitive('tickets', 'listar');
+$canCci = Auth::canPerformSensitive('cci', 'ver') || Auth::canPerformSensitive('cci', 'listar');
+$canCrm = Auth::canPerformSensitive('crm', 'ver') || Auth::canPerformSensitive('crm', 'listar');
+$canAdmin = Auth::canPerformSensitive('admin', 'ver');
+$canContactos = Auth::canPerformSensitive('contactos', 'ver') || Auth::canPerformSensitive('contactos', 'listar');
+$canConfig = Auth::canPerformSensitive('configuracion', 'ver');
+$canCampanas = Auth::canPerformSensitive('campanas', 'ver') || Auth::canPerformSensitive('campanas', 'listar');
+$canConvenios = Auth::canPerformSensitive('convenios', 'ver') || Auth::canPerformSensitive('convenios', 'listar');
 
 $currentPath = trim(parse_url((string) ($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH) ?: '', '/');
 $basePath = trim((string) (defined('BASE_PATH') ? BASE_PATH : ''), '/');
@@ -74,9 +74,11 @@ function sidebarActive(string $prefix, string $relPath): string {
 				<a href="<?= e(base_url('cci/clientes-potenciales')) ?>" class="sidebar-link<?= sidebarActive('cci/clientes-potenciales', $relPath) ?>">
 					<span class="icon"><i class="bi bi-person-badge"></i></span> Clientes Potenciales
 				</a>
+				<?php if (Auth::canPerformSensitive('cci', 'configurar')): ?>
 				<a href="<?= e(base_url('cci/asignaciones')) ?>" class="sidebar-link<?= sidebarActive('cci/asignaciones', $relPath) ?>">
 					<span class="icon"><i class="bi bi-diagram-3"></i></span> Asignaciones
 				</a>
+				<?php endif; ?>
 			</div>
 		</div>
 		<?php endif; ?>

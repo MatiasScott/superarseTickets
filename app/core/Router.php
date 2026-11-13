@@ -62,8 +62,64 @@ class Router
 		echo '404 - Ruta no encontrada';
 	}
 
+
+	/**
+	 * Barrera de acceso a endpoints administrativos y configuraciones sensibles.
+	 * No utiliza canPerform(): ese metodo conserva un fallback permisivo.
+	 */
+	private function authorizeSensitiveHandler(callable|string $handler): void
+	{
+		if (!is_string($handler) || !str_contains($handler, '@')) {
+			return;
+		}
+
+		[$controller, $action] = explode('@', $handler, 2);
+		$module = null;
+		$permission = null;
+
+		if ($controller === 'AdminController') {
+			// Las herramientas de mantenimiento y roles ya requieren Super Admin
+			// en el propio controlador; mantener ese segundo control.
+			$module = 'admin';
+			$permission = match (true) {
+				$action === 'dashboard' => 'ver',
+				str_ends_with($action, 'Delete') => 'eliminar',
+				str_ends_with($action, 'Store'), str_ends_with($action, 'Create') => 'crear',
+				str_ends_with($action, 'Update'), str_ends_with($action, 'Edit') => 'editar',
+				$action === 'fixPermissions', $action === 'analyzeTables' => 'configurar',
+				default => 'ver',
+			};
+		} elseif ($controller === 'ConfiguracionController') {
+			$module = 'configuracion';
+			$permission = str_starts_with($action, 'save') ? 'editar' : 'ver';
+		} elseif ($controller === 'CCIController') {
+			// Operaciones técnicas: no basta con tener permiso de lectura CCI.
+			$technical = [
+				'configuracion', 'saveConfiguracion', 'automatizaciones',
+				'testAutomatizacion', 'sla', 'auditoria', 'mapCciAdvisorUser',
+			];
+			if (in_array($action, $technical, true)) {
+				$module = 'cci';
+				$permission = 'configurar';
+			}
+		}
+
+		if ($module === null) {
+			return;
+		}
+
+		Auth::requireAuth();
+		if (!Auth::canPerformSensitive($module, $permission)) {
+			http_response_code(403);
+			exit('403 - No autorizado');
+		}
+	}
+
 	private function executeHandler(callable|string $handler, array $params = []): void
 	{
+		// SECURITY 9: autorizar antes de instanciar el controlador.
+		$this->authorizeSensitiveHandler($handler);
+
 		if (is_callable($handler)) {
 			call_user_func_array($handler, $params);
 			return;

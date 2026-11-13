@@ -37,6 +37,7 @@ ADMINISTRACIÓN GENERAL
 				</div>
 
 				<!-- ROLES -->
+				<?php if (Auth::isSuperAdmin(Auth::user() ?? [])): ?>
 				<div class="col-12 col-xl-4">
 					<div class="card admin-card h-100">
 						<div class="card-body">
@@ -56,6 +57,8 @@ ADMINISTRACIÓN GENERAL
 						</div>
 					</div>
 				</div>
+
+				<?php endif; ?>
 
 				<!-- GRUPOS -->
 				<div class="col-12 col-xl-4">
@@ -78,6 +81,7 @@ ADMINISTRACIÓN GENERAL
 					</div>
 				</div>
 
+				<?php if (Auth::canPerformSensitive('cci', 'configurar')): ?>
 				<div class="col-12 col-xl-4">
 					<div class="card admin-card h-100">
 						<div class="card-body">
@@ -101,6 +105,7 @@ ADMINISTRACIÓN GENERAL
 					</div>
 				</div>
 
+				<?php endif; ?>
 			</div>
 		</div>
 
