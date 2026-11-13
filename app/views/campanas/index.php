@@ -1,9 +1,17 @@
+<?php
+$canCreateCampana = Auth::canPerformSensitive('campanas', 'crear');
+$canEditCampana = Auth::canPerformSensitive('campanas', 'editar');
+$canSendCampana = Auth::canPerformSensitive('campanas', 'enviar');
+$canDeleteCampana = Auth::canPerformSensitive('campanas', 'eliminar');
+?>
 <div class="container-fluid my-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h1 class="h3"><i class="bi bi-envelope-open"></i> Campañas de Correo</h1>
+        <?php if ($canCreateCampana): ?>
         <a href="<?= base_url('campanas/create') ?>" class="btn btn-primary">
             <i class="bi bi-plus-circle"></i> Nueva Campaña
         </a>
+        <?php endif; ?>
     </div>
 
     <?php if (isset($_SESSION['flash']) && $_SESSION['flash']): ?>
@@ -18,7 +26,9 @@
         <div class="alert alert-info text-center py-4">
             <i class="bi bi-inbox" style="font-size: 3rem;"></i>
             <p class="mt-3">No hay campañas creadas aún.</p>
+            <?php if ($canCreateCampana): ?>
             <a href="<?= base_url('campanas/create') ?>" class="btn btn-sm btn-primary">Crear primera campaña</a>
+            <?php endif; ?>
         </div>
     <?php else: ?>
         <div class="table-responsive" data-mobile-cards>
@@ -67,10 +77,12 @@
                             </td>
                             <td data-label="Acciones">
                                 <div class="d-flex flex-wrap gap-1 align-items-center">
+                                    <?php if ($canEditCampana): ?>
                                     <a href="<?= base_url('campanas/edit/' . $campana['id']) ?>" class="btn btn-sm btn-outline-secondary" title="Editar">
                                         <i class="bi bi-pencil"></i> Editar
                                     </a>
-                                    <?php if ($campana['estado'] === 'borrador'): ?>
+                                    <?php endif; ?>
+                                    <?php if ($canSendCampana && $campana['estado'] === 'borrador'): ?>
                                         <form method="POST" action="<?= base_url('campanas/send/' . $campana['id']) ?>" class="d-inline">
                                             <input type="hidden" name="_token" value="<?= csrf_token() ?>">
                                             <button type="submit" class="btn btn-sm btn-success" title="Enviar" onclick="return confirm('¿Enviar esta campaña ahora? Esta acción iniciará la cola de envío.')">
@@ -81,7 +93,7 @@
                                     <a href="<?= base_url('campanas/preview/' . $campana['id']) ?>" class="btn btn-sm btn-outline-info" title="Vista previa" target="_blank">
                                         <i class="bi bi-eye"></i> Ver
                                     </a>
-                                    <?php if ($campana['estado'] === 'borrador'): ?>
+                                    <?php if ($canDeleteCampana && $campana['estado'] === 'borrador'): ?>
                                         <form method="POST" action="<?= base_url('campanas/delete/' . $campana['id']) ?>" class="d-inline">
                                             <input type="hidden" name="_token" value="<?= csrf_token() ?>">
                                             <button type="submit" class="btn btn-sm btn-outline-danger" title="Eliminar" onclick="return confirm('¿Eliminar esta campaña?')">

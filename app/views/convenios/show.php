@@ -19,6 +19,8 @@ if (!function_exists('convenio_value')) {
     }
 }
 
+$canCreateConvenioActivity = Auth::canPerformSensitive('convenios', 'crear');
+$canEditConvenioActivity = Auth::canPerformSensitive('convenios', 'editar');
 $convenioId = (int) ($convenio['id'] ?? 0);
 ?>
 <section class="module-page">
@@ -153,6 +155,7 @@ $convenioId = (int) ($convenio['id'] ?? 0);
             </div>
 
             <div class="tab-pane fade" id="tab-notas" role="tabpanel">
+                <?php if ($canCreateConvenioActivity): ?>
                 <form method="post" action="<?= e(base_url('convenios/' . $convenioId . '/notas')) ?>" class="mb-3" enctype="multipart/form-data">
                     <?= csrf_field() ?>
                     <label class="form-label">Nueva nota interna</label>
@@ -161,6 +164,7 @@ $convenioId = (int) ($convenio['id'] ?? 0);
                     <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-journal-plus"></i> Guardar nota</button>
                 </form>
 
+                <?php endif; ?>
                 <div class="list-group">
                     <?php if (empty($notas)): ?>
                         <div class="list-group-item text-muted">Sin notas registradas.</div>
@@ -182,6 +186,7 @@ $convenioId = (int) ($convenio['id'] ?? 0);
                                             </div>
                                         <?php endif; ?>
 
+                                        <?php if ($canEditConvenioActivity): ?>
                                         <details class="mt-2">
                                             <summary class="small text-primary" style="cursor:pointer;">Editar nota</summary>
                                             <form method="post" action="<?= e(base_url('convenios/' . $convenioId . '/notas/' . (int) ($nota['id'] ?? 0))) ?>" enctype="multipart/form-data" class="mt-2">
@@ -204,6 +209,7 @@ $convenioId = (int) ($convenio['id'] ?? 0);
                                                 <button type="submit" class="btn btn-outline-primary btn-sm">Guardar cambios</button>
                                             </form>
                                         </details>
+                                        <?php endif; ?>
                                     </div>
                                     <small class="text-muted text-nowrap"><?= e((string) ($nota['created_at'] ?? '')) ?></small>
                                 </div>
@@ -214,6 +220,7 @@ $convenioId = (int) ($convenio['id'] ?? 0);
             </div>
 
             <div class="tab-pane fade" id="tab-tareas" role="tabpanel">
+                <?php if ($canCreateConvenioActivity): ?>
                 <form method="post" action="<?= e(base_url('convenios/' . $convenioId . '/tareas')) ?>" class="row g-2 mb-3">
                     <?= csrf_field() ?>
 
@@ -303,6 +310,8 @@ $convenioId = (int) ($convenio['id'] ?? 0);
                     </div>
                 </form>
 
+                <?php endif; ?>
+                <fieldset <?= $canEditConvenioActivity ? '' : 'disabled' ?> class="border-0 p-0 m-0">
                 <div class="table-responsive">
                     <table class="table table-sm align-middle tareas-table">
                         <thead class="table-light">
@@ -447,6 +456,7 @@ $convenioId = (int) ($convenio['id'] ?? 0);
                         </tbody>
                     </table>
                 </div>
+                </fieldset>
             </div>
 
             <div class="tab-pane fade" id="tab-historico" role="tabpanel">
@@ -579,6 +589,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const participantForms = Array.from(document.querySelectorAll('[data-autosave-participants]'));
 
     participantForms.forEach((form) => {
+        if (!<?= $canEditConvenioActivity ? 'true' : 'false' ?>) return;
         if (form.hasAttribute('data-locked')) {
             return;
         }
@@ -631,6 +642,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const resultForms = Array.from(document.querySelectorAll('[data-autosave-result]'));
     resultForms.forEach((form) => {
+        if (!<?= $canEditConvenioActivity ? 'true' : 'false' ?>) return;
         if (form.hasAttribute('data-locked')) {
             return;
         }
@@ -692,6 +704,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     stateForms.forEach((form) => {
+        if (!<?= $canEditConvenioActivity ? 'true' : 'false' ?>) return;
         const completeCheck = form.querySelector('[data-complete-check]');
         if (!completeCheck) return;
 

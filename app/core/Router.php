@@ -139,6 +139,27 @@ class Router
 				'getProspectAsesores', 'listModalidades' => 'ver',
 				default => null,
 			};
+		} elseif ($controller === 'CampanaController') {
+			// Security 9.4: permisos por operacion, con denegacion por defecto.
+			$module = 'campanas';
+			$permission = match ($action) {
+				'index', 'preview' => 'ver',
+				'create', 'store' => 'crear',
+				'edit', 'update' => 'editar',
+				'send' => 'enviar',
+				'delete' => 'eliminar',
+				default => null,
+			};
+		} elseif ($controller === 'ConvenioController') {
+			// Los convenios base siguen siendo de solo lectura; notas y tareas tienen permisos propios.
+			$module = 'convenios';
+			$permission = match ($action) {
+				'index', 'show', 'noteAttachment' => 'ver',
+				'create', 'store', 'storeNota', 'storeTarea' => 'crear',
+				'updateDatos', 'updateNota', 'updateTareaEstado',
+				'updateTareaParticipantes', 'updateTareaResultado' => 'editar',
+				default => null,
+			};
 		} elseif ($controller === 'ConfiguracionController') {
 			$module = 'configuracion';
 			$permission = str_starts_with($action, 'save') ? 'editar' : 'ver';
