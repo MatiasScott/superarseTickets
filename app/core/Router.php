@@ -89,6 +89,37 @@ class Router
 				$action === 'fixPermissions', $action === 'analyzeTables' => 'configurar',
 				default => 'ver',
 			};
+		} elseif ($controller === 'TicketController') {
+			// Operaciones de tickets: usar permisos explicitos y negar por defecto.
+			$module = 'tickets';
+			$permission = match ($action) {
+				'create', 'store' => 'crear',
+				'updateProperties', 'addNote', 'updateNote',
+				'replyTicket', 'forwardTicket' => 'editar',
+				'deleteNote' => 'eliminar',
+				'dashboard', 'dashboardData', 'dashboardGroupDetails', 'index',
+				'show', 'attachment', 'replyAttachment' => 'ver',
+				default => null,
+			};
+		} elseif ($controller === 'CRMController' && $action !== 'cronInstitutionalSync') {
+			// El cron conserva su autenticacion propia; no depende de una sesion web.
+			$module = 'crm';
+			$permission = match ($action) {
+				'createProspect', 'addStudentTask', 'addStudentNote', 'saveModalidad' => 'crear',
+				'updateStudentContact', 'updateProspect', 'updateStudentState',
+				'updateStudentTaskParticipants', 'updateStudentTaskResult',
+				'completeStudentTask', 'updateStudentNote', 'restoreProspect',
+				'bulkUpdateProspects' => 'editar',
+				'deleteStudentNote', 'softDeleteProspect', 'deleteModalidad' => 'eliminar',
+				'dashboard', 'interesados', 'estudiantes', 'estudiantesFilter',
+				'interesadosStudentsFilter', 'interesadosProspectsFilter',
+				'getStudentContactDetail', 'getProspectDetail', 'checkProspectPhone',
+				'getStudentDetail', 'getStudentTasks', 'getStudentNotes',
+				'noteAttachment', 'getCRMPipelineHistory', 'getStudentTicketsByEmail',
+				'searchProspectsByNote', 'getModalidades', 'getPipelineStates',
+				'getProspectAsesores', 'listModalidades' => 'ver',
+				default => null,
+			};
 		} elseif ($controller === 'ConfiguracionController') {
 			$module = 'configuracion';
 			$permission = str_starts_with($action, 'save') ? 'editar' : 'ver';
@@ -106,6 +137,12 @@ class Router
 
 		if ($module === null) {
 			return;
+		}
+
+		// Los handlers de Tickets y CRM deben estar clasificados expresamente.
+		if ($permission === null) {
+			http_response_code(403);
+			exit('403 - Operacion no autorizada');
 		}
 
 		Auth::requireAuth();
