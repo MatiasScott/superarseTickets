@@ -2972,6 +2972,7 @@ class CCIController extends Controller
 	public function syncWhatchimp(): void
 	{
 		Auth::requireAuth();
+		$this->requireCciAction('configurar');
 		if (!verify_csrf($_POST['_token'] ?? null)) {
 			set_flash('error', 'Token CSRF inválido.');
 			redirect('cci/conversaciones');
@@ -3882,6 +3883,7 @@ class CCIController extends Controller
 	public function sendCampana(int $id): void
 	{
 		Auth::requireAuth();
+		$this->requireCciAction('enviar');
 		if (!verify_csrf($_POST['_token'] ?? null)) {
 			set_flash('error', 'Token CSRF invalido.');
 			redirect('cci/campanas?selected_id=' . max(1, (int) $id));
@@ -3965,6 +3967,7 @@ class CCIController extends Controller
 	public function processScheduledCampanas(): void
 	{
 		Auth::requireAuth();
+		$this->requireCciAction('enviar');
 		if (!verify_csrf($_POST['_token'] ?? null)) {
 			set_flash('error', 'Token CSRF invalido.');
 			redirect('cci/campanas');
