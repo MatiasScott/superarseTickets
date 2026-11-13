@@ -2724,6 +2724,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		const deleteNoteIdInput = document.getElementById('crmNoteDeleteId');
 		const deletePreview = document.getElementById('crmNoteDeletePreview');
 		const deleteSubmitBtn = document.getElementById('crmNoteDeleteSubmit');
+		const canDeleteCrmNotes = window.ATLAS_CRM_CAN_DELETE_NOTES === true;
 		let restorePipelineAfterNoteModal = false;
 		let removeAttachmentIds = new Set();
 
@@ -2838,7 +2839,7 @@ document.addEventListener('DOMContentLoaded', () => {
 							${attachmentsHtml}
 							<div class="mt-2">
 								<button type="button" class="btn btn-sm btn-outline-primary crm-note-edit-btn" data-note-id="${noteId}" data-note-text="${escapeHtml(noteText)}" data-bs-toggle="modal" data-bs-target="#crmNoteEditModal">Editar</button>
-								<button type="button" class="btn btn-sm btn-outline-danger crm-note-delete-btn" data-note-id="${noteId}" data-note-text="${escapeHtml(noteText)}" data-bs-toggle="modal" data-bs-target="#crmNoteDeleteModal">Eliminar</button>
+								${canDeleteCrmNotes ? `<button type="button" class="btn btn-sm btn-outline-danger crm-note-delete-btn" data-note-id="${noteId}" data-note-text="${escapeHtml(noteText)}" data-bs-toggle="modal" data-bs-target="#crmNoteDeleteModal">Eliminar</button>` : ''}
 							</div>
 						</div>
 						<small class="text-muted text-nowrap">${escapeHtml(dateLabel)}</small>
@@ -2929,7 +2930,7 @@ document.addEventListener('DOMContentLoaded', () => {
 			};
 		}
 
-		if (deleteSubmitBtn) {
+		if (deleteSubmitBtn && canDeleteCrmNotes) {
 			deleteSubmitBtn.onclick = async () => {
 				const noteId = Number(deleteNoteIdInput?.value || 0);
 				if (noteId <= 0) {
@@ -2944,9 +2945,20 @@ document.addEventListener('DOMContentLoaded', () => {
 						headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
 						body: payload,
 					});
-					const data = await response.json();
+					const rawResponse = await response.text();
+					let data;
+					try {
+						data = JSON.parse(rawResponse);
+					} catch (_) {
+						throw new Error(response.status === 403
+							? 'No tienes permisos para eliminar esta nota.'
+							: 'El servidor devolvió una respuesta no válida.');
+					}
+					if (response.status === 403) {
+						throw new Error('No tienes permisos para eliminar esta nota.');
+					}
 					if (!response.ok || !data.success) {
-						throw new Error(data.error || 'No se pudo eliminar la nota.');
+						throw new Error(data.message || data.error || 'No se pudo eliminar la nota.');
 					}
 					if (deleteModalEl && window.bootstrap?.Modal) {
 						window.bootstrap.Modal.getOrCreateInstance(deleteModalEl).hide();

@@ -19,6 +19,7 @@
 	<?php $prospectAdvisorOptions = $prospectAdvisorOptions ?? []; ?>
 	<?php $prospectCreatorOptions = $prospectCreatorOptions ?? []; ?>
 	<?php $prospectCreatorMap = is_array($prospectCreatorMap ?? null) ? $prospectCreatorMap : []; ?>
+	<script>window.ATLAS_CRM_CAN_DELETE_NOTES = <?= Auth::canPerformSensitive('crm', 'eliminar') ? 'true' : 'false' ?>;</script>
 	<script>window.CRM_CREATOR_MAP = <?= json_encode((object) $prospectCreatorMap, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;</script>
 	<?php require APP_PATH . '/views/layouts/phone_country_assets.php'; ?>
 	<?php

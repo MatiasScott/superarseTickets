@@ -67,6 +67,25 @@ class Router
 	 * Barrera de acceso a endpoints administrativos y configuraciones sensibles.
 	 * No utiliza canPerform(): ese metodo conserva un fallback permisivo.
 	 */
+	private function denySensitiveAccess(string $message, ?string $controller = null): void
+	{
+		http_response_code(403);
+		header('Cache-Control: no-store');
+		$accept = strtolower((string) ($_SERVER['HTTP_ACCEPT'] ?? ''));
+		$requestedWith = strtolower((string) ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? ''));
+		$isJsonRequest = $controller === 'CRMController'
+			|| str_contains($accept, 'application/json')
+			|| $requestedWith === 'xmlhttprequest';
+		if ($isJsonRequest) {
+			header('Content-Type: application/json; charset=utf-8');
+			echo json_encode(['success' => false, 'message' => $message], JSON_UNESCAPED_UNICODE);
+		} else {
+			header('Content-Type: text/plain; charset=utf-8');
+			echo '403 - ' . $message;
+		}
+		exit;
+	}
+
 	private function authorizeSensitiveHandler(callable|string $handler): void
 	{
 		if (!is_string($handler) || !str_contains($handler, '@')) {
@@ -141,14 +160,12 @@ class Router
 
 		// Los handlers de Tickets y CRM deben estar clasificados expresamente.
 		if ($permission === null) {
-			http_response_code(403);
-			exit('403 - Operacion no autorizada');
+			$this->denySensitiveAccess('Operación no autorizada.', $controller);
 		}
 
 		Auth::requireAuth();
 		if (!Auth::canPerformSensitive($module, $permission)) {
-			http_response_code(403);
-			exit('403 - No autorizado');
+			$this->denySensitiveAccess('No tienes permisos para realizar esta acción.', $controller);
 		}
 	}
 
