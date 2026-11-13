@@ -20,7 +20,7 @@ function sidebarActive(string $prefix, string $relPath): string {
 <aside class="sidebar">
 	<div class="sidebar-head">
 		<img class="sidebar-brand-img" src="<?= e(asset('img/atlas_ticket.jpeg')) ?>" alt="Atlas">
-		<span class="sidebar-brand-label">Atlas</span>
+		<button type="button" class="sidebar-collapse-btn" id="sidebarCollapseBtn" aria-label="Contraer menú" title="Contraer o expandir menú"><i class="bi bi-layout-sidebar-inset"></i></button>
 	</div>
 
 	<nav class="sidebar-nav">

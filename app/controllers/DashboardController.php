@@ -91,7 +91,8 @@ class DashboardController extends Controller
 							  AND ug.grupo_id = t.grupo_id
 						)
 				  )
-				  AND (COALESCE(te.es_final, 0) = 0 OR te.id IS NULL)";
+				  AND (COALESCE(te.es_final, 0) = 0 OR te.id IS NULL)
+                  AND LOWER(TRIM(COALESCE(te.nombre, ''))) NOT IN ('cerrado', 'cerrados', 'resuelto', 'resueltos')";
 
 			$countStmt = $db->prepare($countSql);
 			$countStmt->execute(['user_id' => $userId]);
@@ -131,6 +132,7 @@ class DashboardController extends Controller
 						)
 				  )
 				  AND (COALESCE(te.es_final, 0) = 0 OR te.id IS NULL)
+                  AND LOWER(TRIM(COALESCE(te.nombre, ''))) NOT IN ('cerrado', 'cerrados', 'resuelto', 'resueltos')
 				ORDER BY
 					CASE
 						WHEN t.fecha_resolucion IS NOT NULL AND DATE(t.fecha_resolucion) < CURDATE() THEN 0

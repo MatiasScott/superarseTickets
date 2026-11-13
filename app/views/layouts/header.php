@@ -31,6 +31,7 @@
 	<header class="topbar">
 		<div class="topbar-inner">
 			<div class="topbar-left">
+				<?php if (!empty($showSidebar)): ?><button type="button" id="mobileSidebarToggle" class="topbar-icon-btn mobile-sidebar-toggle" aria-label="Abrir menú" aria-expanded="false"><i class="bi bi-list"></i></button><?php endif; ?>
 				<a class="brand-link" href="<?= e(base_url($homePath)) ?>">
 					<img class="brand-logo-img" src="<?= e(asset('img/atlas_ticket.jpeg')) ?>" alt="Atlas Ticket">
 					<span class="brand-name">Atlas</span>

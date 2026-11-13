@@ -102,6 +102,7 @@ class Router
 			$module = 'admin';
 			$permission = match (true) {
 				$action === 'dashboard' => 'ver',
+				$action === 'usuariosResetPassword' => 'configurar',
 				str_ends_with($action, 'Delete') => 'eliminar',
 				str_ends_with($action, 'Store'), str_ends_with($action, 'Create') => 'crear',
 				str_ends_with($action, 'Update'), str_ends_with($action, 'Edit') => 'editar',

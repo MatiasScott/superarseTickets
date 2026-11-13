@@ -13,6 +13,7 @@ return static function (Router $router): void {
 	$router->get('/admin/usuarios/{id}/edit', 'AdminController@usuariosEdit');
 	$router->post('/admin/usuarios/{id}', 'AdminController@usuariosUpdate');
 	$router->post('/admin/usuarios/{id}/delete', 'AdminController@usuariosDelete');
+	$router->post('/admin/usuarios/{id}/reset-password', 'AdminController@usuariosResetPassword');
 
 	// Admin - Roles
 	$router->get('/admin/roles', 'AdminController@rolesIndex');

@@ -82,5 +82,18 @@
 				</div>
 			</form>
 		</div>
+        <?php if (Auth::isSuperAdmin(Auth::user() ?? []) && Auth::canPerformSensitive('admin', 'configurar') && (int) ($usuario['id'] ?? 0) !== (int) Auth::id()): ?>
+        <section class="admin-form mt-4 p-3 border rounded">
+            <h5><i class="bi bi-key"></i> Restablecer contraseña</h5>
+            <p class="text-muted small">Asigna una contraseña temporal. El usuario deberá personalizarla en su próximo inicio de sesión.</p>
+            <form method="POST" action="<?= e(base_url('admin/usuarios/' . (int) $usuario['id'] . '/reset-password')) ?>" autocomplete="off">
+                <?= csrf_field() ?>
+                <div class="form-group"><label for="temporary_password">Contraseña temporal</label><input class="form-control" type="password" name="temporary_password" id="temporary_password" autocomplete="new-password" minlength="8" required></div>
+                <div class="form-group"><label for="confirm_temporary_password">Confirmar contraseña temporal</label><input class="form-control" type="password" name="confirm_temporary_password" id="confirm_temporary_password" autocomplete="new-password" minlength="8" required></div>
+                <button type="submit" class="btn btn-warning" onclick="return confirm('¿Restablecer la contraseña de este usuario?')"><i class="bi bi-arrow-repeat"></i> Restablecer contraseña</button>
+            </form>
+        </section>
+        <?php endif; ?>
+
 	</div>
 </div>

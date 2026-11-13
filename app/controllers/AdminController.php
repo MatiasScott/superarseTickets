@@ -317,6 +317,47 @@ class AdminController extends Controller
 		redirect('admin/usuarios');
 	}
 
+	public function usuariosResetPassword(int $id): void
+	{
+		Auth::requireAuth();
+		if (!Auth::isSuperAdmin(Auth::user() ?? []) || !Auth::canPerformSensitive('admin', 'configurar')) {
+			http_response_code(403);
+			exit('No autorizado.');
+		}
+		if (!verify_csrf($_POST['_token'] ?? null)) {
+			set_flash('error', 'Token CSRF inválido.');
+			redirect('admin/usuarios');
+		}
+		if ($id <= 0 || $id === (int) Auth::id()) {
+			set_flash('error', 'No puedes restablecer tu propia contraseña desde administración.');
+			redirect('admin/usuarios');
+		}
+		$password = (string) ($_POST['temporary_password'] ?? '');
+		$confirmation = (string) ($_POST['confirm_temporary_password'] ?? '');
+		$validation = validate_password_strength($password);
+		if ($password !== $confirmation || !$validation['valid']) {
+			set_flash('error', 'Las contraseñas no coinciden o no cumplen los requisitos de seguridad.');
+			redirect('admin/usuarios/' . $id . '/edit');
+		}
+		try {
+			$db = Database::getInstance()->connection();
+			$stmt = $db->prepare('SELECT id, nombre, email FROM usuarios WHERE id = :id AND estado = :estado LIMIT 1');
+			$stmt->execute(['id' => $id, 'estado' => 'activo']);
+			$target = $stmt->fetch();
+			if (!$target) {
+				set_flash('error', 'Usuario activo no encontrado.');
+				redirect('admin/usuarios');
+			}
+			$stmt = $db->prepare('UPDATE usuarios SET password = :password, must_change_password = 1, updated_at = NOW() WHERE id = :id');
+			$stmt->execute(['password' => password_hash($password, PASSWORD_BCRYPT, ['cost' => 10]), 'id' => $id]);
+			$this->audit('UPDATE', 'usuarios', $id, ['reset_password' => false], ['reset_password' => true, 'must_change_password' => 1]);
+			set_flash('success', 'Contraseña temporal asignada. El usuario deberá cambiarla al iniciar sesión.');
+		} catch (Throwable $e) {
+			set_flash('error', 'No se pudo restablecer la contraseña. Verifica la columna must_change_password.');
+		}
+		redirect('admin/usuarios/' . $id . '/edit');
+	}
+
 	// ============ ROLES ============
 	public function rolesIndex(): void
 	{

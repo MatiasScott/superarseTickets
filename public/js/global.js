@@ -169,6 +169,36 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     const currentPath = window.location.pathname.toLowerCase();
+    const atlasLayout = document.querySelector('.app-layout:not(.no-sidebar)');
+    const collapseBtn = document.getElementById('sidebarCollapseBtn');
+    const mobileBtn = document.getElementById('mobileSidebarToggle');
+    if (atlasLayout) {
+        try { if (localStorage.getItem('atlas-sidebar-collapsed') === '1') atlasLayout.classList.add('sidebar-collapsed'); } catch (_) {}
+        // Al pulsar una categoria desde la barra de iconos, expandir primero.
+        atlasLayout.querySelectorAll('.sidebar-toggle').forEach(toggle => {
+            toggle.addEventListener('click', () => {
+                if (window.matchMedia('(min-width: 768px)').matches && atlasLayout.classList.contains('sidebar-collapsed')) {
+                    atlasLayout.classList.remove('sidebar-collapsed');
+                    collapseBtn?.setAttribute('aria-label', 'Contraer menú');
+                    try { localStorage.setItem('atlas-sidebar-collapsed', '0'); } catch (_) {}
+                }
+            }, { capture: true });
+        });
+        collapseBtn?.addEventListener('click', () => {
+            atlasLayout.classList.toggle('sidebar-collapsed');
+            const collapsed = atlasLayout.classList.contains('sidebar-collapsed');
+            collapseBtn.setAttribute('aria-label', collapsed ? 'Expandir menú' : 'Contraer menú');
+            try { localStorage.setItem('atlas-sidebar-collapsed', collapsed ? '1' : '0'); } catch (_) {}
+        });
+        mobileBtn?.addEventListener('click', () => {
+            const open = atlasLayout.classList.toggle('mobile-sidebar-open');
+            mobileBtn.setAttribute('aria-expanded', String(open));
+        });
+        atlasLayout.querySelectorAll('.sidebar a[href]').forEach(link => link.addEventListener('click', () => {
+            atlasLayout.classList.remove('mobile-sidebar-open');
+            mobileBtn?.setAttribute('aria-expanded', 'false');
+        }));
+    }
     const sidebarLinks = document.querySelectorAll('.sidebar-link[href]');
     const sidebarGroups = document.querySelectorAll('.sidebar-group');
     let bestLink = null;
