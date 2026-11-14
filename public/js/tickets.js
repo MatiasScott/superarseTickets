@@ -178,8 +178,18 @@ document.addEventListener('DOMContentLoaded', () => {
 			}
 		};
 
-		refreshDashboard();
-		window.setInterval(refreshDashboard, 15000);
+		// Reducir consultas de dashboard en pestañas inactivas y evitar solapamientos.
+		let dashboardRefreshInFlight = false;
+		const refreshDashboardSafely = async () => {
+			if (document.hidden || dashboardRefreshInFlight || !navigator.onLine) return;
+			dashboardRefreshInFlight = true;
+			try { await refreshDashboard(); } finally { dashboardRefreshInFlight = false; }
+		};
+		refreshDashboardSafely();
+		window.setInterval(refreshDashboardSafely, 60000);
+		document.addEventListener('visibilitychange', () => {
+			if (!document.hidden) refreshDashboardSafely();
+		});
 	}
 
 	const composeForm = document.getElementById('ticketComposeForm');

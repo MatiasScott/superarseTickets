@@ -23,7 +23,7 @@
 <body data-module="<?= e($layoutModule ?? 'dashboard') ?>" class="<?= !empty($showTopbar) ? '' : 'no-topbar' ?>">
 	<?php $homePath = Auth::check() ? Auth::homePath() : 'dashboard'; ?>
 	<?php
-		$heartbeatEnabled = (string) env('BOT_EMAIL_ENABLED', 'true') === 'true';
+		$heartbeatEnabled = (string) env('APP_WEB_HEARTBEAT_ENABLED', 'false') === 'true' && (string) env('BOT_EMAIL_ENABLED', 'true') === 'true';
 		$heartbeatIntervalMs = max(60000, (int) env('MAIL_AUTO_SYNC_SECONDS', 60) * 1000);
 		$heartbeatUrl = base_url('heartbeat');
 	?>
