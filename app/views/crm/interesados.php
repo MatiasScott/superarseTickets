@@ -529,6 +529,7 @@
 				<div class="modal-body">
 					<input type="hidden" name="_token" value="<?= e(csrf_token()) ?>">
 					<div id="prospectCreateStatus" class="d-none"></div>
+					<div id="prospectMergeCreateMatches" class="mt-2" data-base-url="<?= e(base_url('')) ?>"></div>
 					<div class="row g-3">
 						<div class="col-md-6">
 							<label for="prospectNombres" class="form-label">Nombres</label>
@@ -756,3 +757,4 @@
 </div>
 
 <script src="<?= e(base_url('js/crm-papelera.js')) ?>"></script>
+<script src="<?= e(base_url('js/crm-merge.js')) ?>"></script>

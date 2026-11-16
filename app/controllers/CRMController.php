@@ -575,6 +575,14 @@ class CRMController extends Controller
 				}
 			}
 
+			if ($contactId !== null) {
+				throw new RuntimeException(
+					'Ya existe un contacto con la identificación, correo o celular ingresado. ' .
+						'No se modificó el registro existente. ' .
+						'Revisa el contacto antes de continuar.'
+				);
+			}
+
 			if ($contactId === null) {
 				$emailToStore = $correoPersonal;
 				if ($emailToStore !== '' && !$this->canUseEmailAsPrimaryContact($db, $emailToStore, null)) {
@@ -1282,6 +1290,49 @@ class CRMController extends Controller
 			return [];
 		}
 	}
+
+	
+    /** Busca coincidencias sin modificar datos. */
+    public function prospectDuplicates(): void
+    {
+        Auth::requireAuth(); header('Content-Type: application/json; charset=utf-8');
+        try {
+            require_once __DIR__ . '/../services/ProspectMergeService.php';
+            $db=Database::getInstance()->connection();
+            $email=$this->normalizeEmailValue((string)($_GET['correo'] ?? ''));
+            $phone=$this->normalizeProspectPhoneValue((string)($_GET['celular'] ?? ''));
+            $identity=$this->normalizeIdentityValue((string)($_GET['identificacion'] ?? ''));
+            $svc=new ProspectMergeService($db);
+            echo json_encode(['success'=>true,'items'=>$svc->find($email,$phone,$identity,max(0,(int)($_GET['exclude'] ?? 0)))],JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) { http_response_code(400); echo json_encode(['success'=>false,'error'=>'No se pudo consultar duplicados.']); }
+        exit;
+    }
+
+    public function compareProspects(): void
+    {
+        Auth::requireAuth(); header('Content-Type: application/json; charset=utf-8');
+        try {
+            require_once __DIR__ . '/../services/ProspectMergeService.php';
+            $svc=new ProspectMergeService(Database::getInstance()->connection());
+            echo json_encode(['success'=>true,'data'=>$svc->compare((int)($_GET['principal'] ?? 0),(int)($_GET['secundario'] ?? 0))],JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) { http_response_code(400); echo json_encode(['success'=>false,'error'=>$e->getMessage()],JSON_UNESCAPED_UNICODE); }
+        exit;
+    }
+
+    public function mergeProspects(): void
+    {
+        Auth::requireAuth(); header('Content-Type: application/json; charset=utf-8');
+        if (!verify_csrf($_POST['_token'] ?? null)) { http_response_code(403); echo json_encode(['success'=>false,'error'=>'CSRF inválido']); exit; }
+        try {
+            require_once __DIR__ . '/../services/ProspectMergeService.php';
+            $choices=json_decode((string)($_POST['choices'] ?? '{}'),true);
+            if (!is_array($choices)) throw new RuntimeException('Selección inválida.');
+            $svc=new ProspectMergeService(Database::getInstance()->connection());
+            $result=$svc->merge((int)($_POST['principal'] ?? 0),(int)($_POST['secundario'] ?? 0),$choices,$this->currentUserId());
+            echo json_encode(['success'=>true,'data'=>$result],JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) { http_response_code(409); echo json_encode(['success'=>false,'error'=>$e->getMessage()],JSON_UNESCAPED_UNICODE); }
+        exit;
+    }
 
 	private function currentUserId(): int
 	{

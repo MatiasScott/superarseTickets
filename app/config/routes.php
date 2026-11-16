@@ -490,6 +490,9 @@ return static function (Router $router): void {
 		'CRMController@prospectTrash'
 	);
 	$router->post('/crm/prospectos', 'CRMController@createProspect');
+	$router->get('/crm/prospectos/duplicados', 'CRMController@prospectDuplicates');
+	$router->get('/crm/prospectos/comparar', 'CRMController@compareProspects');
+	$router->post('/crm/prospectos/combinar', 'CRMController@mergeProspects');
 	$router->get('/crm/estudiantes', 'CRMController@estudiantes');
 	$router->get('/crm/getStudentDetail', 'CRMController@getStudentDetail');
 	$router->get('/crm/getStudentContactDetail', 'CRMController@getStudentContactDetail');
