@@ -133,6 +133,7 @@ class Router
 				'deleteStudentNote', 'softDeleteProspect', 'deleteModalidad' => 'eliminar',
 				'dashboard', 'interesados', 'estudiantes', 'estudiantesFilter',
 				'interesadosStudentsFilter', 'interesadosProspectsFilter',
+				'prospectTrash',
 				'getStudentContactDetail', 'getProspectDetail', 'checkProspectPhone',
 				'getStudentDetail', 'getStudentTasks', 'getStudentNotes',
 				'noteAttachment', 'getCRMPipelineHistory', 'getStudentTicketsByEmail',
@@ -167,8 +168,13 @@ class Router
 		} elseif ($controller === 'CCIController') {
 			// Operaciones técnicas: no basta con tener permiso de lectura CCI.
 			$technical = [
-				'configuracion', 'saveConfiguracion', 'automatizaciones',
-				'testAutomatizacion', 'sla', 'auditoria', 'mapCciAdvisorUser',
+				'configuracion',
+				'saveConfiguracion',
+				'automatizaciones',
+				'testAutomatizacion',
+				'sla',
+				'auditoria',
+				'mapCciAdvisorUser',
 			];
 			if (in_array($action, $technical, true)) {
 				$module = 'cci';

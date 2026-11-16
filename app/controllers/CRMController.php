@@ -1673,7 +1673,7 @@ class CRMController extends Controller
 			updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
-			$db->exec("CREATE TABLE IF NOT EXISTS soft_delete_audit (
+		$db->exec("CREATE TABLE IF NOT EXISTS soft_delete_audit (
 				id INT AUTO_INCREMENT PRIMARY KEY,
 				entity_type VARCHAR(50) NOT NULL,
 				entity_id INT NOT NULL,
@@ -1723,7 +1723,7 @@ class CRMController extends Controller
 		// FASE 3: Solo mostrar estas 5 etapas en el CRM (en orden específico)
 		$allowedStages = ['1 Etapa interesado', '2 Etapa seguimiento', 'Siguiente periodo (no legaliza matricula)', 'Descalificado', 'Inscritos'];
 		$placeholders = implode(',', array_fill(0, count($allowedStages), '?'));
-		
+
 		$sql = "SELECT {$columns}
 			FROM pipeline_estados
 			WHERE estado = 'activo'
@@ -1737,7 +1737,7 @@ class CRMController extends Controller
 					WHEN 'Inscritos' THEN 5
 					ELSE 6
 				END ASC";
-		
+
 		$stmt = $db->prepare($sql);
 		$stmt->execute($allowedStages);
 		return $stmt ? ($stmt->fetchAll() ?: []) : [];
@@ -1750,7 +1750,7 @@ class CRMController extends Controller
 			FROM pipeline_estados
 			WHERE estado = 'activo'
 			ORDER BY orden ASC, nombre ASC";
-		
+
 		$stmt = $db->prepare($sql);
 		$stmt->execute();
 		return $stmt ? ($stmt->fetchAll() ?: []) : [];
@@ -1762,10 +1762,27 @@ class CRMController extends Controller
 		header('Content-Type: application/json; charset=utf-8');
 
 		$accentMap = [
-			'á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u', 'ü' => 'u', 'ñ' => 'n',
-			'à' => 'a', 'è' => 'e', 'ì' => 'i', 'ò' => 'o', 'ù' => 'u',
-			'â' => 'a', 'ê' => 'e', 'î' => 'i', 'ô' => 'o', 'û' => 'u',
-			'ä' => 'a', 'ë' => 'e', 'ï' => 'i', 'ö' => 'o',
+			'á' => 'a',
+			'é' => 'e',
+			'í' => 'i',
+			'ó' => 'o',
+			'ú' => 'u',
+			'ü' => 'u',
+			'ñ' => 'n',
+			'à' => 'a',
+			'è' => 'e',
+			'ì' => 'i',
+			'ò' => 'o',
+			'ù' => 'u',
+			'â' => 'a',
+			'ê' => 'e',
+			'î' => 'i',
+			'ô' => 'o',
+			'û' => 'u',
+			'ä' => 'a',
+			'ë' => 'e',
+			'ï' => 'i',
+			'ö' => 'o',
 			'ç' => 'c',
 		];
 		// Normalizar igual que en SQL: minusculas, sin acentos y sin enie.
@@ -1918,6 +1935,7 @@ class CRMController extends Controller
 				i.origen,
 				i.convertido,
 				i.carrera,
+				COALESCE(i.asesor, '') AS asesor,
 				i.creado_por,
 				i.modalidad,
 				i.provincia,
@@ -2073,6 +2091,7 @@ class CRMController extends Controller
 				i.origen,
 				i.convertido,
 				i.carrera,
+				COALESCE(i.asesor, '') AS asesor,
 				i.creado_por,
 				i.modalidad,
 				i.provincia,
@@ -2127,7 +2146,11 @@ class CRMController extends Controller
 	private function resolveInitialProspectStateId(PDO $db): ?int
 	{
 		$preferred = [
+			'1 etapa interesado',
+			'1. etapa interesado',
+			'1 etapa interesados',
 			'1. etapa interesados',
+			'etapa interesado',
 			'etapa interesados',
 			'interesado',
 			'interesados',
@@ -3466,7 +3489,7 @@ class CRMController extends Controller
 			}
 			$student['pipeline_estado_id'] = $pipelineEstadoId;
 			$student['pipeline_estado_ids'] = array_values(array_unique(array_map('intval', $pipelineEstadoIds)));
-			
+
 			// Para contactos (prospectos): solo 5 etapas. Para estudiantes: todas las etapas
 			if ($entityType === 'contact') {
 				$pipelineEstados = $this->fetchVisiblePipelineStates($db, 'id, nombre');
@@ -4941,10 +4964,12 @@ class CRMController extends Controller
 					$this->upsertContactEmail($db, $contactId, $institutionalEmail, 'institucional');
 				}
 
-				foreach ([
-					$this->resolveFirstValue($row, ['celular', 'telefono_movil', 'movil']),
-					$this->resolveFirstValue($row, ['telefono', 'telefono_convencional', 'phone']),
-				] as $phone) {
+				foreach (
+					[
+						$this->resolveFirstValue($row, ['celular', 'telefono_movil', 'movil']),
+						$this->resolveFirstValue($row, ['telefono', 'telefono_convencional', 'phone']),
+					] as $phone
+				) {
 					$normalizedPhone = $this->normalizePhoneValue($phone);
 					if ($normalizedPhone !== '') {
 						$this->addContactChannel($db, $contactId, 'phone', $normalizedPhone, 'superarse');
@@ -5746,6 +5771,122 @@ class CRMController extends Controller
 	}
 
 	/**
+	 * Listar clientes potenciales eliminados lógicamente.
+	 * GET /crm/prospectos/papelera
+	 */
+	public function prospectTrash(): void
+	{
+		Auth::requireAuth();
+		header('Content-Type: application/json; charset=utf-8');
+
+		if (
+			!Auth::canPerformSensitive('crm', 'ver')
+		) {
+			http_response_code(403);
+			echo json_encode([
+				'success' => false,
+				'error' => 'No tienes permisos para consultar la papelera.'
+			], JSON_UNESCAPED_UNICODE);
+			exit;
+		}
+
+		try {
+			$db = Database::getInstance()->connection();
+
+			$search = trim((string) ($_GET['q'] ?? ''));
+			$page = max(1, (int) ($_GET['page'] ?? 1));
+			$perPage = 25;
+			$offset = ($page - 1) * $perPage;
+
+			$where = "
+            WHERE i.deleted_at IS NOT NULL
+              AND COALESCE(i.convertido, 0) = 0
+        ";
+
+			$params = [];
+
+			if ($search !== '') {
+				$where .= "
+                AND (
+                    CONCAT_WS(' ', c.nombre, c.apellido)
+                        LIKE :search_name
+                    OR c.email LIKE :search_email
+                    OR c.cedula LIKE :search_cedula
+                )
+            ";
+
+				$like = '%' . $search . '%';
+
+				$params = [
+					':search_name' => $like,
+					':search_email' => $like,
+					':search_cedula' => $like,
+				];
+			}
+
+			$from = "
+            FROM interesados i
+            INNER JOIN contactos c
+                ON c.id = i.contacto_id
+            LEFT JOIN pipeline_estados pe
+                ON pe.id = i.estado_id
+        ";
+
+			$countStmt = $db->prepare("
+            SELECT COUNT(*)
+            {$from}
+            {$where}
+        ");
+
+			$countStmt->execute($params);
+			$total = (int) $countStmt->fetchColumn();
+
+			$sql = "
+            SELECT
+                i.id,
+                i.contacto_id,
+                c.nombre,
+                c.apellido,
+                c.email,
+                c.cedula,
+                i.carrera,
+                i.asesor,
+                i.creado_por,
+                i.deleted_at,
+                COALESCE(pe.nombre, 'Sin etapa')
+                    AS etapa_anterior
+            {$from}
+            {$where}
+            ORDER BY i.deleted_at DESC, i.id DESC
+            LIMIT {$perPage} OFFSET {$offset}
+        ";
+
+			$stmt = $db->prepare($sql);
+			$stmt->execute($params);
+
+			echo json_encode([
+				'success' => true,
+				'prospectos' => $stmt->fetchAll(PDO::FETCH_ASSOC),
+				'total' => $total,
+				'page' => $page,
+				'pages' => max(1, (int) ceil($total / $perPage)),
+				'per_page' => $perPage,
+			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		} catch (Throwable $e) {
+			error_log('[CRM PAPELERA] ' . $e->getMessage());
+
+			http_response_code(500);
+
+			echo json_encode([
+				'success' => false,
+				'error' => 'No se pudo consultar la papelera.'
+			], JSON_UNESCAPED_UNICODE);
+		}
+
+		exit;
+	}
+
+	/**
 	 * Soft-delete un cliente potencial (prospect)
 	 * Marcacomo deleted_at = NOW() sin eliminar datos
 	 */
@@ -5753,6 +5894,15 @@ class CRMController extends Controller
 	{
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
+
+		if (!Auth::canPerformSensitive('crm', 'eliminar')) {
+			http_response_code(403);
+			echo json_encode([
+				'success' => false,
+				'error' => 'No tienes permisos para eliminar clientes potenciales.'
+			], JSON_UNESCAPED_UNICODE);
+			exit;
+		}
 
 		$contactoId = max(0, (int) ($_POST['contacto_id'] ?? 0));
 		$razon = trim((string) ($_POST['razon'] ?? ''));
@@ -5822,6 +5972,15 @@ class CRMController extends Controller
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
 
+		if (!Auth::canPerformSensitive('crm', 'editar')) {
+			http_response_code(403);
+			echo json_encode([
+				'success' => false,
+				'error' => 'No tienes permisos para restaurar clientes potenciales.'
+			], JSON_UNESCAPED_UNICODE);
+			exit;
+		}
+
 		$contactoId = max(0, (int) ($_POST['contacto_id'] ?? 0));
 
 		if ($contactoId <= 0) {
@@ -5835,13 +5994,81 @@ class CRMController extends Controller
 			$db = Database::getInstance()->connection();
 			$db->beginTransaction();
 
-			// Restaurar en contactos
-			$stmt = $db->prepare('UPDATE contactos SET deleted_at = NULL, updated_at = NOW() WHERE id = :id LIMIT 1');
-			$stmt->execute([':id' => $contactoId]);
+			// Verificar que el contacto corresponde a un prospecto eliminado.
+			$checkStmt = $db->prepare("
+    SELECT
+        i.id,
+        i.contacto_id,
+        i.convertido,
+        i.deleted_at AS interesado_deleted_at,
+        c.deleted_at AS contacto_deleted_at
+    FROM interesados i
+    INNER JOIN contactos c ON c.id = i.contacto_id
+    WHERE i.contacto_id = :contacto_id
+    LIMIT 1
+    FOR UPDATE
+");
 
-			// Restaurar en interesados
-			$stmt = $db->prepare('UPDATE interesados SET deleted_at = NULL, updated_at = NOW() WHERE contacto_id = :contacto_id');
-			$stmt->execute([':contacto_id' => $contactoId]);
+			$checkStmt->execute([
+				':contacto_id' => $contactoId,
+			]);
+
+			$prospecto = $checkStmt->fetch(PDO::FETCH_ASSOC);
+
+			if (!$prospecto) {
+				throw new RuntimeException(
+					'El cliente potencial no existe.'
+				);
+			}
+
+			if ((int) ($prospecto['convertido'] ?? 0) !== 0) {
+				throw new RuntimeException(
+					'No se puede restaurar un cliente potencial convertido.'
+				);
+			}
+
+			if ($prospecto['interesado_deleted_at'] === null) {
+				throw new RuntimeException(
+					'Este cliente potencial no se encuentra en la papelera.'
+				);
+			}
+
+			// Obtener la etapa inicial del CRM.
+			$initialStageId = $this->resolveInitialProspectStateId($db);
+
+			if (!$initialStageId) {
+				throw new RuntimeException(
+					'No se encontró una etapa inicial activa en el CRM.'
+				);
+			}
+
+			// Restaurar contacto.
+			$restoreContact = $db->prepare("
+				UPDATE contactos
+				SET deleted_at = NULL,
+					updated_at = NOW()
+				WHERE id = :contacto_id
+			");
+
+			$restoreContact->execute([
+				':contacto_id' => $contactoId,
+			]);
+
+			// Restaurar prospecto y devolverlo a la etapa inicial.
+			$restoreProspect = $db->prepare("
+				UPDATE interesados
+				SET deleted_at = NULL,
+					estado = 'activo',
+					estado_id = :estado_id,
+					convertido = 0,
+					updated_at = NOW()
+				WHERE contacto_id = :contacto_id
+			");
+
+			$restoreProspect->execute([
+				':estado_id' => $initialStageId,
+				':contacto_id' => $contactoId,
+			]);
 
 			// Actualizar tabla de auditoría
 			$auditStmt = $db->prepare('UPDATE soft_delete_audit SET restored_at = NOW(), restored_by = :restored_by
@@ -5906,7 +6133,9 @@ class CRMController extends Controller
 		}
 
 		// Convertir contactIds a enteros
-		$contactIds = array_map(function($id) { return max(0, (int)$id); }, $contactIds);
+		$contactIds = array_map(function ($id) {
+			return max(0, (int)$id);
+		}, $contactIds);
 		$contactIds = array_filter($contactIds);
 
 		if (count($contactIds) === 0) {
@@ -5922,34 +6151,50 @@ class CRMController extends Controller
 
 			$placeholders = implode(',', array_fill(0, count($contactIds), '?'));
 
-			// Obtener ID de etapa
-			$stageStmt = $db->prepare('SELECT id FROM etapas WHERE nombre = ? LIMIT 1');
+			// Obtener una etapa existente y activa del pipeline.
+			$stageStmt = $db->prepare("
+    SELECT id, nombre
+    FROM pipeline_estados
+    WHERE nombre = ?
+      AND estado = 'activo'
+    LIMIT 1
+");
+
 			$stageStmt->execute([$newStage]);
 			$stageRow = $stageStmt->fetch(PDO::FETCH_ASSOC);
 
 			if (!$stageRow) {
-				// Si no existe, crear la etapa
-				$createStageStmt = $db->prepare('INSERT INTO etapas (nombre, descripcion, created_at) VALUES (?, ?, NOW())');
-				$createStageStmt->execute([$newStage, 'Etapa creada automáticamente']);
-				$stageId = (int)$db->lastInsertId();
-			} else {
-				$stageId = (int)$stageRow['id'];
+				throw new RuntimeException(
+					'La etapa seleccionada no existe o está inactiva.'
+				);
 			}
 
-			// Si se proporciona new_asesor, actualizar también asesor
-			$newAsesor = trim($requestData['new_asesor'] ?? '');
-			if (!empty($newAsesor)) {
-				$updateAsesorStmt = $db->prepare("UPDATE interesados SET asesor = ? WHERE contacto_id IN ($placeholders) AND deleted_at IS NULL");
-				$params = array_merge([$newAsesor], $contactIds);
-				$updateAsesorStmt->execute($params);
+			$stageId = (int) $stageRow['id'];
+
+			// Actualizar asesor si el usuario seleccionó uno.
+			$newAsesor = trim((string) ($input['new_asesor'] ?? ''));
+
+			$updatedAsesores = 0;
+
+			if ($newAsesor !== '') {
+				$updateAsesorStmt = $db->prepare("
+					UPDATE interesados
+					SET asesor = ?,
+						updated_at = NOW()
+					WHERE contacto_id IN ($placeholders)
+					AND deleted_at IS NULL
+					AND estado = 'activo'
+				");
+
+				$updateAsesorStmt->execute(
+					array_merge([$newAsesor], array_values($contactIds))
+				);
+				$updatedAsesores = $updateAsesorStmt->rowCount();
+
 				$asesorDisplay = $newAsesor;
 			} else {
-				// Obtener asesor del primer prospecto para mostrar en respuesta
-				$firstContactId = reset($contactIds);
-				$asesorStmt = $db->prepare('SELECT DISTINCT i.asesor FROM interesados i WHERE i.contacto_id = ? AND i.asesor IS NOT NULL LIMIT 1');
-				$asesorStmt->execute([$firstContactId]);
-				$asesorRow = $asesorStmt->fetch(PDO::FETCH_ASSOC);
-				$asesorDisplay = $asesorRow['asesor'] ?? 'N/A';
+				// Si no selecciona asesor, conservar los actuales.
+				$asesorDisplay = 'Sin cambios';
 			}
 
 			// Actualizar etapas para cada prospect
@@ -5980,6 +6225,7 @@ class CRMController extends Controller
 				'updated_count' => $updatedCount,
 				'stage' => $newStage,
 				'asesor' => $asesorDisplay,
+				'updated_asesores' => $updatedAsesores,
 			]);
 		} catch (Throwable $e) {
 			if (isset($db) && $db instanceof PDO && $db->inTransaction()) {
@@ -6113,5 +6359,4 @@ class CRMController extends Controller
 		}
 		exit;
 	}
-
 }

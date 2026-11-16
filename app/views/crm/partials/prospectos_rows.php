@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Filas de la tabla de clientes potenciales CRM.
  * Variables esperadas: $prospectosLocales (array de prospectos).
@@ -43,8 +44,7 @@ if (!isset($prospectosLocales) || !is_array($prospectosLocales)) {
 		data-prospect-created-by="<?= e($createdByNormalized) ?>"
 		data-prospect-date="<?= e($createdDate) ?>"
 		data-prospect-datetime="<?= e((string) ($prospecto['created_at'] ?? '')) ?>"
-		data-prospect-contact-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
-	>
+		data-prospect-contact-id="<?= e($prospecto['contacto_id'] ?? '') ?>">
 		<td>
 			<div class="form-check">
 				<input class="form-check-input prospect-bulk-checkbox" type="checkbox" data-contact-id="<?= e($prospecto['contacto_id'] ?? '') ?>">
@@ -57,8 +57,7 @@ if (!isset($prospectosLocales) || !is_array($prospectosLocales)) {
 				class="btn btn-link p-0 text-decoration-none prospect-edit-link"
 				data-contact-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
 				data-bs-toggle="modal"
-				data-bs-target="#prospectEditModal"
-			>
+				data-bs-target="#prospectEditModal">
 				<?= e($fullName) ?>
 			</button>
 		</td>
@@ -77,30 +76,28 @@ if (!isset($prospectosLocales) || !is_array($prospectosLocales)) {
 				<?= e($rawPhone !== '' ? $rawPhone : '-') ?>
 			<?php endif; ?>
 		</td>
-		<td><?= e($prospecto['origen'] ?? '-') ?></td>
+		<td><?= e(trim((string) ($prospecto['asesor'] ?? '')) ?: '-') ?></td>
 		<td><?= e($prospecto['creado_por'] ?? '-') ?></td>
 		<td class="text-end">
-				<div class="btn-group btn-group-sm" role="group">
-					<button
-						type="button"
-						class="btn btn-outline-primary student-pipeline-action"
-						data-student-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
-						data-entity-type="contact"
-						data-bs-toggle="modal"
-						data-bs-target="#studentPipelineModal"
-						title="Editar etapa"
-					>
-						<i class="bi bi-pencil-square"></i>
-					</button>
-					<button
-						type="button"
-						class="btn btn-outline-danger prospect-delete-inline"
-						data-contact-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
-						title="Eliminar prospect"
-					>
-						<i class="bi bi-trash"></i>
-					</button>
-				</div>
+			<div class="btn-group btn-group-sm" role="group">
+				<button
+					type="button"
+					class="btn btn-outline-primary student-pipeline-action"
+					data-student-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
+					data-entity-type="contact"
+					data-bs-toggle="modal"
+					data-bs-target="#studentPipelineModal"
+					title="Editar etapa">
+					<i class="bi bi-pencil-square"></i>
+				</button>
+				<button
+					type="button"
+					class="btn btn-outline-danger prospect-delete-inline"
+					data-contact-id="<?= e($prospecto['contacto_id'] ?? '') ?>"
+					title="Eliminar prospect">
+					<i class="bi bi-trash"></i>
+				</button>
+			</div>
 		</td>
 	</tr>
 <?php endforeach; ?>
