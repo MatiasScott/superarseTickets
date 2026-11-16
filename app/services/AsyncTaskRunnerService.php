@@ -34,8 +34,12 @@ class AsyncTaskRunnerService
         $service = new MailSyncService();
         $result = $service->runFastSync($alias !== '' ? $alias : null);
 
+        // No considerar exitosa una sincronizacion con errores por buzon.
+        // Se conserva el detalle original para diagnostico y reintentos controlados.
+        $errors = array_values(array_filter((array) ($result['sync_errors'] ?? []), 'is_string'));
         return [
-            'ok' => true,
+            'ok' => $errors === [],
+            'error' => $errors === [] ? null : 'Sincronizacion de correo con ' . count($errors) . ' error(es).',
             'result' => $result,
         ];
     }

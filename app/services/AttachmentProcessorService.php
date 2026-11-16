@@ -17,6 +17,134 @@ class AttachmentProcessorService
         $this->ensureTicketAttachmentsTable();
     }
 
+    /**
+     * Recibe contenido ya descargado por n8n. Solo permite trabajos existentes
+     * pendientes/error, vinculados al mensaje Graph y ticket de Atlas.
+     * El SHA-256 y la identidad del trabajo son obligatorios.
+     */
+    public function ingestFromN8n(array $payload): array
+    {
+        $alias = trim((string) ($payload['account_alias'] ?? ''));
+        $graphId = trim((string) ($payload['graph_message_id'] ?? ''));
+        $attachmentId = trim((string) ($payload['graph_attachment_id'] ?? ''));
+        $uid = trim((string) ($payload['uid'] ?? ''));
+        $sha = strtolower(trim((string) ($payload['sha256'] ?? '')));
+        $encoded = $payload['content_base64'] ?? null;
+        if ($alias === '' || strlen($alias) > 100 || $graphId === '' || strlen($graphId) > 255 ||
+            $attachmentId === '' || strlen($attachmentId) > 255 ||
+            !is_string($encoded) || !preg_match('/^[a-f0-9]{64}$/', $sha) ||
+            !hash_equals(rtrim(strtr(base64_encode($graphId), '+/', '-_'), '='), $uid)) {
+            throw new InvalidArgumentException('Identidad o SHA-256 invalido.');
+        }
+        $validAccount = false;
+        foreach ($this->mailbox->getAvailableAccounts() as $account) {
+            if (hash_equals((string) ($account['alias'] ?? ''), $alias)) { $validAccount = true; break; }
+        }
+        if (!$validAccount) { throw new InvalidArgumentException('Buzon no habilitado.'); }
+        // Máximo 5 MiB de contenido binario para esta primera versión.
+        if (strlen($encoded) > 6991000) { throw new InvalidArgumentException('Adjunto demasiado grande.'); }
+        $content = base64_decode($encoded, true);
+        if (!is_string($content) || $content === '' || strlen($content) > 5242880 ||
+            !hash_equals($sha, hash('sha256', $content))) {
+            throw new InvalidArgumentException('Contenido o SHA-256 no coincide.');
+        }
+        $fullPath = null;
+        $commitAttempted = false;
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT q.*, m.cuenta_alias AS message_alias, m.graph_message_id AS message_graph_id,
+                m.ticket_id AS message_ticket_id FROM cola_adjuntos q
+                INNER JOIN ticket_mensajes m ON m.id = q.ticket_mensaje_id
+                WHERE q.account_alias = :alias AND q.email_uid = :uid
+                  AND q.graph_attachment_id = :attachment_id AND m.graph_message_id = :graph_id
+                LIMIT 1 FOR UPDATE');
+            $stmt->execute(['alias' => $alias, 'uid' => $uid, 'attachment_id' => $attachmentId, 'graph_id' => $graphId]);
+            $job = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$job || (int) $job['ticket_id'] !== (int) $job['message_ticket_id'] ||
+                strcasecmp((string) $job['message_alias'], $alias) !== 0) {
+                throw new InvalidArgumentException('Adjunto no registrado para este mensaje y buzon.');
+            }
+            $queueId = (int) $job['id'];
+            $ticketId = (int) $job['ticket_id'];
+            $messageId = (int) $job['ticket_mensaje_id'];
+            $existing = $this->db->prepare('SELECT * FROM ticket_mensaje_adjuntos WHERE cola_adjunto_id = :id FOR UPDATE');
+            $existing->execute(['id' => $queueId]);
+            $saved = $existing->fetch(PDO::FETCH_ASSOC);
+            if ($saved) {
+                if ((int) $saved['ticket_id'] !== $ticketId || (int) $saved['ticket_mensaje_id'] !== $messageId ||
+                    !hash_equals((string) $saved['sha256'], $sha) ||
+                    !is_file((string) $saved['storage_path']) ||
+                    !hash_equals($sha, (string) hash_file('sha256', (string) $saved['storage_path']))) {
+                    throw new RuntimeException('INTEGRIDAD: adjunto previo no coincide con la entrega.');
+                }
+                // Recuperar trabajos antiguos pendientes/error cuando el archivo
+                // ya existe y su contenido coincide. No alterar reservas activas.
+                if (in_array((string) $job['estado'], ['pendiente', 'error'], true)) {
+                    $mark = $this->db->prepare('UPDATE cola_adjuntos SET estado = "procesado", processed_at = NOW(),
+                        error = NULL, claim_token = NULL, claimed_at = NULL WHERE id = :id AND estado IN ("pendiente", "error")');
+                    $mark->execute(['id' => $queueId]);
+                }
+                $this->db->commit();
+                return ['ok' => true, 'duplicate' => true, 'ticket_id' => $ticketId, 'ticket_mensaje_id' => $messageId, 'attachment_id' => (int) $saved['id']];
+            }
+            if (!in_array((string) $job['estado'], ['pendiente', 'error'], true)) {
+                throw new RuntimeException('Adjunto reservado por otro worker o en estado no admitido.');
+            }
+            if ((int) $job['peso'] > 0 && (int) $job['peso'] !== strlen($content)) {
+                throw new InvalidArgumentException('Tamano del adjunto no coincide con la cabecera Graph.');
+            }
+            $name = trim((string) ($job['nombre'] ?? 'adjunto.bin'));
+            $mime = trim((string) ($job['mime_type'] ?? 'application/octet-stream'));
+            $ext = strtolower((string) pathinfo($name, PATHINFO_EXTENSION));
+            // No usar rutas, nombres ni metadatos enviados por n8n para almacenar.
+            $ext = preg_match('/^[a-z0-9]{1,12}$/', $ext) ? $ext : 'bin';
+            $targetDir = ROOT_PATH . '/storage/tickets/' . date('Y') . '/' . date('m') . '/' . $ticketId;
+            if (!is_dir($targetDir) && !@mkdir($targetDir, 0775, true) && !is_dir($targetDir)) {
+                throw new RuntimeException('No se pudo crear directorio de adjuntos.');
+            }
+            $storageName = bin2hex(random_bytes(16)) . '.' . $ext;
+            $fullPath = $targetDir . '/' . $storageName;
+            if (@file_put_contents($fullPath, $content, LOCK_EX) !== strlen($content) ||
+                !hash_equals($sha, (string) @hash_file('sha256', $fullPath))) {
+                throw new RuntimeException('Fallo verificacion de escritura del archivo.');
+            }
+            $insert = $this->db->prepare('INSERT INTO ticket_mensaje_adjuntos
+                (ticket_mensaje_id, ticket_id, cola_adjunto_id, filename_original, filename_storage,
+                 mime, size_bytes, sha256, storage_path, is_inline, content_id, created_at)
+                VALUES (:message_id, :ticket_id, :queue_id, :name, :storage_name,
+                 :mime, :size, :sha, :path, :inline, :cid, NOW())');
+            $insert->execute([
+                'message_id' => $messageId, 'ticket_id' => $ticketId, 'queue_id' => $queueId,
+                'name' => substr($name, 0, 255), 'storage_name' => $storageName,
+                'mime' => substr($mime, 0, 120), 'size' => strlen($content),
+                'sha' => $sha, 'path' => $fullPath, 'inline' => (int) $job['es_inline'],
+                'cid' => $job['content_id'] ?: null,
+            ]);
+            $savedId = (int) $this->db->lastInsertId();
+            $cid = trim((string) ($job['content_id'] ?? ''), '<> ');
+            if (!empty($job['es_inline']) && $cid !== '') {
+                $this->resolveInlineCidInMessage($messageId, $ticketId, $cid, $savedId);
+            }
+            $update = $this->db->prepare('UPDATE cola_adjuntos SET estado = "procesado", processed_at = NOW(),
+                error = NULL, claim_token = NULL, claimed_at = NULL WHERE id = :id AND estado IN ("pendiente", "error")');
+            $update->execute(['id' => $queueId]);
+            if ($update->rowCount() !== 1) { throw new RuntimeException('No se pudo confirmar la cola.'); }
+            $commitAttempted = true;
+            $this->db->commit();
+            return ['ok' => true, 'duplicate' => false, 'ticket_id' => $ticketId,
+                'ticket_mensaje_id' => $messageId, 'attachment_id' => $savedId];
+        } catch (Throwable $e) {
+            $rolledBack = false;
+            try { if ($this->db->inTransaction()) { $this->db->rollBack(); $rolledBack = true; } }
+            catch (Throwable $rollbackError) { error_log('n8n attachment rollback: ' . $rollbackError->getMessage()); }
+            if (!$commitAttempted && $rolledBack && is_string($fullPath) && is_file($fullPath)) { @unlink($fullPath); }
+            if ($commitAttempted || !$rolledBack) {
+                error_log('n8n attachment: estado transaccional incierto; conservar archivo para revision manual.');
+            }
+            throw $e;
+        }
+    }
+
     public function processPending(int $limit = 20): array
     {
         $rows = $this->queue->claimPending($limit);

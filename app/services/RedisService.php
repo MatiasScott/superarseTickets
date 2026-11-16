@@ -269,6 +269,81 @@ class RedisService
         return $value;
     }
 
+
+    /**
+     * Reserva atomica sin espera: mueve un elemento de la cola de pendientes
+     * a una lista de procesamiento. NO activar recuperacion automatica aun.
+     * El valor se conserva en su representacion Redis original.
+     */
+    public function reserveToProcessing(string $pendingKey, string $processingKey): mixed
+    {
+        if (!$this->isAvailable()) {
+            return null;
+        }
+        try {
+            $raw = $this->client->rpoplpush(
+                $this->prefixKey($pendingKey),
+                $this->prefixKey($processingKey)
+            );
+            return is_string($raw) ? $this->decodeValue($raw) : null;
+        } catch (Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Elimina exactamente una ocurrencia del elemento reservado.
+     * Para trabajos duplicados se requiere un identificador unico antes
+     * de usar esta primitiva en produccion.
+     */
+    public function acknowledgeProcessing(string $processingKey, mixed $payload): bool
+    {
+        if (!$this->isAvailable()) {
+            return false;
+        }
+        try {
+            return (int) $this->client->lrem(
+                $this->prefixKey($processingKey),
+                1,
+                $this->encodeValue($payload)
+            ) === 1;
+        } catch (Throwable $e) {
+            return false;
+        }
+    }
+
+    /** Reserva un elemento preservando exactamente sus bytes en Redis. */
+    public function reserveRaw(string $pendingKey, string $processingKey): ?string
+    {
+        if (!$this->isAvailable()) {
+            return null;
+        }
+        try {
+            $raw = $this->client->rpoplpush(
+                $this->prefixKey($pendingKey),
+                $this->prefixKey($processingKey)
+            );
+            return is_string($raw) ? $raw : null;
+        } catch (Throwable $e) {
+            return null;
+        }
+    }
+
+    /** Confirma una reserva por su representacion original exacta. */
+    public function acknowledgeRaw(string $processingKey, string $raw): bool
+    {
+        if (!$this->isAvailable()) {
+            return false;
+        }
+        try {
+            return (int) $this->client->lrem(
+                $this->prefixKey($processingKey), 1, $raw
+            ) === 1;
+        } catch (Throwable $e) {
+            return false;
+        }
+    }
+
     public function getClient(): ?Client
     {
         return $this->client;

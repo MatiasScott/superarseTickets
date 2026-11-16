@@ -480,6 +480,97 @@ class CorreoController extends Controller
 		redirect('correo' . ($accountAlias !== '' ? '?account=' . urlencode($accountAlias) : ''));
 	}
 
+	/**
+	 * Ingesta desde n8n. No consulta Graph ni marca mensajes como leidos.
+	 * n8n entrega cabeceras de adjuntos; Atlas las encola en la misma
+	 * transaccion del mensaje. El contenido binario llega por separado.
+	 */
+	public function ingestN8nMessage(array $email): array
+	{
+		$alias = trim((string) ($email['account_alias'] ?? ''));
+		$graphId = trim((string) ($email['graph_message_id'] ?? ''));
+		$uid = trim((string) ($email['uid'] ?? ''));
+		if ($alias === '' || $graphId === '' || $uid === '') {
+			throw new InvalidArgumentException('Cuenta o identidad Graph incompleta.');
+		}
+		// n8n debe entregar las cabeceras Graph completas antes de crear el mensaje.
+		// Nunca recurrir a Graph desde PHP para descubrir adjuntos de esta ingesta.
+		$headers = $email['attachment_headers'] ?? [];
+		if (!is_array($headers) || count($headers) > 100) {
+			throw new InvalidArgumentException('Cabeceras de adjuntos invalidas.');
+		}
+		$needsHeaders = !empty($email['has_attachments']) || !empty($email['has_cid_body'])
+			|| stripos((string) ($email['body_html'] ?? ''), 'cid:') !== false;
+		if ($needsHeaders && $headers === []) {
+			throw new InvalidArgumentException('Se requieren cabeceras Graph de los adjuntos antes de importar.');
+		}
+		$seen = [];
+		foreach ($headers as $header) {
+			if (!is_array($header)) { throw new InvalidArgumentException('Cabecera invalida.'); }
+			$id = trim((string) ($header['id'] ?? ''));
+			if ($id === '' || strlen($id) > 255 || isset($seen[$id])) {
+				throw new InvalidArgumentException('Identificador de adjunto ausente, repetido o demasiado largo.');
+			}
+			$seen[$id] = true;
+			// Los metadatos se almacenan en cola_adjuntos y definen el archivo
+			// que n8n podra entregar posteriormente. No aceptar estructuras
+			// ambiguas ni tipos que PHP convierta silenciosamente a cadenas.
+			foreach (['name', 'mime', 'content_id'] as $field) {
+				if (isset($header[$field]) && !is_string($header[$field])) {
+					throw new InvalidArgumentException('Metadatos del adjunto invalidos.');
+				}
+			}
+			if (isset($header['size']) && (!is_int($header['size']) || $header['size'] < 0)) {
+				throw new InvalidArgumentException('Tamano del adjunto invalido.');
+			}
+			if (isset($header['is_inline']) && !is_bool($header['is_inline'])) {
+				throw new InvalidArgumentException('Indicador inline invalido.');
+			}
+		}
+		// La ruta n8n nunca puede consultar Graph desde PHP, incluso si
+		// se agregan nuevas ramas de procesamiento en el futuro.
+		$email['n8n_ingest'] = true;
+		$email['attachment_headers'] = $headers;
+		$mailbox = new MailboxService();
+		$accounts = $mailbox->getAvailableAccounts();
+		$account = null;
+		foreach ($accounts as $candidate) {
+			if (hash_equals((string) ($candidate['alias'] ?? ''), $alias)) { $account = $candidate; break; }
+		}
+		if ($account === null) { throw new InvalidArgumentException('Buzon no habilitado.'); }
+		$email['account_email'] = (string) $account['email'];
+		if (!MailTicketPolicy::acceptsDate($email, (string) ($email['date'] ?? ''))) {
+			throw new InvalidArgumentException('Correo fuera de la politica de fechas.');
+		}
+		$db = Database::getInstance()->connection();
+		$this->ensureMailSyncTable($db);
+		$this->ensureTicketMensajesThreadColumns($db);
+		$this->ensureTicketMensajesMessageCapacity($db);
+		$this->ensureReplyAttachmentsTable($db);
+		$this->ensureAttachmentQueueTable($db);
+		$ticketCfg = $this->resolveTicketDefaults($db);
+		$lockName = substr('atlas:mail:' . hash('sha256', $alias), 0, 64);
+		$lock = $db->prepare('SELECT GET_LOCK(:name, 0)');
+		$lock->execute(['name' => $lockName]);
+		if ((int) $lock->fetchColumn() !== 1) { throw new RuntimeException('Buzon ocupado; reintentar.'); }
+		try {
+			$result = $this->syncEmailsIntoTickets($db, $mailbox, [$email], $ticketCfg);
+			if ((int) ($result['error_count'] ?? 0) > 0) {
+				throw new RuntimeException('Fallo la ingesta; verificar el registro de errores local.');
+			}
+			$ticketId = $this->findProcessedTicketId($db, $email)
+				?? $this->findExistingIncomingMessageTicketId($db, $email);
+			if ($ticketId === null) { throw new RuntimeException('Ingesta no confirmada.'); }
+			return ['ok' => true, 'ticket_id' => $ticketId,
+				'created' => (int) ($result['created'] ?? 0),
+				'updated' => (int) ($result['updated'] ?? 0),
+				'skipped' => (int) ($result['skipped'] ?? 0)];
+		} finally {
+			try { $db->prepare('SELECT RELEASE_LOCK(:name)')->execute(['name' => $lockName]); }
+			catch (Throwable $e) { error_log('n8n lock release: ' . $e->getMessage()); }
+		}
+	}
+
 	public function syncTicketsAuto(): void
 	{
 		$internalToken = trim((string) ($_POST['_internal_token'] ?? ''));
@@ -1795,6 +1886,9 @@ class CorreoController extends Controller
 		if (!$needsAttachments) {
 			return [];
 		}
+		if (!empty($email['n8n_ingest'])) {
+			throw new RuntimeException('INTEGRIDAD: n8n debe entregar cabeceras Graph; consulta PHP prohibida.');
+		}
 		$loaded = $this->loadIncomingAttachmentHeaders($email);
 		if ($loaded === []) {
 			throw new RuntimeException('INTEGRIDAD: no se pudieron verificar los adjuntos del correo; no se marcara como sincronizado.');
@@ -1814,6 +1908,9 @@ class CorreoController extends Controller
 			: (is_array($email['attachment_headers'] ?? null) ? $email['attachment_headers'] : []);
 		$hasCidInBody = stripos($bodyHtml, 'cid:') !== false;
 		if ($preparedAttachmentHeaders === null && empty($attachmentHeaders) && (!empty($email['has_attachments']) || !empty($email['has_cid_body']) || $hasCidInBody)) {
+			if (!empty($email['n8n_ingest'])) {
+				throw new RuntimeException('INTEGRIDAD: cabeceras n8n ausentes; consulta PHP prohibida.');
+			}
 			$attachmentHeaders = $this->loadIncomingAttachmentHeaders($email);
 		}
 

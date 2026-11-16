@@ -43,6 +43,87 @@ class InternalApiController extends Controller
         die('FUNCIONA');
     }*/
 
+    /** Recepcion de correo sin adjuntos desde n8n, protegida y deshabilitada por defecto. */
+    public function ingestN8nMessage(): void
+    {
+        $this->authorizeInternalToken();
+        if (strtolower(trim((string) env('N8N_INGEST_ENABLED', 'false'))) !== 'true') {
+            $this->jsonResponse(['ok' => false, 'error' => 'N8N ingestion disabled'], 503);
+            return;
+        }
+        if (strtolower((string) ($_SERVER['CONTENT_TYPE'] ?? '')) !== 'application/json' &&
+            !str_starts_with(strtolower((string) ($_SERVER['CONTENT_TYPE'] ?? '')), 'application/json;')) {
+            $this->jsonResponse(['ok' => false, 'error' => 'JSON required'], 415);
+            return;
+        }
+        $raw = file_get_contents('php://input', false, null, 0, 1048577);
+        if (!is_string($raw) || strlen($raw) > 1048576) {
+            $this->jsonResponse(['ok' => false, 'error' => 'Payload too large'], 413);
+            return;
+        }
+        $payload = json_decode($raw, true);
+        if (!is_array($payload)) {
+            $this->jsonResponse(['ok' => false, 'error' => 'Invalid JSON'], 400);
+            return;
+        }
+        $alias = trim((string) ($payload['account_alias'] ?? ''));
+        $graphId = trim((string) ($payload['graph_message_id'] ?? ''));
+        $uid = trim((string) ($payload['uid'] ?? ''));
+        $expectedUid = rtrim(strtr(base64_encode($graphId), '+/', '-_'), '=');
+        if ($alias === '' || strlen($alias) > 100 || $graphId === '' || strlen($graphId) > 255 ||
+            $uid === '' || !hash_equals($expectedUid, $uid) ||
+            !filter_var((string) ($payload['from_email'] ?? ''), FILTER_VALIDATE_EMAIL)) {
+            $this->jsonResponse(['ok' => false, 'error' => 'Invalid message identity'], 422);
+            return;
+        }
+        try {
+            $result = (new CorreoController())->ingestN8nMessage($payload);
+            $this->jsonResponse($result);
+        } catch (InvalidArgumentException $e) {
+            $this->jsonResponse(['ok' => false, 'error' => $e->getMessage()], 422);
+        } catch (Throwable $e) {
+            error_log('n8n ingest: ' . $e->getMessage());
+            $this->jsonResponse(['ok' => false, 'error' => 'Ingestion failed; retry safely'], 503);
+        }
+    }
+
+    /** Carga de un adjunto Graph desde n8n, sin llamadas Graph desde PHP. */
+    public function ingestN8nAttachment(): void
+    {
+        $this->authorizeInternalToken();
+        if (strtolower(trim((string) env('N8N_INGEST_ENABLED', 'false'))) !== 'true' ||
+            strtolower(trim((string) env('N8N_ATTACHMENTS_ENABLED', 'false'))) !== 'true') {
+            $this->jsonResponse(['ok' => false, 'error' => 'N8N attachments disabled'], 503);
+            return;
+        }
+        $type = strtolower((string) ($_SERVER['CONTENT_TYPE'] ?? ''));
+        if (!str_starts_with($type, 'application/json')) {
+            $this->jsonResponse(['ok' => false, 'error' => 'JSON required'], 415);
+            return;
+        }
+        // Límite del transporte JSON. Para archivos grandes usar un endpoint
+        // multipart/streaming separado, no aumentar este límite sin revisar PHP.
+        $raw = file_get_contents('php://input', false, null, 0, 8388609);
+        if (!is_string($raw) || strlen($raw) > 8388608) {
+            $this->jsonResponse(['ok' => false, 'error' => 'Payload too large'], 413);
+            return;
+        }
+        $payload = json_decode($raw, true);
+        if (!is_array($payload)) {
+            $this->jsonResponse(['ok' => false, 'error' => 'Invalid JSON'], 400);
+            return;
+        }
+        try {
+            $result = (new AttachmentProcessorService())->ingestFromN8n($payload);
+            $this->jsonResponse($result);
+        } catch (InvalidArgumentException $e) {
+            $this->jsonResponse(['ok' => false, 'error' => $e->getMessage()], 422);
+        } catch (Throwable $e) {
+            error_log('n8n attachment ingest: ' . $e->getMessage());
+            $this->jsonResponse(['ok' => false, 'error' => 'Attachment ingestion failed; retry safely'], 503);
+        }
+    }
+
     public function syncMails(): void
     {
         $this->enqueueJob(QueueService::MAIL_QUEUE, [
@@ -223,39 +304,102 @@ class InternalApiController extends Controller
             }
 
             while ($handled < $max) {
-                $payload = $this->queue->dequeue($queueName);
+                $reservation = null;
+                $useReservations = $this->useSafeQueueReservations();
+                try {
+                    if ($useReservations) {
+                        $reservation = $this->queue->reserve($queueName);
+                        $payload = $reservation['payload'] ?? null;
+                    } else {
+                        $payload = $this->queue->dequeue($queueName);
+                    }
+                } catch (Throwable $e) {
+                    // No repetir una reserva fallida o malformada en el mismo ciclo.
+                    $processed[] = ['queue' => $queueName, 'job_id' => 0, 'ok' => false,
+                        'error' => 'No se pudo reservar: ' . $e->getMessage()];
+                    $handled++;
+                    break;
+                }
                 if ($payload === null) {
                     break;
                 }
 
                 $jobId = (int) ($payload['job_id'] ?? 0);
-                if ($jobId > 0) {
-                    $this->jobs->markRunning($jobId);
-                    $this->jobs->addDetail($jobId, null, 'Tarea tomada por worker desde cola ' . $queueName);
-                }
-
+                // FASE6E_COMPLETION_GUARD: no convertir en error un trabajo ya completado.
+                $jobMarkedDone = false;
+                // FASE6GC_SAFE_CATCH: rastrear reclamo, ejecucion y transiciones.
+                $jobClaimed = false;
+                $taskCompletedSuccessfully = false;
+                $jobErrorAttempted = false;
                 try {
+                    // FASE6G_ATOMIC_CLAIM: no ejecutar si el reclamo SQL fue rechazado.
+                    if ($jobId <= 0 || !$this->jobs->markRunning($jobId)) {
+                        $processed[] = [
+                            'queue' => $queueName,
+                            'job_id' => $jobId,
+                            'ok' => false,
+                            'error' => 'Trabajo sin job_id valido o reclamo SQL rechazado.',
+                            'requires_manual_review' => true,
+                        ];
+                        $handled++;
+                        // Con reservas, el elemento queda en processing sin confirmar.
+                        // En modo legacy, dequeue ya lo retiro: NO se reencola automaticamente.
+                        continue;
+                    }
+                    $jobClaimed = true;
+                    $this->jobs->addDetail($jobId, null, 'Tarea tomada por worker desde cola ' . $queueName);
                     $result = $runner->run($queueName, $payload);
+                    $taskOk = ($result['ok'] ?? false) === true;
+                    $taskCompletedSuccessfully = $taskOk;
                     if ($jobId > 0) {
-                        $this->jobs->markDone($jobId, $result);
+                        if ($taskOk) {
+                            $this->jobs->markDone($jobId, $result);
+                            $jobMarkedDone = true;
+                        } else {
+                            $jobErrorAttempted = true;
+                            $this->jobs->markError($jobId, (string) ($result['error'] ?? 'La tarea devolvio ok=false.'));
+                        }
                     }
 
+                    $ackOk = true;
+                    if ($taskOk && $reservation !== null) {
+                        $ackOk = $this->queue->acknowledge(
+                            $queueName,
+                            $reservation['raw'],
+                            $jobId,
+                            is_string($reservation['payload']['reservation_id'] ?? null)
+                                ? $reservation['payload']['reservation_id']
+                                : null
+                        );
+                    }
                     $processed[] = [
                         'queue' => $queueName,
                         'job_id' => $jobId,
-                        'ok' => true,
+                        'ok' => $taskOk && $ackOk,
                         'result' => $result,
+                        'acknowledged' => $reservation === null ? null : ($taskOk && $ackOk),
+                        'requires_manual_review' => $reservation !== null && (!$taskOk || !$ackOk),
                     ];
                 } catch (Throwable $e) {
-                    if ($jobId > 0) {
-                        $this->jobs->markError($jobId, $e->getMessage());
+                    $errorMessage = $e->getMessage();
+                    // Nunca cambiar a error un job no reclamado, completado o con efectos exitosos.
+                    // Tampoco repetir una transicion markError que ya fallo.
+                    if ($jobClaimed && !$jobMarkedDone && !$taskCompletedSuccessfully && !$jobErrorAttempted) {
+                        try {
+                            $jobErrorAttempted = true;
+                            $this->jobs->markError($jobId, $errorMessage);
+                        } catch (Throwable $statusError) {
+                            // Una segunda excepcion no debe escapar del worker.
+                            $errorMessage .= ' | No se pudo registrar estado error: ' . $statusError->getMessage();
+                        }
                     }
 
                     $processed[] = [
                         'queue' => $queueName,
                         'job_id' => $jobId,
                         'ok' => false,
-                        'error' => $e->getMessage(),
+                        'error' => $errorMessage,
+                        'requires_manual_review' => true,
                     ];
                 }
 
@@ -263,11 +407,27 @@ class InternalApiController extends Controller
             }
         }
 
+        // Metadatos aditivos: permiten que n8n detecte errores internos
+        // aunque la solicitud HTTP del worker haya terminado con 200.
+        $failedCount = count(array_filter(
+            $processed,
+            static fn (array $item): bool => ($item['ok'] ?? false) !== true
+        ));
+
         $this->jsonResponse([
-            'ok' => true,
+            'ok' => true, // Compatibilidad con consumidores existentes.
             'processed_count' => $handled,
+            'failed_count' => $failedCount,
+            'all_succeeded' => $failedCount === 0,
             'items' => $processed,
         ]);
+    }
+
+    /** Solo activar en desarrollo tras verificar Redis y los workers. */
+    private function useSafeQueueReservations(): bool
+    {
+        $value = strtolower(trim((string) env('QUEUE_SAFE_RESERVATIONS_ENABLED', 'false')));
+        return in_array($value, ['1', 'true', 'yes'], true);
     }
 
     private function enqueueJob(string $queueName, array $payload): void
@@ -279,13 +439,15 @@ class InternalApiController extends Controller
                 try {
                     $runner = new AsyncTaskRunnerService();
                     $result = $runner->run($queueName, $payload);
+                    $taskOk = ($result['ok'] ?? false) === true;
 
                     $this->jsonResponse([
-                        'ok' => true,
+                        'ok' => $taskOk,
                         'queue' => $queueName,
-                        'status' => 'processed_sync_fallback',
+                        'status' => $taskOk ? 'processed_sync_fallback' : 'failed_sync_fallback',
+                        'error' => $taskOk ? null : (string) ($result['error'] ?? 'La tarea devolvio ok=false.'),
                         'result' => $result,
-                    ]);
+                    ], $taskOk ? 200 : 502);
                     return;
                 } catch (Throwable $e) {
                     $this->jsonResponse([

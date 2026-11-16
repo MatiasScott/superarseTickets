@@ -25,19 +25,26 @@ class JobService
         return (int) $this->db->lastInsertId();
     }
 
-    public function markRunning(int $jobId): void
+    /** FASE6G_ATOMIC_CLAIM: solo un worker puede reclamar un job pendiente. */
+    public function markRunning(int $jobId): bool
     {
-        $this->updateStatus($jobId, 'procesando', 'Procesando', false);
+        if ($jobId <= 0) {
+            return false;
+        }
+        $stmt = $this->db->prepare("UPDATE jobs SET estado = 'procesando', mensaje = 'Procesando' WHERE id = :id AND estado = 'pendiente' LIMIT 1");
+        $stmt->execute(['id' => $jobId]);
+        return $stmt->rowCount() === 1;
     }
 
     public function markDone(int $jobId, array $result = []): void
     {
-        $this->updateStatus($jobId, 'completado', 'Completado', true, $result);
+        $this->updateStatus($jobId, 'completado', 'Completado', true, $result, ['procesando']);
     }
 
     public function markError(int $jobId, string $message, array $result = []): void
     {
-        $this->updateStatus($jobId, 'error', $message, true, $result);
+        // Se permite pendiente -> error para fallos de encolado.
+        $this->updateStatus($jobId, 'error', $message, true, $result, ['pendiente', 'procesando']);
     }
 
     public function addDetail(int $jobId, ?string $registroId, string $descripcion): void
@@ -54,7 +61,7 @@ class JobService
         ]);
     }
 
-    private function updateStatus(int $jobId, string $estado, string $mensaje, bool $finish = false, array $result = []): void
+    private function updateStatus(int $jobId, string $estado, string $mensaje, bool $finish = false, array $result = [], array $allowedFrom = []): void
     {
         if ($jobId <= 0) {
             return;
@@ -64,15 +71,31 @@ class JobService
         if ($finish) {
             $sql .= ', fin = NOW()';
         }
-        $sql .= ' WHERE id = :id LIMIT 1';
+        $sql .= ' WHERE id = :id';
+        if ($allowedFrom !== []) {
+            $placeholders = [];
+            foreach ($allowedFrom as $i => $from) {
+                $name = 'from_' . $i;
+                $placeholders[] = ':' . $name;
+            }
+            $sql .= ' AND estado IN (' . implode(', ', $placeholders) . ')';
+        }
+        $sql .= ' LIMIT 1';
 
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute([
+        $params = [
             'id' => $jobId,
             'estado' => substr($estado, 0, 20),
             'mensaje' => substr($mensaje, 0, 500),
             'resultado' => json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-        ]);
+        ];
+        foreach ($allowedFrom as $i => $from) {
+            $params['from_' . $i] = $from;
+        }
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+        if ($stmt->rowCount() !== 1) {
+            throw new RuntimeException('Transicion de job rechazada (id=' . $jobId . ', destino=' . $estado . ').');
+        }
     }
 
     private function ensureTables(): void

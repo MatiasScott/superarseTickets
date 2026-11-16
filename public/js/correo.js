@@ -114,20 +114,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    tickHandle = window.setInterval(runAutoSync, intervalMs);
-    runAutoSync();
+    // La sincronizacion programada corresponde a n8n.
+    // No iniciar procesos al abrir la pantalla ni al volver a la pestana.
+    // Se conserva runAutoSync para una futura accion manual explicita.
 
-    document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) {
-            runAutoSync();
-        }
-    });
-
-    window.addEventListener('beforeunload', () => {
-        if (tickHandle !== null) {
-            window.clearInterval(tickHandle);
-        }
-    });
 });
 
 document.addEventListener('DOMContentLoaded', () => {
