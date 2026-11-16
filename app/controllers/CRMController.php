@@ -1295,7 +1295,8 @@ class CRMController extends Controller
     /** Busca coincidencias sin modificar datos. */
     public function prospectDuplicates(): void
     {
-        Auth::requireAuth(); header('Content-Type: application/json; charset=utf-8');
+        Auth::requireAuth();
+        if (!Auth::canPerformSensitive('crm', 'ver')) { http_response_code(403); header('Content-Type: application/json; charset=utf-8'); echo json_encode(['success'=>false,'error'=>'Acceso denegado']); exit; } header('Content-Type: application/json; charset=utf-8');
         try {
             require_once __DIR__ . '/../services/ProspectMergeService.php';
             $db=Database::getInstance()->connection();
@@ -1380,7 +1381,8 @@ class CRMController extends Controller
 
     public function compareProspects(): void
     {
-        Auth::requireAuth(); header('Content-Type: application/json; charset=utf-8');
+        Auth::requireAuth();
+        if (!Auth::canPerformSensitive('crm', 'ver')) { http_response_code(403); header('Content-Type: application/json; charset=utf-8'); echo json_encode(['success'=>false,'error'=>'Acceso denegado']); exit; } header('Content-Type: application/json; charset=utf-8');
         try {
             require_once __DIR__ . '/../services/ProspectMergeService.php';
             $svc=new ProspectMergeService(Database::getInstance()->connection());
@@ -1391,7 +1393,8 @@ class CRMController extends Controller
 
     public function mergeProspects(): void
     {
-        Auth::requireAuth(); header('Content-Type: application/json; charset=utf-8');
+        Auth::requireAuth();
+        if (!Auth::canPerformSensitive('crm', 'editar')) { http_response_code(403); header('Content-Type: application/json; charset=utf-8'); echo json_encode(['success'=>false,'error'=>'Acceso denegado']); exit; } header('Content-Type: application/json; charset=utf-8');
         if (!verify_csrf($_POST['_token'] ?? null)) { http_response_code(403); echo json_encode(['success'=>false,'error'=>'CSRF inválido']); exit; }
         try {
             require_once __DIR__ . '/../services/ProspectMergeService.php';

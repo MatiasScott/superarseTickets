@@ -32,26 +32,53 @@ area.addEventListener('click',async e=>{
   alert(result.message); location.href=base+'crm/interesados?tab=prospects&open_contact_id='+id;
  } catch(error) {alert('No se pudo vincular: '+error.message);btn.disabled=false;}
 });
-area.addEventListener('click',async e=>{
- const btn=e.target.closest('[data-merge-id]');if(!btn)return;
- if(btn.hasAttribute('data-link-id'))return;
- const other=Number(prompt('ID del segundo prospecto que deseas combinar con el contacto #'+btn.dataset.mergeId+' (no se combinará sin confirmación):',''));
- if(!Number.isSafeInteger(other)||other<=0)return;
- const principal=Number(btn.dataset.mergeId);
+})();
+
+(() => {
+'use strict';
+const root=document.getElementById('crmMergeConfig'); if(!root)return;
+const base=String(root.dataset.baseUrl||'/').replace(/\/?$/,'/');
+const $=id=>document.getElementById(id);
+const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const status=(message,error=false)=>{$('crmMergeStatus').textContent=message;$('crmMergeStatus').className=error?'mt-2 text-danger':'mt-2 text-muted';};
+let candidates=[],selected=[],comparison=null;
+$('crmMergeSearch').addEventListener('click',async()=>{
+ const query=new URLSearchParams({correo:$('crmMergeEmail').value.trim(),celular:$('crmMergePhone').value.trim(),identificacion:$('crmMergeIdentity').value.trim()});
+ if(![...query.values()].some(Boolean)){status('Ingresa correo, celular o identificación.',true);return;}
+ selected=[];comparison=null;$('crmMergeComparison').replaceChildren();status('Buscando…');
  try{
-  const r=await fetch(url('crm/prospectos/comparar',{principal,secundario:other}));const d=await r.json();if(!r.ok||!d.success)throw Error(d.error);
-  const p=d.data.principal,s=d.data.secundario;
-  if(p.tiene_expediente||s.tiene_expediente)throw Error('No se pueden fusionar expedientes estudiantiles.');
-  const choices={};let summary='Comparar campos (Aceptar conserva PRINCIPAL; Cancelar conserva SECUNDARIO):\n';
-  for(const field of ['nombre','apellido','cedula','email']){
-   const keep=confirm(`${field}\nPrincipal #${principal}: ${p[field]||'-'}\nSecundario #${other}: ${s[field]||'-'}\n\nAceptar = principal; Cancelar = secundario`);
-   choices[field]=keep?'principal':'secundario';summary+=`${field}: ${choices[field]}\n`;
-  }
-  if(!confirm(`COMBINACIÓN IRREVERSIBLE SIN RESTAURACIÓN AUTOMÁTICA.\nPrincipal #${principal}; secundario #${other}.\n${summary}\nEl secundario quedará archivado. ¿Confirmas?`))return;
-  const token=form.querySelector('[name="_token"]')?.value||'';
-  const body=new URLSearchParams({_token:token,principal,secundario:other,choices:JSON.stringify(choices)});
-  const done=await fetch(base+'crm/prospectos/combinar',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const result=await done.json();if(!done.ok||!result.success)throw Error(result.error);
-  alert('Combinación registrada. Actualiza el CRM para revisar el contacto principal.');location.reload();
- }catch(err){alert('No se pudo combinar: '+err.message);}
+  const response=await fetch(base+'crm/prospectos/duplicados?'+query,{cache:'no-store',headers:{Accept:'application/json'}});
+  const data=await response.json();if(!response.ok||!data.success)throw Error(data.error||'No se pudo consultar');
+  candidates=data.items||[];
+  $('crmMergeMatches').innerHTML=candidates.length?'<p>Selecciona dos prospectos para compararlos:</p>'+candidates.map(c=>`<label class="d-block border rounded p-2 mb-2"><input class="form-check-input me-2" type="checkbox" data-merge-contact="${Number(c.id)}" ${c.interesado_id?'':'disabled'}> <strong>#${Number(c.id)} ${escape(c.nombre)} ${escape(c.apellido)}</strong> · ${escape(c.email)} · ${escape(c.telefonos)} <span class="badge bg-secondary">${c.interesado_id?'Prospecto':'Solo contacto'}</span></label>`).join('')+'<button type="button" class="btn btn-primary" id="crmMergeCompareBtn">Comparar seleccionados</button>':'No se encontraron coincidencias.';
+  status(candidates.length+' contacto(s) encontrado(s).');
+ }catch(e){status(e.message,true);}
+});
+$('crmMergeMatches').addEventListener('click',async event=>{
+ if(!event.target.closest('#crmMergeCompareBtn'))return;
+ const ids=[...$('crmMergeMatches').querySelectorAll('[data-merge-contact]:checked')].map(e=>Number(e.dataset.mergeContact));
+ if(ids.length!==2){status('Selecciona exactamente dos prospectos.',true);return;}
+ selected=ids;
+ try{
+  const response=await fetch(base+'crm/prospectos/comparar?'+new URLSearchParams({principal:ids[0],secundario:ids[1]}),{headers:{Accept:'application/json'}});
+  const data=await response.json();if(!response.ok||!data.success)throw Error(data.error||'Error');comparison=data.data;
+  const p=comparison.principal,s=comparison.secundario;
+  if(p.tiene_expediente||s.tiene_expediente)throw Error('No se permite combinar expedientes estudiantiles.');
+  const fields=['nombre','apellido','cedula','email'];
+  $('crmMergeComparison').innerHTML='<h6>Comparación: principal #'+ids[0]+' / secundario #'+ids[1]+'</h6><p class="text-muted">La primera ficha se conserva; la segunda quedará archivada. Selecciona los valores:</p><div class="table-responsive"><table class="table table-sm"><thead><tr><th>Campo</th><th>Principal</th><th>Secundario</th><th>Conservar</th></tr></thead><tbody>'+fields.map(f=>`<tr><th>${f}</th><td>${escape(p[f])}</td><td>${escape(s[f])}</td><td><select class="form-select form-select-sm" data-merge-field="${f}"><option value="principal">Principal</option><option value="secundario">Secundario</option></select></td></tr>`).join('')+'</tbody></table></div><p>Teléfonos principal: '+escape((p.telefonos||[]).join(', '))+' | secundario: '+escape((s.telefonos||[]).join(', '))+'</p><button id="crmMergeConfirm" class="btn btn-danger" type="button">Confirmar combinación</button>';
+  status('Compara los datos antes de confirmar.');
+ }catch(e){comparison=null;status(e.message,true);}
+});
+$('crmMergeComparison').addEventListener('click',async event=>{
+ if(!event.target.closest('#crmMergeConfirm')||!comparison)return;
+ const choices={};$('crmMergeComparison').querySelectorAll('[data-merge-field]').forEach(el=>choices[el.dataset.mergeField]=el.value);
+ if(!confirm('¿Combinar #'+selected[1]+' dentro de #'+selected[0]+'? El secundario se archivará y no existe deshacer automático. Solo confirma si son la misma persona.'))return;
+ const btn=$('crmMergeConfirm');btn.disabled=true;
+ try{
+  const body=new URLSearchParams({_token:$('crmMergeCsrf').value,principal:selected[0],secundario:selected[1],choices:JSON.stringify(choices)});
+  const response=await fetch(base+'crm/prospectos/combinar',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded',Accept:'application/json'},body});
+  const data=await response.json();if(!response.ok||!data.success)throw Error(data.error||'No se pudo combinar');
+  status('Combinación registrada. Actualiza el CRM para ver el contacto principal.');$('crmMergeComparison').replaceChildren();
+ }catch(e){status(e.message,true);btn.disabled=false;}
 });
 })();

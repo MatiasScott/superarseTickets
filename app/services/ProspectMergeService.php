@@ -77,6 +77,18 @@ final class ProspectMergeService
             $samePhone=(bool)array_intersect($p['telefonos'],$s['telefonos']);
             $sameIdentity=trim((string)$p['cedula'])!=='' && strtoupper((string)$p['cedula'])===strtoupper((string)$s['cedula']);
             if (!$sameEmail && !$samePhone && !$sameIdentity) throw new RuntimeException('No hay coincidencia verificable entre los contactos.');
+            // No alterar historial vinculado por student_id sin una migración explícita.
+            // Las tablas CRM pueden no declarar FK y conservar referencias al secundario.
+            $referenceTables = ['crm_student_notes','crm_student_pipeline'];
+            foreach ($referenceTables as $table) {
+                $exists = $this->db->prepare('SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME="student_id"');
+                $exists->execute([$table]);
+                if ((int)$exists->fetchColumn() > 0) {
+                    $check = $this->db->prepare("SELECT COUNT(*) FROM `$table` WHERE student_id=?");
+                    $check->execute([$secondary]);
+                    if ((int)$check->fetchColumn() > 0) throw new RuntimeException('El secundario tiene historial CRM en '.$table.'; no se combinará sin migración de ese historial.');
+                }
+            }
             // No reasignar sin comprobar restricciones y referencias no declaradas.
             $fields=['nombre','apellido','cedula','email']; $updates=[]; $params=['id'=>$primary];
             foreach ($fields as $field) {

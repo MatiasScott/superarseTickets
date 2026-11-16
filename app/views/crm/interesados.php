@@ -93,6 +93,9 @@
 				<p class="text-muted mb-0">Listado consolidado de prospectos CRM y estudiantes sincronizados.</p>
 			</div>
 			<div class="d-flex gap-2">
+				<?php if (Auth::canPerformSensitive('crm', 'editar')): ?>
+				<button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#crmMergeModal"><i class="bi bi-intersect"></i> Buscar duplicados / combinar</button>
+				<?php endif; ?>
 				<button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createProspectModal">
 					<i class="bi bi-person-plus-fill"></i> Crear Cliente Potencial
 				</button>
@@ -517,6 +520,25 @@
 		</div>
 	</div>
 </section>
+
+<?php if (Auth::canPerformSensitive('crm', 'editar')): ?>
+<div class="modal fade" id="crmMergeModal" tabindex="-1" aria-labelledby="crmMergeTitle" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title" id="crmMergeTitle">Buscar y comparar contactos duplicados</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button></div>
+    <div class="modal-body">
+      <div class="alert alert-info">Busca por correo, celular o identificación. Si un contacto no tiene ficha CRM, utiliza «Vincular al CRM» desde Crear cliente potencial. La combinación requiere dos prospectos existentes.</div>
+      <div class="row g-2 mb-3"><div class="col-md-4"><label class="form-label" for="crmMergeEmail">Correo</label><input id="crmMergeEmail" type="email" class="form-control"></div><div class="col-md-4"><label class="form-label" for="crmMergePhone">Celular</label><input id="crmMergePhone" class="form-control"></div><div class="col-md-4"><label class="form-label" for="crmMergeIdentity">Identificación</label><input id="crmMergeIdentity" class="form-control"></div></div>
+      <button id="crmMergeSearch" class="btn btn-outline-primary" type="button">Buscar coincidencias</button>
+      <div id="crmMergeStatus" class="mt-2" role="status" aria-live="polite"></div>
+      <div id="crmMergeMatches" class="mt-3"></div>
+      <div id="crmMergeComparison" class="mt-3"></div>
+      <input type="hidden" id="crmMergeCsrf" value="<?= e(csrf_token()) ?>">
+      <div id="crmMergeConfig" data-base-url="<?= e(base_url('')) ?>" hidden></div>
+    </div>
+    <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button></div>
+  </div></div>
+</div>
+<?php endif; ?>
 
 <div class="modal fade" id="createProspectModal" tabindex="-1" aria-labelledby="createProspectLabel" aria-hidden="true">
 	<div class="modal-dialog modal-lg">
