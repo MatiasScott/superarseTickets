@@ -491,6 +491,7 @@ return static function (Router $router): void {
 	);
 	$router->post('/crm/prospectos', 'CRMController@createProspect');
 	$router->get('/crm/prospectos/duplicados', 'CRMController@prospectDuplicates');
+	$router->post('/crm/prospectos/vincular-contacto', 'CRMController@linkExistingContactAsProspect');
 	$router->get('/crm/prospectos/comparar', 'CRMController@compareProspects');
 	$router->post('/crm/prospectos/combinar', 'CRMController@mergeProspects');
 	$router->get('/crm/estudiantes', 'CRMController@estudiantes');

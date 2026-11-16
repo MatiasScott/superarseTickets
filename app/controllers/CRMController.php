@@ -1308,6 +1308,76 @@ class CRMController extends Controller
         exit;
     }
 
+    /** Vincula al CRM un contacto preexistente, sin borrar ni sobrescribir sus datos. */
+    public function linkExistingContactAsProspect(): void
+    {
+        Auth::requireAuth();
+        header('Content-Type: application/json; charset=utf-8');
+        if (!Auth::canPerformSensitive('crm', 'editar')) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'error' => 'No tienes permiso para vincular contactos.']);
+            exit;
+        }
+        if (!verify_csrf($_POST['_token'] ?? null)) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'error' => 'CSRF inválido.']);
+            exit;
+        }
+        $db = null;
+        try {
+            $id = (int) ($_POST['contacto_id'] ?? 0);
+            if ($id <= 0) throw new RuntimeException('Contacto inválido.');
+            $email = $this->normalizeEmailValue((string) ($_POST['correo_personal'] ?? ''));
+            $identity = $this->normalizeIdentityValue((string) ($_POST['identificacion'] ?? ''));
+            $rawPhone = trim((string) ($_POST['celular'] ?? ''));
+            $phone = $this->normalizeProspectPhoneValue($rawPhone);
+            if ($rawPhone !== '' && $phone === '') throw new RuntimeException(PhoneNumberPolicy::INVALID_MESSAGE);
+            if ($email === '' && $identity === '' && $phone === '') throw new RuntimeException('Introduce un dato de coincidencia.');
+            $db = Database::getInstance()->connection();
+            $db->beginTransaction();
+            $stmt = $db->prepare('SELECT id, nombre, apellido, cedula, email, deleted_at FROM contactos WHERE id = ? FOR UPDATE');
+            $stmt->execute([$id]);
+            $contact = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$contact || $contact['deleted_at'] !== null) throw new RuntimeException('El contacto no está disponible.');
+            $stmt = $db->prepare('SELECT id FROM interesados WHERE contacto_id = ? LIMIT 1');
+            $stmt->execute([$id]);
+            if ($stmt->fetchColumn()) throw new RuntimeException('El contacto ya tiene ficha CRM. Usa la comparación de prospectos; no se alteró nada.');
+            $stmt = $db->prepare('SELECT id FROM estudiantes WHERE contacto_id = ? LIMIT 1');
+            $stmt->execute([$id]);
+            if ($stmt->fetchColumn()) throw new RuntimeException('El contacto tiene expediente estudiantil; requiere revisión académica.');
+            $matched = ($email !== '' && strcasecmp(trim((string)$contact['email']), $email) === 0)
+                || ($identity !== '' && $this->normalizeIdentityValue((string)$contact['cedula']) === $identity);
+            if (!$matched && $email !== '') {
+                $stmt = $db->prepare('SELECT 1 FROM correos_contacto WHERE contacto_id = ? AND LOWER(TRIM(correo)) = ? LIMIT 1');
+                $stmt->execute([$id, $email]);
+                $matched = (bool) $stmt->fetchColumn();
+            }
+            if (!$matched && $phone !== '') {
+                $stmt = $db->prepare('SELECT 1 FROM telefonos_contacto WHERE contacto_id = ? AND telefono = ? LIMIT 1');
+                $stmt->execute([$id, $phone]);
+                $matched = (bool) $stmt->fetchColumn();
+            }
+            if (!$matched) throw new RuntimeException('El contacto ya no coincide con los datos del formulario. Vuelve a buscar.');
+            // No copiar datos del formulario sobre el contacto: sus canales e historial permanecen intactos.
+            $advisor = trim((string) ($_POST['origen'] ?? ''));
+            $state = $this->resolveInitialProspectStateId($db);
+            $this->upsertInteresado($db, $id, $state, $advisor !== '' ? $advisor : 'crm_manual',
+                $this->mapAsesorToCreador($advisor),
+                trim((string) ($_POST['carrera'] ?? '')),
+                trim((string) ($_POST['modalidad'] ?? '')),
+                trim((string) ($_POST['provincia'] ?? '')),
+                trim((string) ($_POST['ciudad'] ?? '')));
+            $db->commit();
+            try { $this->crmHistoryNote($id, 'prospect_linked', 'Contacto existente vinculado a clientes potenciales sin reemplazar sus datos.'); } catch (Throwable $ignored) {}
+            echo json_encode(['success' => true, 'contacto_id' => $id, 'message' => 'Contacto existente vinculado correctamente al CRM.'], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) {
+            if ($db instanceof PDO && $db->inTransaction()) $db->rollBack();
+            http_response_code(409);
+            echo json_encode(['success' => false, 'error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        }
+        exit;
+    }
+
     public function compareProspects(): void
     {
         Auth::requireAuth(); header('Content-Type: application/json; charset=utf-8');

@@ -15,12 +15,26 @@ async function scan(){
   const response=await fetch(url('crm/prospectos/duplicados',params),{cache:'no-store'});
   const data=await response.json();if(!response.ok||!data.success)throw Error(data.error||'Error al buscar');
   candidates=data.items||[];
-  area.innerHTML=candidates.length?'<div class="alert alert-warning"><strong>Posibles duplicados: no se creará un nuevo registro hasta revisarlos.</strong><div class="mt-2">'+candidates.map(x=>`<div class="mb-2">#${Number(x.id)} ${safe(x.nombre)} ${safe(x.apellido)} · ${safe(x.email)} · ${safe(x.telefonos)} <button type="button" class="btn btn-sm btn-outline-primary" data-merge-id="${Number(x.id)}">Comparar</button></div>`).join('')+'</div></div>':'';
+  area.innerHTML=candidates.length?'<div class="alert alert-warning"><strong>Contacto existente: no se creará otro registro.</strong><div class="mt-2">'+candidates.map(x=>`<div class="mb-2">#${Number(x.id)} ${safe(x.nombre)} ${safe(x.apellido)} · ${safe(x.email)} · ${safe(x.telefonos)} · ${x.interesado_id?'Ya es prospecto':'Solo contacto'} ${x.interesado_id?'<span class="text-muted">(si hay dos fichas CRM, revisar combinación)</span>':`<button type="button" class="btn btn-sm btn-primary" data-link-id="${Number(x.id)}">Vincular al CRM</button>`}</div>`).join('')+'</div></div>':'';
  }catch(e){area.textContent='No se pudo verificar duplicados: '+e.message;}
 }
 ['prospectCorreoPersonal','prospectCelular','prospectIdentificacion'].forEach(id=>document.getElementById(id)?.addEventListener('change',scan));
 area.addEventListener('click',async e=>{
+ const btn=e.target.closest('[data-link-id]'); if(!btn)return;
+ const id=Number(btn.dataset.linkId);
+ const name=btn.closest('.mb-2')?.textContent?.trim() || ('Contacto #'+id);
+ if(!confirm('Se vinculará al CRM el contacto existente: '+name+'\nSe conservarán sus datos, correos, teléfonos, tickets e historial.\n¿Confirmar?'))return;
+ btn.disabled=true;
+ try {
+  const body=new URLSearchParams(new FormData(form)); body.set('contacto_id',String(id));
+  const response=await fetch(base+'crm/prospectos/vincular-contacto',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},body});
+  const result=await response.json(); if(!response.ok||!result.success)throw Error(result.error||'No se pudo vincular');
+  alert(result.message); location.href=base+'crm/interesados?tab=prospects&open_contact_id='+id;
+ } catch(error) {alert('No se pudo vincular: '+error.message);btn.disabled=false;}
+});
+area.addEventListener('click',async e=>{
  const btn=e.target.closest('[data-merge-id]');if(!btn)return;
+ if(btn.hasAttribute('data-link-id'))return;
  const other=Number(prompt('ID del segundo prospecto que deseas combinar con el contacto #'+btn.dataset.mergeId+' (no se combinará sin confirmación):',''));
  if(!Number.isSafeInteger(other)||other<=0)return;
  const principal=Number(btn.dataset.mergeId);
