@@ -2501,18 +2501,6 @@ class CRMController extends Controller
 
 		try {
 			$db = Database::getInstance()->connection();
-			$activeEstados = $this->fetchAllPipelineStates($db, 'id, nombre');
-			$stateIds = [];
-			$stateNames = [];
-			foreach ($activeEstados as $estado) {
-				$estadoId = (int) ($estado['id'] ?? 0);
-				if ($estadoId <= 0) {
-					continue;
-				}
-				$stateIds[] = $estadoId;
-				$stateNames[$estadoId] = (string) ($estado['nombre'] ?? ('Estado ' . $estadoId));
-			}
-
 			$ids = array_values(array_filter(array_map(
 				static function (array $row): int {
 					return (int) ($row['id'] ?? 0);
@@ -2528,7 +2516,6 @@ class CRMController extends Controller
 			$sql = "SELECT p.student_id, p.estado_id, pe.nombre AS pipeline_nombre
 					FROM crm_student_pipeline p
 					LEFT JOIN pipeline_estados pe ON pe.id = p.estado_id
-						AND LOWER(REPLACE(TRIM(COALESCE(pe.categoria, '')), ' ', '_')) <> 'sin_crm'
 					WHERE p.student_id IN ($placeholders)";
 			$stmt = $db->prepare($sql);
 			$stmt->execute($ids);
@@ -2546,7 +2533,6 @@ class CRMController extends Controller
 			$sqlMulti = "SELECT pm.student_id, pm.estado_id, COALESCE(pe.nombre, '') AS pipeline_nombre
 				FROM crm_student_pipeline_multi pm
 				LEFT JOIN pipeline_estados pe ON pe.id = pm.estado_id
-					AND LOWER(REPLACE(TRIM(COALESCE(pe.categoria, '')), ' ', '_')) <> 'sin_crm'
 				WHERE pm.student_id IN ($placeholders)
 				ORDER BY pm.student_id ASC, pe.orden ASC, pe.id ASC";
 			$stmtMulti = $db->prepare($sqlMulti);
@@ -2571,45 +2557,12 @@ class CRMController extends Controller
 				}
 			}
 
-			// Asignar pipeline aleatorio persistente a estudiantes sin estado.
-			if (!empty($stateIds)) {
-				$missingStudentIds = [];
-				foreach ($ids as $studentId) {
-					if (!isset($pipelineMap[$studentId])) {
-						$missingStudentIds[] = (int) $studentId;
-					}
-				}
-
-				if (!empty($missingStudentIds)) {
-					$insertSql = "INSERT INTO crm_student_pipeline (student_id, estado_id, updated_by, updated_at)
-						VALUES (:student_id, :estado_id, NULL, NOW())
-						ON DUPLICATE KEY UPDATE
-						estado_id = VALUES(estado_id),
-						updated_at = NOW()";
-					$insertStmt = $db->prepare($insertSql);
-
-					foreach ($missingStudentIds as $studentId) {
-						$randomEstadoId = (int) $stateIds[array_rand($stateIds)];
-						$insertStmt->execute([
-							':student_id' => $studentId,
-							':estado_id' => $randomEstadoId,
-						]);
-
-						$pipelineMap[$studentId] = [
-							'estado_id' => $randomEstadoId,
-							'pipeline_nombre' => (string) ($stateNames[$randomEstadoId] ?? 'Sin asignar'),
-							'pipeline_nombres' => [(string) ($stateNames[$randomEstadoId] ?? 'Sin asignar')],
-						];
-					}
-				}
-			}
-
 			foreach ($rows as &$row) {
 				$studentId = (int) ($row['id'] ?? 0);
 				$allNames = array_values(array_unique(array_filter(array_map('trim', (array) ($pipelineMap[$studentId]['pipeline_nombres'] ?? [])))));
 				if (empty($allNames)) {
 					$fallbackName = (string) ($pipelineMap[$studentId]['pipeline_nombre'] ?? 'Sin asignar');
-					if ($fallbackName !== '') {
+					if ($fallbackName !== '' && $fallbackName !== 'Sin asignar') {
 						$allNames[] = $fallbackName;
 					}
 				}
@@ -3678,6 +3631,13 @@ class CRMController extends Controller
 		Auth::requireAuth();
 		header('Content-Type: application/json; charset=utf-8');
 
+		$isContactEntity = isset($_POST['contacto_id']);
+		if ($isContactEntity && isset($_POST['student_id'])) {
+			http_response_code(400);
+			echo json_encode(['success' => false, 'error' => 'Identidad ambigua']);
+			exit;
+		}
+
 		$studentId = max(0, (int) ($_POST['student_id'] ?? $_POST['contacto_id'] ?? 0));
 		$estadoIdsRaw = $_POST['estado_ids'] ?? null;
 		$estadoIds = [];
@@ -3744,26 +3704,26 @@ class CRMController extends Controller
 				}
 			}
 
+			// Usar el mismo catálogo que presenta el detalle de cada entidad.
+			$allowedStates = $isContactEntity
+				? $this->fetchVisiblePipelineStates($db, 'id, nombre')
+				: $this->fetchAllPipelineStates($db, 'id, nombre');
+			$allowedById = array_column($allowedStates, 'nombre', 'id');
 			$validatedIds = [];
 			$validatedNames = [];
-			$estadoStmt = $db->prepare("SELECT id, nombre FROM pipeline_estados
-				WHERE id = :id
-				  AND estado = 'activo'
-				  AND LOWER(REPLACE(TRIM(COALESCE(categoria, '')), ' ', '_')) <> 'sin_crm'
-				LIMIT 1");
-			foreach ($estadoIds as $estadoId) {
-				$estadoStmt->execute([':id' => (int) $estadoId]);
-				$estado = $estadoStmt->fetch();
-				if (!$estado) {
-					throw new RuntimeException('Estado de pipeline inválido: ' . (int) $estadoId);
-				}
-				$validatedIds[] = (int) ($estado['id'] ?? 0);
-				$validatedNames[] = (string) ($estado['nombre'] ?? ('ID ' . (int) $estadoId));
+			if ($isContactEntity && count($estadoIds) !== 1) {
+				http_response_code(422);
+				echo json_encode(['success' => false, 'error' => 'Selecciona una sola etapa para el prospecto.']);
+				exit;
 			}
-
-			$validatedIds = array_values(array_unique(array_filter($validatedIds, static fn($id) => (int) $id > 0)));
-			if (empty($validatedIds)) {
-				throw new RuntimeException('Debes seleccionar al menos una etapa válida.');
+			foreach ($estadoIds as $estadoId) {
+				if (!array_key_exists($estadoId, $allowedById)) {
+					http_response_code(422);
+					echo json_encode(['success' => false, 'error' => 'Estado de pipeline inválido: ' . (int) $estadoId]);
+					exit;
+				}
+				$validatedIds[] = (int) $estadoId;
+				$validatedNames[] = (string) $allowedById[$estadoId];
 			}
 
 			$db->beginTransaction();
