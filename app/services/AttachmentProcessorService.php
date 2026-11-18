@@ -64,6 +64,10 @@ class AttachmentProcessorService
                 strcasecmp((string) $job['message_alias'], $alias) !== 0) {
                 throw new InvalidArgumentException('Adjunto no registrado para este mensaje y buzon.');
             }
+            // No tomar ni modificar trabajos asignados al procesador tradicional.
+            if ((string) $job['processor'] !== 'n8n') {
+                throw new InvalidArgumentException('Adjunto asignado al procesador tradicional; no transferido.');
+            }
             $queueId = (int) $job['id'];
             $ticketId = (int) $job['ticket_id'];
             $messageId = (int) $job['ticket_mensaje_id'];
@@ -81,7 +85,7 @@ class AttachmentProcessorService
                 // ya existe y su contenido coincide. No alterar reservas activas.
                 if (in_array((string) $job['estado'], ['pendiente', 'error'], true)) {
                     $mark = $this->db->prepare('UPDATE cola_adjuntos SET estado = "procesado", processed_at = NOW(),
-                        error = NULL, claim_token = NULL, claimed_at = NULL WHERE id = :id AND estado IN ("pendiente", "error")');
+                        error = NULL, claim_token = NULL, claimed_at = NULL WHERE id = :id AND processor = "n8n" AND estado IN ("pendiente", "error")');
                     $mark->execute(['id' => $queueId]);
                 }
                 $this->db->commit();
@@ -126,7 +130,7 @@ class AttachmentProcessorService
                 $this->resolveInlineCidInMessage($messageId, $ticketId, $cid, $savedId);
             }
             $update = $this->db->prepare('UPDATE cola_adjuntos SET estado = "procesado", processed_at = NOW(),
-                error = NULL, claim_token = NULL, claimed_at = NULL WHERE id = :id AND estado IN ("pendiente", "error")');
+                error = NULL, claim_token = NULL, claimed_at = NULL WHERE id = :id AND processor = "n8n" AND estado IN ("pendiente", "error")');
             $update->execute(['id' => $queueId]);
             if ($update->rowCount() !== 1) { throw new RuntimeException('No se pudo confirmar la cola.'); }
             $commitAttempted = true;
@@ -609,6 +613,7 @@ class AttachmentProcessorService
 
         if (
             !$job ||
+            (string) $job['processor'] !== 'php' ||
             (int) $job['ticket_id'] !== $ticketId ||
             (int) $job['ticket_mensaje_id'] !== $ticketMensajeId ||
             (string) $job['estado'] !== 'procesando' ||

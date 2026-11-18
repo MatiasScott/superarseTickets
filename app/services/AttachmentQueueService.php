@@ -26,6 +26,7 @@ class AttachmentQueueService
             peso INT NOT NULL DEFAULT 0,
             es_inline TINYINT(1) NOT NULL DEFAULT 0,
             content_id VARCHAR(255) NULL,
+            processor VARCHAR(8) NOT NULL DEFAULT 'php',
             estado VARCHAR(20) NOT NULL DEFAULT 'pendiente',
             claim_token CHAR(32) NULL,
             claimed_at DATETIME NULL,
@@ -35,6 +36,7 @@ class AttachmentQueueService
             processed_at DATETIME NULL,
             UNIQUE KEY uniq_msg_attachment (ticket_mensaje_id, graph_attachment_id),
             INDEX idx_estado_intentos (estado, intentos),
+            INDEX idx_processor_estado (processor, estado, intentos),
             INDEX idx_ticket_msg (ticket_mensaje_id),
             INDEX idx_ticket (ticket_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
@@ -45,8 +47,11 @@ class AttachmentQueueService
      * mensaje persistido. Debe ejecutarse dentro de la transaccion del correo.
      * Nunca modifica trabajos preexistentes ni sus metadatos.
      */
-    public function enqueueIncomingAttachments(int $ticketId, int $ticketMensajeId, string $accountAlias, string $emailUid, array $attachmentHeaders): int
+    public function enqueueIncomingAttachments(int $ticketId, int $ticketMensajeId, string $accountAlias, string $emailUid, array $attachmentHeaders, string $processor = 'php'): int
     {
+        if (!in_array($processor, ['php', 'n8n'], true)) {
+            throw new InvalidArgumentException('Procesador de adjuntos invalido.');
+        }
         if ($attachmentHeaders === []) {
             return 0;
         }
@@ -92,10 +97,10 @@ class AttachmentQueueService
             'INSERT INTO cola_adjuntos
              (ticket_mensaje_id, ticket_id, account_alias, email_uid,
               graph_attachment_id, nombre, mime_type, extension, peso,
-              es_inline, content_id, estado, intentos, error, created_at)
+              es_inline, content_id, processor, estado, intentos, error, created_at)
              VALUES (:ticket_mensaje_id, :ticket_id, :account_alias, :email_uid,
               :graph_attachment_id, :nombre, :mime_type, :extension, :peso,
-              :es_inline, :content_id, "pendiente", 0, NULL, NOW())
+              :es_inline, :content_id, :processor, "pendiente", 0, NULL, NOW())
              ON DUPLICATE KEY UPDATE id = id'
         );
         $existing = $this->db->prepare(
@@ -130,6 +135,7 @@ class AttachmentQueueService
                 'mime_type' => substr($mime !== '' ? $mime : 'application/octet-stream', 0, 120),
                 'extension' => $extension !== '' ? substr($extension, 0, 20) : null,
                 'peso' => max(0, $size),
+                'processor' => $processor,
                 'es_inline' => !empty($header['is_inline']) ? 1 : 0,
                 'content_id' => $contentId !== '' ? substr($contentId, 0, 255) : null,
             ]);
@@ -160,7 +166,7 @@ class AttachmentQueueService
             $stmt = $this->db->prepare(
                 'SELECT *
              FROM cola_adjuntos
-             WHERE estado IN ("pendiente", "error")
+             WHERE processor = "php" AND estado IN ("pendiente", "error")
                AND intentos < 5
              ORDER BY id ASC
              LIMIT :lim
@@ -180,6 +186,7 @@ class AttachmentQueueService
                  claim_token = :token,
                  claimed_at = NOW()
              WHERE id = :id
+               AND processor = "php"
                AND estado IN ("pendiente", "error")'
             );
 
@@ -243,6 +250,7 @@ class AttachmentQueueService
              claim_token = NULL,
              claimed_at = NULL
          WHERE id = :id
+           AND processor = "php"
            AND estado = "procesando"
            AND claim_token = :token'
         );
@@ -275,6 +283,7 @@ class AttachmentQueueService
              claim_token = NULL,
              claimed_at = NULL
          WHERE id = :id
+           AND processor = "php"
            AND estado = "procesando"
            AND claim_token = :token'
         );

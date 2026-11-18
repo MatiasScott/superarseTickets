@@ -485,6 +485,17 @@ class CorreoController extends Controller
 	 * n8n entrega cabeceras de adjuntos; Atlas las encola en la misma
 	 * transaccion del mensaje. El contenido binario llega por separado.
 	 */
+	private function n8nManagedAliases(): array
+	{
+		if (strtolower(trim((string) env('N8N_INGEST_ENABLED', 'false'))) !== 'true') {
+			return [];
+		}
+		return array_values(array_unique(array_filter(array_map(
+			static fn($alias) => strtolower(trim($alias)),
+			explode(',', (string) env('N8N_MANAGED_MAIL_ALIASES', ''))
+		), static fn($alias) => $alias !== '')));
+	}
+
 	public function ingestN8nMessage(array $email): array
 	{
 		$alias = trim((string) ($email['account_alias'] ?? ''));
@@ -538,6 +549,16 @@ class CorreoController extends Controller
 			if (hash_equals((string) ($candidate['alias'] ?? ''), $alias)) { $account = $candidate; break; }
 		}
 		if ($account === null) { throw new InvalidArgumentException('Buzon no habilitado.'); }
+		if (!in_array(strtolower($alias), $this->n8nManagedAliases(), true)) {
+			throw new InvalidArgumentException('Buzon no asignado a n8n.');
+		}
+		if (!is_string($email['mailbox'] ?? null) || strcasecmp(trim($email['mailbox']), (string) $account['email']) !== 0) {
+			throw new InvalidArgumentException('Mailbox no corresponde al alias configurado.');
+		}
+		if (strlen($uid) > 255) { throw new InvalidArgumentException('UID excede capacidad de almacenamiento.'); }
+		if ($headers !== [] && strtolower(trim((string) env('N8N_ATTACHMENTS_ENABLED', 'false'))) !== 'true') {
+			throw new RuntimeException('Ingesta de adjuntos deshabilitada.');
+		}
 		$email['account_email'] = (string) $account['email'];
 		if (!MailTicketPolicy::acceptsDate($email, (string) ($email['date'] ?? ''))) {
 			throw new InvalidArgumentException('Correo fuera de la politica de fechas.');
@@ -561,7 +582,35 @@ class CorreoController extends Controller
 			$ticketId = $this->findProcessedTicketId($db, $email)
 				?? $this->findExistingIncomingMessageTicketId($db, $email);
 			if ($ticketId === null) { throw new RuntimeException('Ingesta no confirmada.'); }
+			// Consultar exclusivamente la identidad persistida; nunca transferir trabajos PHP.
+			$stmt = $db->prepare('SELECT q.graph_attachment_id, q.processor, q.estado
+				FROM cola_adjuntos q INNER JOIN ticket_mensajes m ON m.id = q.ticket_mensaje_id
+				WHERE q.account_alias = :alias AND q.email_uid = :uid AND m.graph_message_id = :graph_id
+				AND m.cuenta_alias = :message_alias AND q.ticket_id = :ticket AND m.ticket_id = q.ticket_id');
+			$stmt->execute(['alias' => $alias, 'uid' => $uid, 'graph_id' => $graphId, 'message_alias' => $alias, 'ticket' => $ticketId]);
+			$download = [];
+			$review = [];
+			$completed = [];
+			$legacy = [];
+			$matched = [];
+			foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+				$id = (string) $row['graph_attachment_id'];
+				if (isset($matched[$id])) { throw new RuntimeException('Identidad de adjunto ambigua.'); }
+				$matched[$id] = true;
+				if ($row['processor'] !== 'n8n') { $legacy[] = $id; }
+				elseif ($row['estado'] === 'procesado') { $completed[] = $id; }
+				elseif (in_array($row['estado'], ['pendiente', 'error'], true) && isset($seen[$id])) { $download[] = $id; }
+				else { $review[] = $id; }
+			}
+			foreach (array_keys($seen) as $id) {
+				if (!isset($matched[$id])) { $review[] = $id; }
+			}
 			return ['ok' => true, 'ticket_id' => $ticketId,
+				'account_alias' => $alias, 'graph_message_id' => $graphId, 'uid' => $uid,
+				'attachment_ids_to_download' => $download,
+				'attachment_ids_completed' => $completed,
+				'attachment_ids_php' => $legacy,
+				'attachment_ids_review' => $review,
 				'created' => (int) ($result['created'] ?? 0),
 				'updated' => (int) ($result['updated'] ?? 0),
 				'skipped' => (int) ($result['skipped'] ?? 0)];
@@ -706,6 +755,8 @@ class CorreoController extends Controller
 		}
 
 		$aliasesToSync = array_values(array_unique($aliasesToSync));
+		$n8nExcluded = array_values(array_filter($aliasesToSync, fn($alias) => in_array(strtolower($alias), $this->n8nManagedAliases(), true)));
+		$aliasesToSync = array_values(array_diff($aliasesToSync, $n8nExcluded));
 		if (empty($aliasesToSync)) {
 			return [
 				'aliases' => [],
@@ -720,7 +771,8 @@ class CorreoController extends Controller
 					'contacto_invalido' => 0,
 					'error' => 0,
 				],
-				'sync_errors' => ['No hay cuentas de correo habilitadas para sincronizar.'],
+				'n8n_excluded_aliases' => $n8nExcluded,
+				'sync_errors' => $n8nExcluded !== [] ? [] : ['No hay cuentas de correo habilitadas para sincronizar.'],
 			];
 		}
 
@@ -895,6 +947,7 @@ class CorreoController extends Controller
 
 		return [
 			'aliases' => $aliasesToSync,
+			'n8n_excluded_aliases' => $n8nExcluded,
 			'created' => $created,
 			'updated' => $updated,
 			'skipped' => $skipped,
@@ -2082,7 +2135,7 @@ class CorreoController extends Controller
 
 		$queue = new AttachmentQueueService($db);
 		// La tabla se prepara antes de iniciar la transaccion.
-		$queue->enqueueIncomingAttachments($ticketId, $mensajeId, $alias, $uid, $attachmentHeaders);
+		$queue->enqueueIncomingAttachments($ticketId, $mensajeId, $alias, $uid, $attachmentHeaders, !empty($email['n8n_ingest']) ? 'n8n' : 'php');
 	}
 
 	private function findOrCreateContactFromEmail(PDO $db, array $email): int
