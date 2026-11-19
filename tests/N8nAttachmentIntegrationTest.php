@@ -23,6 +23,7 @@ define('ROOT_PATH',sys_get_temp_dir().'/atlas-n8n-test-'.bin2hex(random_bytes(8)
 try {
     require $project.'/app/core/Database.php';
     require $project.'/app/services/AttachmentQueueService.php';
+    require_once $project.'/app/services/InlineCidResolver.php';
     require $project.'/app/services/AttachmentProcessorService.php';
     $db=Database::getInstance()->connection();
     check($db->query('SELECT DATABASE()')->fetchColumn()==='iststicket_n8n_test','Base aislada confirmada');

@@ -2011,10 +2011,7 @@ class CorreoController extends Controller
 
 	private function sanitizeIncomingHtml(string $html): string
 	{
-		$allowed = '<p><br><b><strong><i><em><u><a><ul><ol><li><img><blockquote><span><div><table><tbody><thead><tr><td><th><hr>';
-		$clean = strip_tags($html, $allowed);
-		$clean = preg_replace('/javascript\s*:/i', '', $clean) ?? $clean;
-		return trim($clean);
+		return TicketHtmlSanitizer::clean($html);
 	}
 
 	private function storeIncomingAttachmentsAndResolveInline(PDO $db, int $ticketId, int $mensajeId, string $messageHtml, array $attachments): string
@@ -2062,7 +2059,7 @@ class CorreoController extends Controller
 
 			$attachmentId = (int) $db->lastInsertId();
 			if ($isInline && $attachmentId > 0 && $contentId !== '') {
-				$cidToUrl[$this->normalizeContentId($contentId)] = base_url('tickets/' . $ticketId . '/reply-attachment/' . $attachmentId . '?mode=inline');
+				InlineCidResolver::add($cidToUrl, $contentId, base_url('tickets/' . $ticketId . '/reply-attachment/' . $attachmentId . '?mode=inline'));
 			}
 		}
 
@@ -2070,12 +2067,7 @@ class CorreoController extends Controller
 			return $messageHtml;
 		}
 
-		$updatedHtml = $messageHtml;
-		foreach ($cidToUrl as $cid => $url) {
-			$updatedHtml = preg_replace('/cid:' . preg_quote($cid, '/') . '/i', $url, $updatedHtml) ?? $updatedHtml;
-		}
-
-		return $updatedHtml;
+		return InlineCidResolver::replace($messageHtml, $cidToUrl);
 	}
 
 	private function normalizeContentId(string $contentId): string

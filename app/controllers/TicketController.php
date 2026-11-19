@@ -573,19 +573,6 @@ class TicketController extends Controller
 			// Catálogos son opcionales
 		}
 
-		if (is_array($correoOrigen) && !empty($correoOrigen['email_uid'])) {
-			try {
-				$mailbox = new MailboxService();
-				$mensajeOrigen = $mailbox->getMessage((string) ($correoOrigen['account_alias'] ?? ''), (string) $correoOrigen['email_uid']);
-				if (!empty($mensajeOrigen['ok']) && is_array($mensajeOrigen['message'] ?? null)) {
-					$adjuntos = is_array($mensajeOrigen['message']['attachments'] ?? null) ? $mensajeOrigen['message']['attachments'] : [];
-					// SECURITY: positional CID fallback disabled; attachments must match the originating message.
-				}
-			} catch (Throwable $e) {
-				$adjuntos = [];
-			}
-		}
-
 		$mensajes = $this->sanitizeUnresolvedCidSources($mensajes);
 
 		try {
@@ -2448,17 +2435,18 @@ class TicketController extends Controller
 		if (!is_string($fullPath) || !is_string($basePath) || $fullPath === '' || $basePath === '') {
 			return false;
 		}
-		$normalizedFull = strtolower(str_replace('\\\\', '/', $fullPath));
-		$normalizedBase = rtrim(strtolower(str_replace('\\\\', '/', $basePath)), '/');
+		$normalizedFull = $fullPath;
+		$normalizedBase = rtrim($basePath, '/');
+		if (DIRECTORY_SEPARATOR === '\\') {
+			$normalizedFull = strtolower(str_replace('\\', '/', $normalizedFull));
+			$normalizedBase = rtrim(strtolower(str_replace('\\', '/', $normalizedBase)), '/');
+		}
 		return str_starts_with($normalizedFull, $normalizedBase . '/') || $normalizedFull === $normalizedBase;
 	}
 
 	private function sanitizeRichText(string $html): string
 	{
-		$allowed = '<p><br><b><strong><i><em><u><a><ul><ol><li><img><blockquote><span><div>';
-		$clean = strip_tags($html, $allowed);
-		$clean = preg_replace('/javascript\s*:/i', '', $clean) ?? $clean;
-		return trim($clean);
+		return TicketHtmlSanitizer::clean($html);
 	}
 
 	private function normalizeReplyRequestKey(string $value): string
@@ -2851,72 +2839,13 @@ class TicketController extends Controller
 
 	private function hydrateMissingInlineImages(PDO $db, int $ticketId, array $mensajes): array
 	{
-		if (empty($mensajes)) {
-			return $mensajes;
-		}
-
-		$mailbox = new MailboxService();
-
 		foreach ($mensajes as $idx => $msg) {
 			$msgId = (int) ($msg['id'] ?? 0);
-			if ($msgId <= 0) {
-				continue;
-			}
-
 			$html = (string) ($msg['mensaje'] ?? '');
-			if ($html === '' || stripos($html, 'cid:') === false) {
-				continue;
-			}
-
-			$cidMap = $this->buildInlineCidMapFromStoredAttachments($db, $ticketId, $msgId);
-			if (!empty($cidMap)) {
-				$resolved = $this->replaceCidSources($html, $cidMap);
-				if ($resolved !== $html) {
-					$this->updateMessageHtml($db, $msgId, $resolved);
-					$mensajes[$idx]['mensaje'] = $resolved;
-					continue;
-				}
-			}
-
-			// SECURITY: do not fetch or persist remote attachments during ticket rendering.
-			// Unresolved CID values are hidden by sanitizeUnresolvedCidSources().
-			continue;
-
-			$internetMessageId = trim((string) ($msg['internet_message_id'] ?? ''));
-			$syncStmt = $db->prepare('SELECT account_alias, email_uid FROM mail_ticket_sync WHERE ticket_id = :ticket_id AND (:internet_message_id = "" OR internet_message_id = :internet_message_id OR message_id = :internet_message_id) ORDER BY id DESC LIMIT 1');
-			$syncStmt->execute([
-				'ticket_id' => $ticketId,
-				'internet_message_id' => $internetMessageId,
-			]);
-			$syncRow = $syncStmt->fetch() ?: null;
-			if (!is_array($syncRow)) {
-				continue;
-			}
-
-			$alias = trim((string) ($syncRow['account_alias'] ?? ''));
-			$uid = trim((string) ($syncRow['email_uid'] ?? ''));
-			if ($alias === '' || $uid === '') {
-				continue;
-			}
-
-			$messageResult = $mailbox->getMessage($alias, $uid);
-			if (!($messageResult['ok'] ?? false)) {
-				continue;
-			}
-
-			$sourceAttachments = is_array($messageResult['message']['attachments'] ?? null) ? $messageResult['message']['attachments'] : [];
-			$newCidMap = $this->storeInlineAttachmentsFromMailbox($db, $ticketId, $msgId, $alias, $uid, $sourceAttachments, $mailbox);
-			if (empty($newCidMap)) {
-				continue;
-			}
-
-			$resolved = $this->replaceCidSources($html, $newCidMap);
-			if ($resolved !== $html) {
-				$this->updateMessageHtml($db, $msgId, $resolved);
-				$mensajes[$idx]['mensaje'] = $resolved;
-			}
+			if ($msgId <= 0 || stripos($html, 'cid:') === false) { continue; }
+			$map = $this->buildInlineCidMapFromStoredAttachments($db, $ticketId, $msgId);
+			$mensajes[$idx]['mensaje'] = InlineCidResolver::replace($html, $map);
 		}
-
 		return $mensajes;
 	}
 
@@ -2936,97 +2865,22 @@ class TicketController extends Controller
 			if ($cid === '' || $adjId <= 0) {
 				continue;
 			}
-			$map[$cid] = base_url('tickets/' . $ticketId . '/reply-attachment/' . $adjId . '?mode=inline');
+			InlineCidResolver::add($map, $cid, base_url('tickets/' . $ticketId . '/reply-attachment/' . $adjId . '?mode=inline'));
+		}
+
+		// Considerar tambien las cabeceras todavia pendientes de procesamiento.
+		if ($map !== []) {
+			$q = $db->prepare('SELECT content_id FROM cola_adjuntos WHERE ticket_id = :ticket_id AND ticket_mensaje_id = :ticket_mensaje_id AND es_inline = 1');
+			$q->execute(['ticket_id' => $ticketId, 'ticket_mensaje_id' => $mensajeId]);
+			$counts = [];
+			foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $candidate) {
+				$key = InlineCidResolver::key((string) $candidate);
+				$counts[$key] = ($counts[$key] ?? 0) + 1;
+				if ($counts[$key] > 1) { $map[$key] = null; }
+			}
 		}
 
 		return $map;
-	}
-
-	private function storeInlineAttachmentsFromMailbox(PDO $db, int $ticketId, int $mensajeId, string $alias, string $uid, array $attachments, MailboxService $mailbox): array
-	{
-		$uploadDir = ROOT_PATH . '/uploads/tickets/' . $ticketId;
-		if (!is_dir($uploadDir) && !@mkdir($uploadDir, 0775, true) && !is_dir($uploadDir)) {
-			return [];
-		}
-
-		$cidMap = [];
-		foreach ($attachments as $attachment) {
-			if (!is_array($attachment)) {
-				continue;
-			}
-
-			$isInline = !empty($attachment['is_inline']) || trim((string) ($attachment['content_id'] ?? '')) !== '';
-			if (!$isInline) {
-				continue;
-			}
-
-			$part = trim((string) ($attachment['part_no'] ?? ''));
-			if ($part === '') {
-				continue;
-			}
-
-			$getAttachment = $mailbox->getAttachment($alias, $uid, $part);
-			if (!($getAttachment['ok'] ?? false)) {
-				continue;
-			}
-
-			$attPayload = is_array($getAttachment['attachment'] ?? null) ? $getAttachment['attachment'] : [];
-			$content = $attPayload['content'] ?? null;
-			if (!is_string($content) || $content === '') {
-				continue;
-			}
-
-			$name = trim((string) ($attPayload['filename'] ?? ($attachment['filename'] ?? 'inline.bin')));
-			$mime = trim((string) ($attPayload['mime'] ?? ($attachment['mime'] ?? 'application/octet-stream')));
-			$ext = strtolower((string) pathinfo($name, PATHINFO_EXTENSION));
-			$storageName = bin2hex(random_bytes(16)) . ($ext !== '' ? '.' . $ext : '');
-			$targetPath = $uploadDir . '/' . $storageName;
-			if (@file_put_contents($targetPath, $content) === false) {
-				continue;
-			}
-
-			$contentId = $this->normalizeContentId((string) ($attachment['content_id'] ?? ''));
-			$stmt = $db->prepare('INSERT INTO ticket_mensaje_adjuntos (ticket_mensaje_id, ticket_id, filename_original, filename_storage, mime, size_bytes, storage_path, is_inline, content_id, created_at) VALUES (:ticket_mensaje_id, :ticket_id, :filename_original, :filename_storage, :mime, :size_bytes, :storage_path, 1, :content_id, NOW())');
-			$stmt->execute([
-				'ticket_mensaje_id' => $mensajeId,
-				'ticket_id' => $ticketId,
-				'filename_original' => substr($name !== '' ? $name : 'inline.bin', 0, 255),
-				'filename_storage' => $storageName,
-				'mime' => substr($mime !== '' ? $mime : 'application/octet-stream', 0, 120),
-				'size_bytes' => strlen($content),
-				'storage_path' => $targetPath,
-				'content_id' => $contentId !== '' ? substr($contentId, 0, 255) : null,
-			]);
-
-			$adjId = (int) $db->lastInsertId();
-			if ($adjId > 0 && $contentId !== '') {
-				$cidMap[$contentId] = base_url('tickets/' . $ticketId . '/reply-attachment/' . $adjId . '?mode=inline');
-			}
-		}
-
-		return $cidMap;
-	}
-
-	private function replaceCidSources(string $html, array $cidToUrl): string
-	{
-		$updated = $html;
-		foreach ($cidToUrl as $cid => $url) {
-			if ($cid === '' || $url === '') {
-				continue;
-			}
-			$updated = preg_replace('/cid:' . preg_quote($cid, '/') . '/i', $url, $updated) ?? $updated;
-		}
-
-		return $updated;
-	}
-
-	private function updateMessageHtml(PDO $db, int $mensajeId, string $html): void
-	{
-		$stmt = $db->prepare('UPDATE ticket_mensajes SET mensaje = :mensaje WHERE id = :id LIMIT 1');
-		$stmt->execute([
-			'mensaje' => $html,
-			'id' => $mensajeId,
-		]);
 	}
 
 	private function normalizeContentId(string $contentId): string
@@ -3034,54 +2888,6 @@ class TicketController extends Controller
 		$cid = trim($contentId);
 		$cid = trim($cid, '<>');
 		return $cid;
-	}
-
-	private function applyCidFallbackFromOriginAttachments(array $mensajes, array $adjuntos, int $ticketId): array
-	{
-		if (empty($mensajes) || empty($adjuntos)) {
-			return $mensajes;
-		}
-
-		$imageAttachmentUrls = [];
-		foreach ($adjuntos as $adj) {
-			if (!is_array($adj)) {
-				continue;
-			}
-			$mime = strtolower(trim((string) ($adj['mime'] ?? '')));
-			$part = trim((string) ($adj['part_no'] ?? ''));
-			if ($part === '' || !str_starts_with($mime, 'image/')) {
-				continue;
-			}
-			$imageAttachmentUrls[] = base_url('tickets/' . $ticketId . '/attachment?part=' . urlencode($part) . '&mode=inline');
-		}
-
-		if (empty($imageAttachmentUrls)) {
-			return $mensajes;
-		}
-
-		foreach ($mensajes as $idx => $msg) {
-			$html = (string) ($msg['mensaje'] ?? '');
-			if ($html === '' || stripos($html, 'cid:') === false) {
-				continue;
-			}
-
-			$cursor = 0;
-			$updated = preg_replace_callback(
-				'/cid:[^"\'\s>]+/i',
-				static function () use (&$cursor, $imageAttachmentUrls): string {
-					$idxUrl = min($cursor, count($imageAttachmentUrls) - 1);
-					$cursor++;
-					return $imageAttachmentUrls[$idxUrl];
-				},
-				$html
-			);
-
-			if (is_string($updated) && $updated !== $html) {
-				$mensajes[$idx]['mensaje'] = $updated;
-			}
-		}
-
-		return $mensajes;
 	}
 
 	private function sanitizeUnresolvedCidSources(array $mensajes): array
@@ -3092,7 +2898,7 @@ class TicketController extends Controller
 				continue;
 			}
 
-			$updated = preg_replace('/cid:[^"\'\s>]+/i', 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', $html);
+			$updated = InlineCidResolver::replace($html, [], 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==');
 			if (is_string($updated) && $updated !== $html) {
 				$mensajes[$idx]['mensaje'] = $updated;
 			}

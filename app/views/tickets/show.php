@@ -258,7 +258,15 @@ $phones = array_values(array_unique($phones));
                                     data-ticket-note-preview="<?= e(trim(strip_tags((string) ($m['mensaje'] ?? '')))) ?>">Eliminar nota</button>
                             </div>
                         <?php endif; ?>
-                        <div class="message-body"><?= $m['mensaje'] ?? '' ?></div>
+                        <?php
+                        $safeImageUrls = [];
+                        foreach (($m['attachments'] ?? []) as $safeAttachment) {
+                            if (!empty($safeAttachment['missing']) || (int) ($safeAttachment['id'] ?? 0) <= 0) continue;
+                            if (!in_array(strtolower((string) ($safeAttachment['mime'] ?? '')), ['image/png','image/jpeg','image/gif','image/webp'], true)) continue;
+                            $safeImageUrls[] = base_url('tickets/' . $ticketId . '/reply-attachment/' . (int) $safeAttachment['id'] . '?mode=inline');
+                        }
+                        ?>
+                        <div class="message-body"><?= TicketHtmlSanitizer::clean((string) ($m['mensaje'] ?? ''), $safeImageUrls) ?></div>
                         <?php
                         $messageAttachmentsRaw = is_array($m['attachments'] ?? null)
                             ? $m['attachments']

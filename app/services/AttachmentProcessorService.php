@@ -676,21 +676,32 @@ class AttachmentProcessorService
 
     private function resolveInlineCidInMessage(int $ticketMensajeId, int $ticketId, string $contentId, int $adjId): void
     {
-        $stmt = $this->db->prepare('SELECT mensaje FROM ticket_mensajes WHERE id = :id LIMIT 1');
-        $stmt->execute(['id' => $ticketMensajeId]);
+        $stmt = $this->db->prepare('SELECT mensaje FROM ticket_mensajes WHERE id = :id AND ticket_id = :ticket LIMIT 1 FOR UPDATE');
+        $stmt->execute(['id' => $ticketMensajeId, 'ticket' => $ticketId]);
         $html = (string) ($stmt->fetchColumn() ?: '');
         if ($html === '') {
             return;
         }
 
+        // Si Graph registro dos adjuntos inline con el mismo CID en este mensaje,
+        // no existe una asociacion inequívoca. Conservar el CID pendiente.
+        $q = $this->db->prepare('SELECT content_id FROM cola_adjuntos WHERE ticket_id = :ticket AND ticket_mensaje_id = :id AND es_inline = 1');
+        $q->execute(['ticket' => $ticketId, 'id' => $ticketMensajeId]);
+        $matches = 0;
+        foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $candidate) {
+            if (InlineCidResolver::key((string) $candidate) === InlineCidResolver::key($contentId)) { ++$matches; }
+        }
+        if ($matches > 1) { return; }
+
         $url = base_url('tickets/' . $ticketId . '/reply-attachment/' . $adjId . '?mode=inline');
-        $updated = preg_replace('/cid:' . preg_quote($contentId, '/') . '/i', $url, $html) ?? $html;
+        $updated = InlineCidResolver::replace($html, [$contentId => $url]);
         if ($updated === $html) {
             return;
         }
 
-        $upd = $this->db->prepare('UPDATE ticket_mensajes SET mensaje = :mensaje WHERE id = :id LIMIT 1');
+        $upd = $this->db->prepare('UPDATE ticket_mensajes SET mensaje = :mensaje WHERE id = :id AND ticket_id = :ticket LIMIT 1');
         $upd->execute([
+            'ticket' => $ticketId,
             'mensaje' => $updated,
             'id' => $ticketMensajeId,
         ]);
