@@ -94,7 +94,20 @@ class AttachmentProcessorService
             if (!in_array((string) $job['estado'], ['pendiente', 'error'], true)) {
                 throw new RuntimeException('Adjunto reservado por otro worker o en estado no admitido.');
             }
-            if ((int) $job['peso'] > 0 && (int) $job['peso'] !== strlen($content)) {
+            $graphSize = (int) $job['peso'];
+            $actualSize = strlen($content);
+            $hasSizeMetadata = array_key_exists('graph_size', $payload) ||
+                array_key_exists('size_bytes', $payload) || array_key_exists('source_verified', $payload);
+            if ($hasSizeMetadata && (
+                !is_int($payload['graph_size'] ?? null) ||
+                !is_int($payload['size_bytes'] ?? null) ||
+                $payload['graph_size'] !== $graphSize || $graphSize <= 0 ||
+                $payload['size_bytes'] !== $actualSize ||
+                ($payload['source_verified'] ?? null) !== true
+            )) {
+                throw new InvalidArgumentException('Metadatos de verificacion del adjunto invalidos.');
+            }
+            if ($graphSize > 0 && $graphSize !== $actualSize && !$hasSizeMetadata) {
                 throw new InvalidArgumentException('Tamano del adjunto no coincide con la cabecera Graph.');
             }
             $name = trim((string) ($job['nombre'] ?? 'adjunto.bin'));
